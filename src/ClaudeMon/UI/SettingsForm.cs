@@ -262,6 +262,9 @@ public sealed class SettingsForm : Form
         else
             _thresholdRadio.Checked = true;
 
+        _thresholdPanel.Visible = _thresholdRadio.Checked;
+        _progressivePanel.Visible = _progressiveRadio.Checked;
+
         _notificationsCheckbox.Checked = settings.Notifications.Enabled;
         _runAtStartupCheckbox.Checked = ConfigManager.IsRunAtStartupEnabled();
     }

@@ -22,7 +22,7 @@ The usage percentage can also be shown directly on the taskbar:
 
 ## Installation
 
-Download the latest installer from the [Releases](https://github.com/danheinz/ClaudeMon/releases/latest) page.
+Download the latest installer from the [Releases](https://github.com/badsonstudios/ClaudeMon/releases/latest) page.
 
 The installer will optionally configure ClaudeMon to start with Windows.
 
@@ -53,7 +53,7 @@ ClaudeMon reads your existing Claude Code OAuth token from `~/.claude/.credentia
 
 ```bash
 # Clone the repo
-git clone https://github.com/danheinz/ClaudeMon.git
+git clone https://github.com/badsonstudios/ClaudeMon.git
 cd ClaudeMon
 
 # Build

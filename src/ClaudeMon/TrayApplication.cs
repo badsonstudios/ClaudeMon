@@ -145,7 +145,7 @@ public sealed class TrayApplication : IDisposable
             "Windows system tray monitor for Claude AI usage.\n\n" +
             "Monitors 5-hour and 7-day rate limits\n" +
             "for Claude Max subscribers.\n\n" +
-            "github.com/danheinz/ClaudeMon",
+            "github.com/badsonstudios/ClaudeMon",
             "About ClaudeMon",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);

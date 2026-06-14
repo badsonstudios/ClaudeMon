@@ -19,7 +19,7 @@
 #define MyAppVersion Str(VerMajor) + "." + Str(VerMinor) + "." + Str(VerRev)
 
 #define MyAppPublisher "Badson Studios"
-#define MyAppURL "https://github.com/danheinz/ClaudeMon"
+#define MyAppURL "https://github.com/badsonstudios/ClaudeMon"
 #define MyAppExeName "ClaudeMon.exe"
 
 [Setup]

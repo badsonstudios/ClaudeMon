@@ -4,10 +4,15 @@ A Windows system tray application that monitors your Claude AI usage for Claude 
 
 ![System Tray](images/system_tray.png)
 
+The usage percentage can also be shown directly on the taskbar:
+
+![Taskbar usage display](images/taskbar.png)
+
 ## Features
 
 - **Real-time usage tracking** - Monitors both 5-hour and 7-day usage windows
 - **Color-coded tray icon** - Green, yellow, orange, or red based on current utilization
+- **Taskbar usage display** - Optional always-visible percentage on the taskbar, color-coded to match the tray icon (on by default; toggle in Settings)
 - **Desktop notifications** - Alerts when usage crosses configurable thresholds
 - **Two alert modes**:
   - **Threshold** - Warning and critical notifications at set percentages
@@ -41,6 +46,7 @@ ClaudeMon reads your existing Claude Code OAuth token from `~/.claude/.credentia
 | **Warning / Critical thresholds** | One-time notifications at set percentages |
 | **Progressive alerts** | Recurring notifications every 10% above a starting level |
 | **Enable desktop notifications** | Master toggle for all alerts |
+| **Show usage on the Windows taskbar** | Show the usage percentage on the taskbar, next to the clock (on by default) |
 | **Start with Windows** | Launch ClaudeMon at login |
 
 ## Building from Source

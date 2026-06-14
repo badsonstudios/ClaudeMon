@@ -15,6 +15,7 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _criticalThreshold;
     private readonly NumericUpDown _progressiveStartThreshold;
     private readonly CheckBox _notificationsCheckbox;
+    private readonly CheckBox _taskbarDisplayCheckbox;
     private readonly CheckBox _runAtStartupCheckbox;
 
     public SettingsForm(ConfigManager configManager)
@@ -27,7 +28,7 @@ public sealed class SettingsForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9f);
-        ClientSize = new Size(700, 470);
+        ClientSize = new Size(700, 500);
 
         // --- Monitoring group ---
         var monitoringGroup = new GroupBox
@@ -188,7 +189,7 @@ public sealed class SettingsForm : Form
         {
             Text = "General",
             Location = new Point(20, 302),
-            Size = new Size(660, 100),
+            Size = new Size(660, 130),
         };
         Controls.Add(generalGroup);
 
@@ -200,10 +201,18 @@ public sealed class SettingsForm : Form
         };
         generalGroup.Controls.Add(_notificationsCheckbox);
 
+        _taskbarDisplayCheckbox = new CheckBox
+        {
+            Text = "Show usage on the Windows taskbar",
+            Location = new Point(20, 64),
+            AutoSize = true,
+        };
+        generalGroup.Controls.Add(_taskbarDisplayCheckbox);
+
         _runAtStartupCheckbox = new CheckBox
         {
             Text = "Start ClaudeMon when Windows starts",
-            Location = new Point(20, 64),
+            Location = new Point(20, 94),
             AutoSize = true,
         };
         generalGroup.Controls.Add(_runAtStartupCheckbox);
@@ -213,7 +222,7 @@ public sealed class SettingsForm : Form
         {
             Text = "OK",
             DialogResult = DialogResult.OK,
-            Location = new Point(500, 420),
+            Location = new Point(500, 450),
             Size = new Size(80, 32),
         };
         okButton.Click += OnOkClicked;
@@ -223,7 +232,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(594, 420),
+            Location = new Point(594, 450),
             Size = new Size(80, 32),
         };
         Controls.Add(cancelButton);
@@ -266,6 +275,7 @@ public sealed class SettingsForm : Form
         _progressivePanel.Visible = _progressiveRadio.Checked;
 
         _notificationsCheckbox.Checked = settings.Notifications.Enabled;
+        _taskbarDisplayCheckbox.Checked = settings.TaskbarDisplay.Enabled;
         _runAtStartupCheckbox.Checked = ConfigManager.IsRunAtStartupEnabled();
     }
 
@@ -295,6 +305,10 @@ public sealed class SettingsForm : Form
             {
                 Enabled = _notificationsCheckbox.Checked,
                 NotifyOnReset = _configManager.Settings.Notifications.NotifyOnReset,
+            },
+            TaskbarDisplay = new TaskbarDisplaySettings
+            {
+                Enabled = _taskbarDisplayCheckbox.Checked,
             },
         };
 

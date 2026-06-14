@@ -42,4 +42,16 @@ public class IconRendererTests
         Assert.Equal(16, icon.Width);
         Assert.Equal(16, icon.Height);
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(42)]
+    [InlineData(100)]
+    public void RenderTaskbarImage_CreatesBitmapOfRequestedSize(double percentage)
+    {
+        using var image = IconRenderer.RenderTaskbarImage(percentage, 52, 40);
+        Assert.NotNull(image);
+        Assert.Equal(52, image.Width);
+        Assert.Equal(40, image.Height);
+    }
 }

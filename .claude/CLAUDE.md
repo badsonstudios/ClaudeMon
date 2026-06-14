@@ -137,6 +137,8 @@ Prefer calling these over re-typing multi-step commands:
 | `new-pr`  | Branch (if on `main`), commit, push, and open a PR via `gh` |
 | `load-env` | Load `.env` into the current shell so `gh`/tools can use it |
 | `get-secret` | Read a single value from `.env` without printing the whole file |
+| `bump-version` | Set the release version in the `.csproj` (the installer derives its version from it) |
+| `publish-release` | Publish the GitHub release for the current version (notes from `CHANGELOG.md`, installer attached); run after merge |
 
 Both PowerShell (`.ps1`) and bash (`.sh`) versions are provided. When you build a
 new commonly-used command, add it here as a script (both shells) and list it in
@@ -187,3 +189,10 @@ Add new hooks here as the project needs them.
   (separate from app source); the registry `Run` key handles "Start with Windows".
 - **Tests use `InternalsVisibleTo`** (`ClaudeMon.Tests`) to reach internals.
 - **Installer:** Inno Setup 6, built via `bash installer/build.sh`; output in `dist/`.
+  The installer version is **derived from the built assembly** (`ClaudeMon.csproj`
+  `<Version>`) — bump it with `.claude/scripts/bump-version`, not by editing the `.iss`.
+- **Releases:** notes live in `CHANGELOG.md` (one section per `vX.Y.Z`, newest first).
+  Release flow: `bump-version <X.Y.Z>` → add a `CHANGELOG.md` entry → commit/push/PR →
+  **after merge** `bash installer/build.sh` → `.claude/scripts/publish-release` (creates
+  the GitHub release from the changelog and attaches the installer). Done at the end of
+  `/commit-push-pr` when the version changed.

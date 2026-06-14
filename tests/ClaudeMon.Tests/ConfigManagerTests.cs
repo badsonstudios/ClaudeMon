@@ -83,6 +83,23 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void TaskbarDisplay_RoundTrips()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+
+        manager.Update(new AppSettings
+        {
+            TaskbarDisplay = new TaskbarDisplaySettings { Enabled = true },
+        });
+
+        var manager2 = new ConfigManager(path);
+        manager2.Load();
+
+        Assert.True(manager2.Settings.TaskbarDisplay.Enabled);
+    }
+
+    [Fact]
     public void Save_CreatesDirectoryIfNeeded()
     {
         var path = Path.Combine(_tempDir, "subdir", "config.json");
@@ -110,6 +127,7 @@ public class ConfigManagerTests : IDisposable
         Assert.Equal(50, settings.AlertThresholds.SevenDayWarning);
         Assert.True(settings.Notifications.Enabled);
         Assert.False(settings.Notifications.NotifyOnReset);
+        Assert.True(settings.TaskbarDisplay.Enabled);
         Assert.Equal(1, settings.ConfigVersion);
     }
 }

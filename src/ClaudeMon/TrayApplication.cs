@@ -15,6 +15,7 @@ public sealed class TrayApplication : IDisposable
     private readonly ConfigManager _configManager;
     private readonly SynchronizationContext _syncContext;
     private readonly FlyoutPanel _flyout;
+    private readonly TaskbarOverlayWindow _taskbarOverlay;
     private readonly AlertManager _alertManager;
     private bool _disposed;
 
@@ -32,6 +33,9 @@ public sealed class TrayApplication : IDisposable
         _monitor.UsageUpdated += OnUsageUpdated;
 
         _flyout = new FlyoutPanel();
+
+        _taskbarOverlay = new TaskbarOverlayWindow();
+        _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
 
         _contextMenu = CreateContextMenu();
         _notifyIcon = new NotifyIcon
@@ -65,6 +69,8 @@ public sealed class TrayApplication : IDisposable
                     var oldIcon = _notifyIcon.Icon;
                     _notifyIcon.Icon = IconRenderer.RenderUsageIcon(fiveHour.UtilizationPct);
                     oldIcon?.Dispose();
+
+                    _taskbarOverlay.UpdateUsage(fiveHour.UtilizationPct);
                 }
 
                 var lines = new List<string> { "ClaudeMon" };
@@ -127,6 +133,7 @@ public sealed class TrayApplication : IDisposable
         if (form.ShowDialog() == DialogResult.OK)
         {
             _monitor.UpdateInterval(_configManager.Settings.PollInterval);
+            _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
         }
     }
 
@@ -153,5 +160,6 @@ public sealed class TrayApplication : IDisposable
         _notifyIcon.Dispose();
         _contextMenu.Dispose();
         _flyout.Dispose();
+        _taskbarOverlay.Dispose();
     }
 }

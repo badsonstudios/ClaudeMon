@@ -60,6 +60,35 @@ gh pr create --base <base-branch> --fill
 Use the PR base branch defined in `references/git-workflow.md` (default `main`).
 Report the PR URL.
 
+## Step 6: Publish the GitHub release (only if the version changed)
+
+If this work **bumped the version** (`src/ClaudeMon/ClaudeMon.csproj` `<Version>` —
+check with `git diff origin/main -- src/ClaudeMon/ClaudeMon.csproj`), a GitHub release
+should be published. **Do this after the PR is merged to `main`**, so the release tag
+points at the merged code:
+
+1. Make sure `CHANGELOG.md` has an entry for the new version (that's the release-notes
+   source).
+2. After the PR is merged, build the installer and publish the release:
+
+   ```bash
+   git checkout main && git pull
+   bash installer/build.sh          # produces dist/ClaudeMon-Setup-<version>.exe
+   .claude/scripts/publish-release.sh
+   ```
+   ```powershell
+   git checkout main; git pull
+   bash installer/build.sh
+   .\.claude\scripts\publish-release.ps1
+   ```
+
+`publish-release` reads the version from the `.csproj`, pulls that version's notes from
+`CHANGELOG.md`, tags `v<version>` on `main`, attaches the installer, and **no-ops if a
+release for that version already exists**. Get the user's approval before running it —
+it publishes publicly. Report the release URL.
+
+If the version did **not** change, skip this step.
+
 ## Notes
 
 - Never commit `.env` or other secrets. Verify nothing sensitive is staged.

@@ -20,10 +20,19 @@ public record AppSettings
     [JsonPropertyName("notifications")]
     public NotificationSettings Notifications { get; init; } = new();
 
+    [JsonPropertyName("taskbarDisplay")]
+    public TaskbarDisplaySettings TaskbarDisplay { get; init; } = new();
+
     [JsonPropertyName("configVersion")]
     public int ConfigVersion { get; init; } = 1;
 
     public TimeSpan PollInterval => TimeSpan.FromMinutes(PollIntervalMinutes);
+}
+
+public record TaskbarDisplaySettings
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; init; } = true;
 }
 
 public record AlertThresholds

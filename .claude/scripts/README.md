@@ -11,6 +11,8 @@ this folder). Pass an explicit path as the last argument to override.
 | `new-pr` | Branch (if on base), commit staged changes, push, open a PR with `gh` | `./new-pr.sh -t "Add login" -a` |
 | `load-env` | Load `.env` vars into the **current** shell (must be sourced/dot-sourced) | `. ./load-env.ps1` |
 | `get-secret` | Print a single value from `.env` (without dumping the whole file) | `./get-secret.sh GITHUB_TOKEN` |
+| `bump-version` | Set the release version (single source of truth: the `.csproj`) | `./bump-version.sh 0.2.0` |
+| `publish-release` | Create the GitHub release for the current version (notes from `CHANGELOG.md`, installer attached) | `./publish-release.sh` |
 
 ## Usage notes
 
@@ -32,6 +34,25 @@ this folder). Pass an explicit path as the last argument to override.
 ### get-secret
 - Prints exactly one value to stdout. Use it to fetch a token for a single command
   without exposing the rest of `.env`.
+
+### bump-version
+- Sets the release version in the **single source of truth**:
+  `src/ClaudeMon/ClaudeMon.csproj` `<Version>`.
+- The installer (`installer/ClaudeMon.iss`) **derives** its version from the built
+  assembly at compile time, so you do **not** edit the `.iss` — just bump and rebuild
+  with `bash installer/build.sh`.
+- PowerShell: `.\bump-version.ps1 0.2.0` · bash: `./bump-version.sh 0.2.0`
+- Validates the `X.Y.Z` form and prints the old → new version.
+
+### publish-release
+- **Get the user's approval first** — it publishes a public GitHub release.
+- **Run it after the version PR is merged to `main`**, so the tag points at merged code.
+- Reads the version from `src/ClaudeMon/ClaudeMon.csproj`, extracts that version's notes
+  from `CHANGELOG.md`, tags `v<version>`, and attaches `dist/ClaudeMon-Setup-<version>.exe`
+  (run `bash installer/build.sh` first to produce it).
+- **Idempotent**: if a release for the version already exists, it does nothing.
+- PowerShell: `.\publish-release.ps1 [-Target main] [-Draft]` · bash: `./publish-release.sh [--target main] [--draft]`
+- Release flow: `bump-version` → commit/push/PR → merge → `bash installer/build.sh` → `publish-release`.
 
 ## Adding new scripts
 

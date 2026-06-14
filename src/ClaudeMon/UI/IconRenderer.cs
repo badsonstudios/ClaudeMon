@@ -57,6 +57,58 @@ public static class IconRenderer
         }
     }
 
+    private static readonly Color TaskbarLabelColor = Color.FromArgb(200, 200, 200);
+
+    /// <summary>
+    /// Draws the taskbar usage readout — a small "usage" label on top and a larger
+    /// percentage number below it, coloured by <see cref="GetColorForPercentage"/>.
+    /// No background is filled; the host window supplies transparency.
+    /// </summary>
+    public static void DrawTaskbarUsage(Graphics graphics, double percentage, Rectangle bounds)
+    {
+        // Grayscale AA (not ClearType) so the glyph alpha is correct on a transparent
+        // bitmap — ClearType needs a known opaque background and fringes otherwise.
+        graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+        // Scale the fonts to the available height (Win11 taskbar ≈ 40px, Win10 ≈ 30px).
+        var labelSize = Math.Clamp(bounds.Height * 0.18f, 6f, 8f);
+        var numberSize = Math.Clamp(bounds.Height * 0.30f, 9f, 13f);
+
+        var label = "Claude";
+        // Truncate (not round) so the taskbar number matches the tray icon exactly.
+        var number = ((int)percentage).ToString();
+
+        using var labelFont = new Font("Segoe UI", labelSize, FontStyle.Regular, GraphicsUnit.Point);
+        using var numberFont = new Font("Segoe UI", numberSize, FontStyle.Bold, GraphicsUnit.Point);
+        using var labelBrush = new SolidBrush(TaskbarLabelColor);
+        using var numberBrush = new SolidBrush(GetColorForPercentage(percentage));
+
+        var labelMeasure = graphics.MeasureString(label, labelFont);
+        var numberMeasure = graphics.MeasureString(number, numberFont);
+
+        // Stack the two rows and centre the block vertically within the bounds.
+        var totalHeight = labelMeasure.Height + numberMeasure.Height;
+        var top = bounds.Y + Math.Max(0, (bounds.Height - totalHeight) / 2);
+
+        var labelX = bounds.X + (bounds.Width - labelMeasure.Width) / 2;
+        graphics.DrawString(label, labelFont, labelBrush, labelX, top);
+
+        var numberX = bounds.X + (bounds.Width - numberMeasure.Width) / 2;
+        graphics.DrawString(number, numberFont, numberBrush, numberX, top + labelMeasure.Height);
+    }
+
+    /// <summary>
+    /// Renders the taskbar usage readout onto a transparent bitmap of the given size.
+    /// Primarily a testable wrapper around <see cref="DrawTaskbarUsage"/>.
+    /// </summary>
+    public static Bitmap RenderTaskbarImage(double percentage, int width, int height)
+    {
+        var bitmap = new Bitmap(width, height);
+        using var graphics = Graphics.FromImage(bitmap);
+        DrawTaskbarUsage(graphics, percentage, new Rectangle(0, 0, width, height));
+        return bitmap;
+    }
+
     public static Icon RenderErrorIcon()
     {
         var bitmap = new Bitmap(16, 16);

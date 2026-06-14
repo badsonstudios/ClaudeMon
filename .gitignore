@@ -36,13 +36,40 @@ publish/
 *.swp
 *~
 
-# Claude Code
-.claude/
-CLAUDE.md
-
 # App data
 *.log
 
 # Inno Setup output
 installer/Output/
 dist/
+
+
+# ClaudeTemplates: secrets & local Claude files
+# ── Secrets (NEVER commit) — the real secrets file is .claude/.env ────────────
+# These basename patterns match .env anywhere, including .claude/.env.
+.env
+.env.*
+!.env.example
+
+# ── Local Claude files ───────────────────────────────────────────────────────
+.claude/settings.local.json
+.claude/work_files/
+
+# ── OS / editor cruft ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+
+# ── Logs & temp ──────────────────────────────────────────────────────────────
+*.log
+*.tmp
+
+# ── Dependencies / build output (uncomment per stack) ────────────────────────
+# node_modules/
+# dist/
+# build/
+# out/
+# bin/
+# obj/
+

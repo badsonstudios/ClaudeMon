@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Edit",
+      "Agent",
+      "TodoWrite",
+      "Skill(*)",
+      "WebSearch",
+      "WebFetch",
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash .claude/scripts/statusline.sh"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-env-staging.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

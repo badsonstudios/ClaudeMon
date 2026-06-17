@@ -9,6 +9,21 @@ public enum AlertMode
     Progressive,
 }
 
+/// <summary>
+/// Preset colors for taskbar overlay text. <see cref="Auto"/> means "colour by usage
+/// level" (the green/yellow/orange/red threshold colouring) and is only meaningful for
+/// the percentage number.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum TaskbarTextColor
+{
+    Auto,
+    White,
+    Black,
+    LightGray,
+    DarkGray,
+}
+
 public record AppSettings
 {
     [JsonPropertyName("pollIntervalMinutes")]
@@ -33,6 +48,12 @@ public record TaskbarDisplaySettings
 {
     [JsonPropertyName("enabled")]
     public bool Enabled { get; init; } = true;
+
+    [JsonPropertyName("labelColor")]
+    public TaskbarTextColor LabelColor { get; init; } = TaskbarTextColor.White;
+
+    [JsonPropertyName("numberColor")]
+    public TaskbarTextColor NumberColor { get; init; } = TaskbarTextColor.Auto;
 }
 
 public record AlertThresholds

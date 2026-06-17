@@ -90,13 +90,28 @@ public class ConfigManagerTests : IDisposable
 
         manager.Update(new AppSettings
         {
-            TaskbarDisplay = new TaskbarDisplaySettings { Enabled = true },
+            TaskbarDisplay = new TaskbarDisplaySettings
+            {
+                Enabled = true,
+                LabelColor = TaskbarTextColor.Black,
+                NumberColor = TaskbarTextColor.DarkGray,
+            },
         });
 
         var manager2 = new ConfigManager(path);
         manager2.Load();
 
         Assert.True(manager2.Settings.TaskbarDisplay.Enabled);
+        Assert.Equal(TaskbarTextColor.Black, manager2.Settings.TaskbarDisplay.LabelColor);
+        Assert.Equal(TaskbarTextColor.DarkGray, manager2.Settings.TaskbarDisplay.NumberColor);
+    }
+
+    [Fact]
+    public void TaskbarDisplay_DefaultColors_AreWhiteLabelAndAutoNumber()
+    {
+        var settings = new AppSettings();
+        Assert.Equal(TaskbarTextColor.White, settings.TaskbarDisplay.LabelColor);
+        Assert.Equal(TaskbarTextColor.Auto, settings.TaskbarDisplay.NumberColor);
     }
 
     [Fact]

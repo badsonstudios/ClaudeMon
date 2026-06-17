@@ -3,6 +3,15 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.3.0] - 2026-06-17
+
+### Added
+- **Taskbar text colors** — choose the color of the "Claude" label and the usage
+  percentage shown on the taskbar (Settings → Taskbar Display). Presets: White, Black,
+  Light gray, Dark gray. The percentage also supports **Auto** (the usage-level
+  green/yellow/orange/red coloring, still the default). Fixes the label being
+  invisible on light-colored taskbars. Applies live, without restarting.
+
 ## [0.2.0] - 2026-06-14
 
 ### Added

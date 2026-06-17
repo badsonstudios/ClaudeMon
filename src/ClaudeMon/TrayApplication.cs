@@ -35,6 +35,9 @@ public sealed class TrayApplication : IDisposable
         _flyout = new FlyoutPanel();
 
         _taskbarOverlay = new TaskbarOverlayWindow();
+        _taskbarOverlay.SetColors(
+            _configManager.Settings.TaskbarDisplay.LabelColor,
+            _configManager.Settings.TaskbarDisplay.NumberColor);
         _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
 
         _contextMenu = CreateContextMenu();
@@ -133,6 +136,9 @@ public sealed class TrayApplication : IDisposable
         if (form.ShowDialog() == DialogResult.OK)
         {
             _monitor.UpdateInterval(_configManager.Settings.PollInterval);
+            _taskbarOverlay.SetColors(
+                _configManager.Settings.TaskbarDisplay.LabelColor,
+                _configManager.Settings.TaskbarDisplay.NumberColor);
             _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
         }
     }

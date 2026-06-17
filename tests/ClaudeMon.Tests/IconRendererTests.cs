@@ -1,6 +1,7 @@
 namespace ClaudeMon.Tests;
 
 using System.Drawing;
+using ClaudeMon.Models;
 using ClaudeMon.UI;
 
 public class IconRendererTests
@@ -53,5 +54,28 @@ public class IconRendererTests
         Assert.NotNull(image);
         Assert.Equal(52, image.Width);
         Assert.Equal(40, image.Height);
+    }
+
+    [Theory]
+    [InlineData(TaskbarTextColor.White, 255, 255, 255)]
+    [InlineData(TaskbarTextColor.Black, 0, 0, 0)]
+    [InlineData(TaskbarTextColor.LightGray, 200, 200, 200)]
+    [InlineData(TaskbarTextColor.DarkGray, 80, 80, 80)]
+    public void GetTextColor_Preset_ReturnsFixedColor(TaskbarTextColor preset, int r, int g, int b)
+    {
+        // Percentage is irrelevant for fixed presets. Compare ARGB so named colours
+        // (e.g. Color.White) match their RGB equivalents.
+        var color = IconRenderer.GetTextColor(preset, 95);
+        Assert.Equal(Color.FromArgb(r, g, b).ToArgb(), color.ToArgb());
+    }
+
+    [Theory]
+    [InlineData(30)]   // green band
+    [InlineData(85)]   // orange band
+    [InlineData(95)]   // red band
+    public void GetTextColor_Auto_MatchesThresholdColor(double percentage)
+    {
+        var color = IconRenderer.GetTextColor(TaskbarTextColor.Auto, percentage);
+        Assert.Equal(IconRenderer.GetColorForPercentage(percentage), color);
     }
 }

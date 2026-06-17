@@ -16,7 +16,27 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _progressiveStartThreshold;
     private readonly CheckBox _notificationsCheckbox;
     private readonly CheckBox _taskbarDisplayCheckbox;
+    private readonly ComboBox _labelColorCombo;
+    private readonly ComboBox _numberColorCombo;
     private readonly CheckBox _runAtStartupCheckbox;
+
+    // Dropdown options paired with the preset they map to.
+    private static readonly (string Text, TaskbarTextColor Value)[] LabelColorOptions =
+    [
+        ("White", TaskbarTextColor.White),
+        ("Black", TaskbarTextColor.Black),
+        ("Light gray", TaskbarTextColor.LightGray),
+        ("Dark gray", TaskbarTextColor.DarkGray),
+    ];
+
+    private static readonly (string Text, TaskbarTextColor Value)[] NumberColorOptions =
+    [
+        ("Auto (usage level)", TaskbarTextColor.Auto),
+        ("White", TaskbarTextColor.White),
+        ("Black", TaskbarTextColor.Black),
+        ("Light gray", TaskbarTextColor.LightGray),
+        ("Dark gray", TaskbarTextColor.DarkGray),
+    ];
 
     public SettingsForm(ConfigManager configManager)
     {
@@ -28,7 +48,7 @@ public sealed class SettingsForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9f);
-        ClientSize = new Size(700, 500);
+        ClientSize = new Size(700, 610);
 
         // --- Monitoring group ---
         var monitoringGroup = new GroupBox
@@ -184,35 +204,79 @@ public sealed class SettingsForm : Form
         };
         _progressivePanel.Controls.Add(progressiveHint);
 
+        // --- Taskbar Display group ---
+        var taskbarGroup = new GroupBox
+        {
+            Text = "Taskbar Display",
+            Location = new Point(20, 302),
+            Size = new Size(660, 138),
+        };
+        Controls.Add(taskbarGroup);
+
+        _taskbarDisplayCheckbox = new CheckBox
+        {
+            Text = "Show usage on the Windows taskbar",
+            Location = new Point(20, 30),
+            AutoSize = true,
+        };
+        _taskbarDisplayCheckbox.CheckedChanged += OnTaskbarDisplayToggled;
+        taskbarGroup.Controls.Add(_taskbarDisplayCheckbox);
+
+        var labelColorLabel = new Label
+        {
+            Text = "\"Claude\" label color:",
+            Location = new Point(40, 66),
+            AutoSize = true,
+        };
+        taskbarGroup.Controls.Add(labelColorLabel);
+
+        _labelColorCombo = new ComboBox
+        {
+            Location = new Point(300, 63),
+            Width = 200,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+        };
+        _labelColorCombo.Items.AddRange(LabelColorOptions.Select(o => (object)o.Text).ToArray());
+        taskbarGroup.Controls.Add(_labelColorCombo);
+
+        var numberColorLabel = new Label
+        {
+            Text = "Percentage color:",
+            Location = new Point(40, 100),
+            AutoSize = true,
+        };
+        taskbarGroup.Controls.Add(numberColorLabel);
+
+        _numberColorCombo = new ComboBox
+        {
+            Location = new Point(300, 97),
+            Width = 200,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+        };
+        _numberColorCombo.Items.AddRange(NumberColorOptions.Select(o => (object)o.Text).ToArray());
+        taskbarGroup.Controls.Add(_numberColorCombo);
+
         // --- General group ---
         var generalGroup = new GroupBox
         {
             Text = "General",
-            Location = new Point(20, 302),
-            Size = new Size(660, 130),
+            Location = new Point(20, 456),
+            Size = new Size(660, 96),
         };
         Controls.Add(generalGroup);
 
         _notificationsCheckbox = new CheckBox
         {
             Text = "Enable desktop notifications",
-            Location = new Point(20, 34),
+            Location = new Point(20, 30),
             AutoSize = true,
         };
         generalGroup.Controls.Add(_notificationsCheckbox);
 
-        _taskbarDisplayCheckbox = new CheckBox
-        {
-            Text = "Show usage on the Windows taskbar",
-            Location = new Point(20, 64),
-            AutoSize = true,
-        };
-        generalGroup.Controls.Add(_taskbarDisplayCheckbox);
-
         _runAtStartupCheckbox = new CheckBox
         {
             Text = "Start ClaudeMon when Windows starts",
-            Location = new Point(20, 94),
+            Location = new Point(20, 60),
             AutoSize = true,
         };
         generalGroup.Controls.Add(_runAtStartupCheckbox);
@@ -222,7 +286,7 @@ public sealed class SettingsForm : Form
         {
             Text = "OK",
             DialogResult = DialogResult.OK,
-            Location = new Point(500, 450),
+            Location = new Point(500, 562),
             Size = new Size(80, 32),
         };
         okButton.Click += OnOkClicked;
@@ -232,7 +296,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(594, 450),
+            Location = new Point(594, 562),
             Size = new Size(80, 32),
         };
         Controls.Add(cancelButton);
@@ -247,6 +311,27 @@ public sealed class SettingsForm : Form
     {
         _thresholdPanel.Visible = _thresholdRadio.Checked;
         _progressivePanel.Visible = _progressiveRadio.Checked;
+    }
+
+    private void OnTaskbarDisplayToggled(object? sender, EventArgs e)
+    {
+        // The colours only matter when the taskbar display is on.
+        _labelColorCombo.Enabled = _taskbarDisplayCheckbox.Checked;
+        _numberColorCombo.Enabled = _taskbarDisplayCheckbox.Checked;
+    }
+
+    private static void SelectColor(
+        ComboBox combo, (string Text, TaskbarTextColor Value)[] options, TaskbarTextColor value)
+    {
+        var index = Array.FindIndex(options, o => o.Value == value);
+        combo.SelectedIndex = index >= 0 ? index : 0;
+    }
+
+    private static TaskbarTextColor SelectedColor(
+        ComboBox combo, (string Text, TaskbarTextColor Value)[] options)
+    {
+        var index = combo.SelectedIndex;
+        return index >= 0 && index < options.Length ? options[index].Value : options[0].Value;
     }
 
     private void LoadSettings()
@@ -276,6 +361,9 @@ public sealed class SettingsForm : Form
 
         _notificationsCheckbox.Checked = settings.Notifications.Enabled;
         _taskbarDisplayCheckbox.Checked = settings.TaskbarDisplay.Enabled;
+        SelectColor(_labelColorCombo, LabelColorOptions, settings.TaskbarDisplay.LabelColor);
+        SelectColor(_numberColorCombo, NumberColorOptions, settings.TaskbarDisplay.NumberColor);
+        OnTaskbarDisplayToggled(null, EventArgs.Empty);
         _runAtStartupCheckbox.Checked = ConfigManager.IsRunAtStartupEnabled();
     }
 
@@ -309,6 +397,8 @@ public sealed class SettingsForm : Form
             TaskbarDisplay = new TaskbarDisplaySettings
             {
                 Enabled = _taskbarDisplayCheckbox.Checked,
+                LabelColor = SelectedColor(_labelColorCombo, LabelColorOptions),
+                NumberColor = SelectedColor(_numberColorCombo, NumberColorOptions),
             },
         };
 

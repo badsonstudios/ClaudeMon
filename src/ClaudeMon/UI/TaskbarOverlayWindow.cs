@@ -3,6 +3,7 @@ namespace ClaudeMon.UI;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using ClaudeMon.Models;
 using Microsoft.Win32;
 
 /// <summary>
@@ -26,6 +27,8 @@ public sealed class TaskbarOverlayWindow : Form
     private readonly System.Windows.Forms.Timer _keepAliveTimer;
 
     private double? _percentage;
+    private TaskbarTextColor _labelColor = TaskbarTextColor.White;
+    private TaskbarTextColor _numberColor = TaskbarTextColor.Auto;
     private int _x;
     private int _y;
     private int _height = 40;
@@ -83,6 +86,14 @@ public sealed class TaskbarOverlayWindow : Form
         if (Visible) Reposition();
     }
 
+    /// <summary>Set the text colour presets and repaint live (no restart).</summary>
+    public void SetColors(TaskbarTextColor labelColor, TaskbarTextColor numberColor)
+    {
+        _labelColor = labelColor;
+        _numberColor = numberColor;
+        if (Visible) Redraw();
+    }
+
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
     {
         if (Visible) Reposition();
@@ -128,7 +139,11 @@ public sealed class TaskbarOverlayWindow : Form
         using (var graphics = Graphics.FromImage(bitmap))
         {
             graphics.Clear(Color.Transparent);
-            IconRenderer.DrawTaskbarUsage(graphics, _percentage.Value, new Rectangle(0, 0, OverlayWidth, _height));
+            var pct = _percentage.Value;
+            var labelColor = IconRenderer.GetTextColor(_labelColor, pct);
+            var numberColor = IconRenderer.GetTextColor(_numberColor, pct);
+            IconRenderer.DrawTaskbarUsage(
+                graphics, pct, new Rectangle(0, 0, OverlayWidth, _height), labelColor, numberColor);
         }
 
         var screenDc = GetDC(IntPtr.Zero);

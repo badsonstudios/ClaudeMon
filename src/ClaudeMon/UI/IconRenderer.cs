@@ -3,6 +3,7 @@ namespace ClaudeMon.UI;
 using System.Drawing;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
+using ClaudeMon.Models;
 
 public static class IconRenderer
 {
@@ -57,14 +58,30 @@ public static class IconRenderer
         }
     }
 
-    private static readonly Color TaskbarLabelColor = Color.FromArgb(200, 200, 200);
+    private static readonly Color LightGrayColor = Color.FromArgb(200, 200, 200);
+    private static readonly Color DarkGrayColor = Color.FromArgb(80, 80, 80);
 
     /// <summary>
-    /// Draws the taskbar usage readout — a small "usage" label on top and a larger
-    /// percentage number below it, coloured by <see cref="GetColorForPercentage"/>.
-    /// No background is filled; the host window supplies transparency.
+    /// Resolves a <see cref="TaskbarTextColor"/> preset to a concrete colour.
+    /// <see cref="TaskbarTextColor.Auto"/> maps to the usage-level threshold colour.
     /// </summary>
-    public static void DrawTaskbarUsage(Graphics graphics, double percentage, Rectangle bounds)
+    public static Color GetTextColor(TaskbarTextColor preset, double percentage) => preset switch
+    {
+        TaskbarTextColor.White => Color.White,
+        TaskbarTextColor.Black => Color.Black,
+        TaskbarTextColor.LightGray => LightGrayColor,
+        TaskbarTextColor.DarkGray => DarkGrayColor,
+        _ => GetColorForPercentage(percentage),
+    };
+
+    /// <summary>
+    /// Draws the taskbar usage readout — a small "Claude" label on top and a larger
+    /// percentage number below it. The caller supplies the resolved colours
+    /// (see <see cref="GetTextColor"/>). No background is filled; the host window
+    /// supplies transparency.
+    /// </summary>
+    public static void DrawTaskbarUsage(
+        Graphics graphics, double percentage, Rectangle bounds, Color labelColor, Color numberColor)
     {
         // Grayscale AA (not ClearType) so the glyph alpha is correct on a transparent
         // bitmap — ClearType needs a known opaque background and fringes otherwise.
@@ -80,8 +97,8 @@ public static class IconRenderer
 
         using var labelFont = new Font("Segoe UI", labelSize, FontStyle.Regular, GraphicsUnit.Point);
         using var numberFont = new Font("Segoe UI", numberSize, FontStyle.Bold, GraphicsUnit.Point);
-        using var labelBrush = new SolidBrush(TaskbarLabelColor);
-        using var numberBrush = new SolidBrush(GetColorForPercentage(percentage));
+        using var labelBrush = new SolidBrush(labelColor);
+        using var numberBrush = new SolidBrush(numberColor);
 
         var labelMeasure = graphics.MeasureString(label, labelFont);
         var numberMeasure = graphics.MeasureString(number, numberFont);
@@ -98,14 +115,19 @@ public static class IconRenderer
     }
 
     /// <summary>
-    /// Renders the taskbar usage readout onto a transparent bitmap of the given size.
-    /// Primarily a testable wrapper around <see cref="DrawTaskbarUsage"/>.
+    /// Renders the taskbar usage readout onto a transparent bitmap of the given size,
+    /// using the default colours (white label, usage-level number). Primarily a testable
+    /// wrapper around <see cref="DrawTaskbarUsage"/>.
     /// </summary>
     public static Bitmap RenderTaskbarImage(double percentage, int width, int height)
     {
         var bitmap = new Bitmap(width, height);
         using var graphics = Graphics.FromImage(bitmap);
-        DrawTaskbarUsage(graphics, percentage, new Rectangle(0, 0, width, height));
+        // Mirrors the default presets: White label + Auto (usage-level) number.
+        DrawTaskbarUsage(
+            graphics, percentage, new Rectangle(0, 0, width, height),
+            GetTextColor(TaskbarTextColor.White, percentage),
+            GetTextColor(TaskbarTextColor.Auto, percentage));
         return bitmap;
     }
 

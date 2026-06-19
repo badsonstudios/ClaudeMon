@@ -9,7 +9,7 @@ Drive a GitHub issue from ticket to pull request.
 **Argument:** the issue number, plus any extra notes — `$ARGUMENTS`
 
 This skill **orchestrates** other skills and agents. It has **two mandatory human
-approval gates** — plan approval (Step 3) and commit approval (Step 8) — that are
+approval gates** — plan approval (Step 3) and commit approval (Step 9) — that are
 **never** skipped, even if the user said "go ahead" earlier for a different step.
 
 ---
@@ -47,7 +47,7 @@ and re-present.
 
 - If on `main`, branch first: `git checkout -b feature/<n>-<short-slug>`.
 - Implement exactly to the approved plan. Follow `references/code-style.md`.
-- Keep commits-worth of work coherent; don't commit yet (that's Step 9).
+- Keep commits-worth of work coherent; don't commit yet (that's Step 10).
 
 ## Step 5 — Test (iterate until green)
 
@@ -77,12 +77,27 @@ If the review surfaces **Blocker** or **Should-fix** items, address them, then g
 
 Cap the loop at ~3 rounds. If it isn't converging, stop and report what's left.
 
-## Step 8 — Approval gate #2 (commit)
+## Step 8 — Update documentation
 
-Summarize: what changed, test status, review outcome, files touched. **Wait for
-explicit approval to commit and open a PR.**
+If the change adds or alters **user-facing** behavior (a feature, a setting, a
+visible change), update the docs **before** committing:
 
-## Step 9 — Commit, push, open the PR
+- **`README.md`** — features list, the settings table, and any relevant section.
+- **`CHANGELOG.md`** — add or extend the entry for this version.
+- If a **screenshot** would help (new/changed UI or setting) and you can't produce
+  it yourself, **ask the user to provide one** and tell them exactly what to
+  capture (the repo keeps screenshots in `images/`).
+
+If nothing user-facing changed (pure refactor/infra), say "no doc changes needed"
+and move on.
+
+## Step 9 — Approval gate #2 (commit)
+
+Summarize: what changed, test status, review outcome, files touched, **and which
+docs you updated (or why none were needed)**. **Wait for explicit approval to
+commit and open a PR.**
+
+## Step 10 — Commit, push, open the PR
 
 Run the **`/commit-push-pr`** skill. Use a commit/PR that closes the issue
 (`Closes #<n>:` in the message). Report the PR URL when done.
@@ -92,6 +107,9 @@ Run the **`/commit-push-pr`** skill. Use a commit/PR that closes the issue
 ## Notes
 
 - The two approval gates are non-negotiable. Never commit/push without Gate #2.
+- **Docs stay in sync (Step 8):** a shipped ticket with user-facing changes
+  includes `README.md`/`CHANGELOG.md` updates; ask the user for screenshots when
+  new UI needs them.
 - Never commit `.env` or secrets (a hook also blocks staging `.env`).
 - This skill is the back end of **`/pm`** — `/pm` creates the tickets,
   `/implement-issue` ships them.

@@ -14,7 +14,9 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _warningThreshold;
     private readonly NumericUpDown _criticalThreshold;
     private readonly NumericUpDown _progressiveStartThreshold;
+    private readonly NumericUpDown _sevenDayWarningThreshold;
     private readonly CheckBox _notificationsCheckbox;
+    private readonly CheckBox _notifyOnResetCheckbox;
     private readonly CheckBox _taskbarDisplayCheckbox;
     private readonly ComboBox _labelColorCombo;
     private readonly ComboBox _numberColorCombo;
@@ -48,7 +50,7 @@ public sealed class SettingsForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9f);
-        ClientSize = new Size(700, 610);
+        ClientSize = new Size(700, 676);
 
         // --- Monitoring group ---
         var monitoringGroup = new GroupBox
@@ -79,9 +81,9 @@ public sealed class SettingsForm : Form
         // --- Alert Thresholds group ---
         var alertGroup = new GroupBox
         {
-            Text = "Alert Thresholds (5-hour usage)",
+            Text = "Alert Thresholds",
             Location = new Point(20, 116),
-            Size = new Size(660, 170),
+            Size = new Size(660, 210),
         };
         Controls.Add(alertGroup);
 
@@ -204,11 +206,38 @@ public sealed class SettingsForm : Form
         };
         _progressivePanel.Controls.Add(progressiveHint);
 
+        // 7-day warning — always visible (AlertManager checks it independently of the
+        // 5-hour mode above), so it lives in the group rather than a mode panel.
+        var sevenDayLabel = new Label
+        {
+            Text = "7-day warning notification at:",
+            Location = new Point(20, 172),
+            AutoSize = true,
+        };
+        alertGroup.Controls.Add(sevenDayLabel);
+
+        _sevenDayWarningThreshold = new NumericUpDown
+        {
+            Location = new Point(300, 169),
+            Width = 100,
+            Minimum = 10,
+            Maximum = 100,
+        };
+        alertGroup.Controls.Add(_sevenDayWarningThreshold);
+
+        var sevenDayPctLabel = new Label
+        {
+            Text = "%",
+            Location = new Point(410, 172),
+            AutoSize = true,
+        };
+        alertGroup.Controls.Add(sevenDayPctLabel);
+
         // --- Taskbar Display group ---
         var taskbarGroup = new GroupBox
         {
             Text = "Taskbar Display",
-            Location = new Point(20, 302),
+            Location = new Point(20, 342),
             Size = new Size(660, 138),
         };
         Controls.Add(taskbarGroup);
@@ -260,8 +289,8 @@ public sealed class SettingsForm : Form
         var generalGroup = new GroupBox
         {
             Text = "General",
-            Location = new Point(20, 456),
-            Size = new Size(660, 96),
+            Location = new Point(20, 496),
+            Size = new Size(660, 126),
         };
         Controls.Add(generalGroup);
 
@@ -271,12 +300,21 @@ public sealed class SettingsForm : Form
             Location = new Point(20, 30),
             AutoSize = true,
         };
+        _notificationsCheckbox.CheckedChanged += OnNotificationsToggled;
         generalGroup.Controls.Add(_notificationsCheckbox);
+
+        _notifyOnResetCheckbox = new CheckBox
+        {
+            Text = "Notify when the rate limit resets",
+            Location = new Point(40, 60),
+            AutoSize = true,
+        };
+        generalGroup.Controls.Add(_notifyOnResetCheckbox);
 
         _runAtStartupCheckbox = new CheckBox
         {
             Text = "Start ClaudeMon when Windows starts",
-            Location = new Point(20, 60),
+            Location = new Point(20, 90),
             AutoSize = true,
         };
         generalGroup.Controls.Add(_runAtStartupCheckbox);
@@ -286,7 +324,7 @@ public sealed class SettingsForm : Form
         {
             Text = "OK",
             DialogResult = DialogResult.OK,
-            Location = new Point(500, 562),
+            Location = new Point(500, 632),
             Size = new Size(80, 32),
         };
         okButton.Click += OnOkClicked;
@@ -296,7 +334,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(594, 562),
+            Location = new Point(594, 632),
             Size = new Size(80, 32),
         };
         Controls.Add(cancelButton);
@@ -311,6 +349,12 @@ public sealed class SettingsForm : Form
     {
         _thresholdPanel.Visible = _thresholdRadio.Checked;
         _progressivePanel.Visible = _progressiveRadio.Checked;
+    }
+
+    private void OnNotificationsToggled(object? sender, EventArgs e)
+    {
+        // Notify-on-reset only matters when notifications are enabled.
+        _notifyOnResetCheckbox.Enabled = _notificationsCheckbox.Checked;
     }
 
     private void OnTaskbarDisplayToggled(object? sender, EventArgs e)
@@ -350,6 +394,7 @@ public sealed class SettingsForm : Form
         _warningThreshold.Value = settings.AlertThresholds.FiveHourWarning;
         _criticalThreshold.Value = settings.AlertThresholds.FiveHourCritical;
         _progressiveStartThreshold.Value = settings.AlertThresholds.ProgressiveStartPct;
+        _sevenDayWarningThreshold.Value = settings.AlertThresholds.SevenDayWarning;
 
         if (settings.AlertThresholds.Mode == AlertMode.Progressive)
             _progressiveRadio.Checked = true;
@@ -360,6 +405,8 @@ public sealed class SettingsForm : Form
         _progressivePanel.Visible = _progressiveRadio.Checked;
 
         _notificationsCheckbox.Checked = settings.Notifications.Enabled;
+        _notifyOnResetCheckbox.Checked = settings.Notifications.NotifyOnReset;
+        OnNotificationsToggled(null, EventArgs.Empty);
         _taskbarDisplayCheckbox.Checked = settings.TaskbarDisplay.Enabled;
         SelectColor(_labelColorCombo, LabelColorOptions, settings.TaskbarDisplay.LabelColor);
         SelectColor(_numberColorCombo, NumberColorOptions, settings.TaskbarDisplay.NumberColor);
@@ -386,13 +433,13 @@ public sealed class SettingsForm : Form
                 Mode = _progressiveRadio.Checked ? AlertMode.Progressive : AlertMode.Threshold,
                 FiveHourWarning = (int)_warningThreshold.Value,
                 FiveHourCritical = (int)_criticalThreshold.Value,
-                SevenDayWarning = _configManager.Settings.AlertThresholds.SevenDayWarning,
+                SevenDayWarning = (int)_sevenDayWarningThreshold.Value,
                 ProgressiveStartPct = (int)_progressiveStartThreshold.Value,
             },
             Notifications = new NotificationSettings
             {
                 Enabled = _notificationsCheckbox.Checked,
-                NotifyOnReset = _configManager.Settings.Notifications.NotifyOnReset,
+                NotifyOnReset = _notifyOnResetCheckbox.Checked,
             },
             TaskbarDisplay = new TaskbarDisplaySettings
             {

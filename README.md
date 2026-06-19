@@ -43,10 +43,13 @@ ClaudeMon reads your existing Claude Code OAuth token from `~/.claude/.credentia
 | Setting | Description |
 |---------|-------------|
 | **Check usage every** | Polling interval (1, 3, 5, or 10 minutes) |
-| **Warning / Critical thresholds** | One-time notifications at set percentages |
-| **Progressive alerts** | Recurring notifications every 10% above a starting level |
-| **Enable desktop notifications** | Master toggle for all alerts |
+| **Warning / Critical thresholds** | One-time notifications at set percentages (5-hour usage) |
+| **Progressive alerts** | Recurring notifications every 10% above a starting level (5-hour usage) |
+| **7-day warning** | Notification when 7-day (weekly) usage crosses this percentage |
 | **Show usage on the Windows taskbar** | Show the usage percentage on the taskbar, next to the clock (on by default) |
+| **Taskbar text colors** | Color of the "Claude" label and the percentage number (presets; the number can stay Auto / usage-level) |
+| **Enable desktop notifications** | Master toggle for all alerts |
+| **Notify when the rate limit resets** | Notify when your 5-hour limit resets to full capacity |
 | **Start with Windows** | Launch ClaudeMon at login |
 
 ## Building from Source

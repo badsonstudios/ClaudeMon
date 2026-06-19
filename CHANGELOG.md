@@ -3,6 +3,15 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.4.0] - 2026-06-19
+
+### Added
+- **Settings: 7-day warning threshold** — choose the weekly-usage percentage that
+  triggers the 7-day warning notification (previously only editable by hand in
+  `config.json`).
+- **Settings: "Notify when the rate limit resets"** — toggle the reset notification
+  from the Settings dialog (previously only editable by hand in `config.json`).
+
 ## [0.3.0] - 2026-06-17
 
 ### Added

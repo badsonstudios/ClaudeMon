@@ -93,6 +93,7 @@ public class ConfigManagerTests : IDisposable
             TaskbarDisplay = new TaskbarDisplaySettings
             {
                 Enabled = true,
+                ShowSevenDay = true,
                 LabelColor = TaskbarTextColor.Black,
                 NumberColor = TaskbarTextColor.DarkGray,
             },
@@ -102,6 +103,7 @@ public class ConfigManagerTests : IDisposable
         manager2.Load();
 
         Assert.True(manager2.Settings.TaskbarDisplay.Enabled);
+        Assert.True(manager2.Settings.TaskbarDisplay.ShowSevenDay);
         Assert.Equal(TaskbarTextColor.Black, manager2.Settings.TaskbarDisplay.LabelColor);
         Assert.Equal(TaskbarTextColor.DarkGray, manager2.Settings.TaskbarDisplay.NumberColor);
     }
@@ -112,6 +114,13 @@ public class ConfigManagerTests : IDisposable
         var settings = new AppSettings();
         Assert.Equal(TaskbarTextColor.White, settings.TaskbarDisplay.LabelColor);
         Assert.Equal(TaskbarTextColor.Auto, settings.TaskbarDisplay.NumberColor);
+    }
+
+    [Fact]
+    public void TaskbarDisplay_ShowSevenDay_DefaultsToFalse()
+    {
+        var settings = new AppSettings();
+        Assert.False(settings.TaskbarDisplay.ShowSevenDay);
     }
 
     [Fact]

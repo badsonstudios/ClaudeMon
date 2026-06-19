@@ -54,6 +54,13 @@ public record TaskbarDisplaySettings
 
     [JsonPropertyName("numberColor")]
     public TaskbarTextColor NumberColor { get; init; } = TaskbarTextColor.Auto;
+
+    /// <summary>
+    /// When true, the taskbar overlay also shows the 7-day usage next to the 5-hour
+    /// one, slash-separated (<c>5hr / 7day</c>). Off by default → 5-hour only.
+    /// </summary>
+    [JsonPropertyName("showSevenDay")]
+    public bool ShowSevenDay { get; init; }
 }
 
 public record AlertThresholds

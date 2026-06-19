@@ -18,6 +18,7 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _notificationsCheckbox;
     private readonly CheckBox _notifyOnResetCheckbox;
     private readonly CheckBox _taskbarDisplayCheckbox;
+    private readonly CheckBox _showSevenDayCheckbox;
     private readonly ComboBox _labelColorCombo;
     private readonly ComboBox _numberColorCombo;
     private readonly CheckBox _runAtStartupCheckbox;
@@ -50,7 +51,7 @@ public sealed class SettingsForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9f);
-        ClientSize = new Size(700, 676);
+        ClientSize = new Size(700, 710);
 
         // --- Monitoring group ---
         var monitoringGroup = new GroupBox
@@ -238,7 +239,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Taskbar Display",
             Location = new Point(20, 342),
-            Size = new Size(660, 138),
+            Size = new Size(660, 172),
         };
         Controls.Add(taskbarGroup);
 
@@ -251,17 +252,25 @@ public sealed class SettingsForm : Form
         _taskbarDisplayCheckbox.CheckedChanged += OnTaskbarDisplayToggled;
         taskbarGroup.Controls.Add(_taskbarDisplayCheckbox);
 
+        _showSevenDayCheckbox = new CheckBox
+        {
+            Text = "Also show 7-day usage (5hr / 7day)",
+            Location = new Point(40, 60),
+            AutoSize = true,
+        };
+        taskbarGroup.Controls.Add(_showSevenDayCheckbox);
+
         var labelColorLabel = new Label
         {
             Text = "\"Claude\" label color:",
-            Location = new Point(40, 66),
+            Location = new Point(40, 100),
             AutoSize = true,
         };
         taskbarGroup.Controls.Add(labelColorLabel);
 
         _labelColorCombo = new ComboBox
         {
-            Location = new Point(300, 63),
+            Location = new Point(300, 97),
             Width = 200,
             DropDownStyle = ComboBoxStyle.DropDownList,
         };
@@ -271,14 +280,14 @@ public sealed class SettingsForm : Form
         var numberColorLabel = new Label
         {
             Text = "Percentage color:",
-            Location = new Point(40, 100),
+            Location = new Point(40, 134),
             AutoSize = true,
         };
         taskbarGroup.Controls.Add(numberColorLabel);
 
         _numberColorCombo = new ComboBox
         {
-            Location = new Point(300, 97),
+            Location = new Point(300, 131),
             Width = 200,
             DropDownStyle = ComboBoxStyle.DropDownList,
         };
@@ -289,7 +298,7 @@ public sealed class SettingsForm : Form
         var generalGroup = new GroupBox
         {
             Text = "General",
-            Location = new Point(20, 496),
+            Location = new Point(20, 530),
             Size = new Size(660, 126),
         };
         Controls.Add(generalGroup);
@@ -324,7 +333,7 @@ public sealed class SettingsForm : Form
         {
             Text = "OK",
             DialogResult = DialogResult.OK,
-            Location = new Point(500, 632),
+            Location = new Point(500, 666),
             Size = new Size(80, 32),
         };
         okButton.Click += OnOkClicked;
@@ -334,7 +343,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(594, 632),
+            Location = new Point(594, 666),
             Size = new Size(80, 32),
         };
         Controls.Add(cancelButton);
@@ -359,7 +368,8 @@ public sealed class SettingsForm : Form
 
     private void OnTaskbarDisplayToggled(object? sender, EventArgs e)
     {
-        // The colours only matter when the taskbar display is on.
+        // The 7-day option and colours only matter when the taskbar display is on.
+        _showSevenDayCheckbox.Enabled = _taskbarDisplayCheckbox.Checked;
         _labelColorCombo.Enabled = _taskbarDisplayCheckbox.Checked;
         _numberColorCombo.Enabled = _taskbarDisplayCheckbox.Checked;
     }
@@ -408,6 +418,7 @@ public sealed class SettingsForm : Form
         _notifyOnResetCheckbox.Checked = settings.Notifications.NotifyOnReset;
         OnNotificationsToggled(null, EventArgs.Empty);
         _taskbarDisplayCheckbox.Checked = settings.TaskbarDisplay.Enabled;
+        _showSevenDayCheckbox.Checked = settings.TaskbarDisplay.ShowSevenDay;
         SelectColor(_labelColorCombo, LabelColorOptions, settings.TaskbarDisplay.LabelColor);
         SelectColor(_numberColorCombo, NumberColorOptions, settings.TaskbarDisplay.NumberColor);
         OnTaskbarDisplayToggled(null, EventArgs.Empty);
@@ -444,6 +455,7 @@ public sealed class SettingsForm : Form
             TaskbarDisplay = new TaskbarDisplaySettings
             {
                 Enabled = _taskbarDisplayCheckbox.Checked,
+                ShowSevenDay = _showSevenDayCheckbox.Checked,
                 LabelColor = SelectedColor(_labelColorCombo, LabelColorOptions),
                 NumberColor = SelectedColor(_numberColorCombo, NumberColorOptions),
             },

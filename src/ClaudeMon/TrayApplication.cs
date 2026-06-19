@@ -38,6 +38,7 @@ public sealed class TrayApplication : IDisposable
         _taskbarOverlay.SetColors(
             _configManager.Settings.TaskbarDisplay.LabelColor,
             _configManager.Settings.TaskbarDisplay.NumberColor);
+        _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
         _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
 
         _contextMenu = CreateContextMenu();
@@ -73,7 +74,7 @@ public sealed class TrayApplication : IDisposable
                     _notifyIcon.Icon = IconRenderer.RenderUsageIcon(fiveHour.UtilizationPct);
                     oldIcon?.Dispose();
 
-                    _taskbarOverlay.UpdateUsage(fiveHour.UtilizationPct);
+                    _taskbarOverlay.UpdateUsage(fiveHour.UtilizationPct, sevenDay?.UtilizationPct);
                 }
 
                 var lines = new List<string> { "ClaudeMon" };
@@ -139,6 +140,7 @@ public sealed class TrayApplication : IDisposable
             _taskbarOverlay.SetColors(
                 _configManager.Settings.TaskbarDisplay.LabelColor,
                 _configManager.Settings.TaskbarDisplay.NumberColor);
+            _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
             _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
         }
     }

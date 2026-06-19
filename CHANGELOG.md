@@ -3,6 +3,16 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.5.0] - 2026-06-19
+
+### Added
+- **Taskbar: optionally show the 7-day usage too** — a new "Also show 7-day usage
+  (5hr / 7day)" toggle (Settings → Taskbar Display) shows the weekly percentage next
+  to the 5-hour one, slash-separated (e.g. `42 / 18`). Off by default, so the taskbar
+  looks unchanged unless you opt in. Each number is colored for its own usage level
+  (under the Auto preset), and the overlay widens automatically so nothing clips.
+  Applies live, without restarting.
+
 ## [0.4.0] - 2026-06-19
 
 ### Added

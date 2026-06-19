@@ -78,4 +78,42 @@ public class IconRendererTests
         var color = IconRenderer.GetTextColor(TaskbarTextColor.Auto, percentage);
         Assert.Equal(IconRenderer.GetColorForPercentage(percentage), color);
     }
+
+    [Fact]
+    public void MeasureTaskbarUsageWidth_SingleNumber_IsAtLeastMinimum()
+    {
+        var width = IconRenderer.MeasureTaskbarUsageWidth(42, null, 40);
+        Assert.True(width >= IconRenderer.MinTaskbarWidth, $"expected >= {IconRenderer.MinTaskbarWidth}, got {width}");
+    }
+
+    [Theory]
+    [InlineData(42, 18)]
+    [InlineData(100, 100)]   // widest case: two 3-digit numbers
+    public void MeasureTaskbarUsageWidth_Dual_IsWiderThanSingle(double five, double seven)
+    {
+        var single = IconRenderer.MeasureTaskbarUsageWidth(five, null, 40);
+        var dual = IconRenderer.MeasureTaskbarUsageWidth(five, seven, 40);
+        Assert.True(dual > single, $"dual {dual} should exceed single {single}");
+    }
+
+    [Theory]
+    [InlineData(42, 18)]
+    [InlineData(0, 0)]
+    [InlineData(100, 100)]
+    public void DrawTaskbarUsage_Dual_RendersWithoutError(double five, double seven)
+    {
+        var width = IconRenderer.MeasureTaskbarUsageWidth(five, seven, 40);
+        using var bitmap = new Bitmap(width, 40);
+        using var graphics = Graphics.FromImage(bitmap);
+
+        // Mirrors the overlay: white label, each number coloured for its own level.
+        IconRenderer.DrawTaskbarUsage(
+            graphics, five, seven, new Rectangle(0, 0, width, 40),
+            IconRenderer.GetTextColor(TaskbarTextColor.White, five),
+            IconRenderer.GetTextColor(TaskbarTextColor.Auto, five),
+            IconRenderer.GetTextColor(TaskbarTextColor.Auto, seven));
+
+        Assert.Equal(width, bitmap.Width);
+        Assert.Equal(40, bitmap.Height);
+    }
 }

@@ -74,6 +74,31 @@ public static class IconRenderer
         _ => GetColorForPercentage(percentage),
     };
 
+    private const string TaskbarLabel = "Claude";
+
+    /// <summary>Minimum overlay width — keeps single-number mode pixel-identical to before.</summary>
+    public const int MinTaskbarWidth = 52;
+    private const int TaskbarWidthPadding = 6;
+
+    // Truncate (not round) so the taskbar number matches the tray icon exactly.
+    private static string FormatPct(double percentage) => ((int)percentage).ToString();
+
+    // Scale the fonts to the available height (Win11 taskbar ≈ 40px, Win10 ≈ 30px).
+    // Shared by the draw and measure paths so they always agree.
+    private static (float Label, float Number) TaskbarFontSizes(int height) =>
+        (Math.Clamp(height * 0.18f, 6f, 8f), Math.Clamp(height * 0.30f, 9f, 13f));
+
+    private static (string Text, Color Color)[] NumberSegments(
+        double fiveHourPct, double? sevenDayPct, Color fiveHourColor, Color sevenDayColor, Color separatorColor)
+        => sevenDayPct is null
+            ? new[] { (FormatPct(fiveHourPct), fiveHourColor) }
+            : new[]
+            {
+                (FormatPct(fiveHourPct), fiveHourColor),
+                (" / ", separatorColor),
+                (FormatPct(sevenDayPct.Value), sevenDayColor),
+            };
+
     /// <summary>
     /// Draws the taskbar usage readout — a small "Claude" label on top and a larger
     /// percentage number below it. The caller supplies the resolved colours
@@ -82,36 +107,89 @@ public static class IconRenderer
     /// </summary>
     public static void DrawTaskbarUsage(
         Graphics graphics, double percentage, Rectangle bounds, Color labelColor, Color numberColor)
+        => DrawTaskbarRows(graphics, bounds, labelColor,
+            NumberSegments(percentage, null, numberColor, numberColor, labelColor));
+
+    /// <summary>
+    /// Draws the dual taskbar readout — the 5-hour and 7-day numbers separated by a
+    /// slash (<c>5hr / 7day</c>). Each number gets its own resolved colour; the
+    /// separator uses the label colour as a neutral element.
+    /// </summary>
+    public static void DrawTaskbarUsage(
+        Graphics graphics, double fiveHourPct, double sevenDayPct, Rectangle bounds,
+        Color labelColor, Color fiveHourColor, Color sevenDayColor)
+        => DrawTaskbarRows(graphics, bounds, labelColor,
+            NumberSegments(fiveHourPct, sevenDayPct, fiveHourColor, sevenDayColor, labelColor));
+
+    /// <summary>
+    /// Renders the "Claude" label row and a number row composed of coloured segments,
+    /// both horizontally centred and vertically centred as a block within
+    /// <paramref name="bounds"/>.
+    /// </summary>
+    private static void DrawTaskbarRows(
+        Graphics graphics, Rectangle bounds, Color labelColor,
+        (string Text, Color Color)[] numberSegments)
     {
         // Grayscale AA (not ClearType) so the glyph alpha is correct on a transparent
         // bitmap — ClearType needs a known opaque background and fringes otherwise.
         graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
-        // Scale the fonts to the available height (Win11 taskbar ≈ 40px, Win10 ≈ 30px).
-        var labelSize = Math.Clamp(bounds.Height * 0.18f, 6f, 8f);
-        var numberSize = Math.Clamp(bounds.Height * 0.30f, 9f, 13f);
-
-        var label = "Claude";
-        // Truncate (not round) so the taskbar number matches the tray icon exactly.
-        var number = ((int)percentage).ToString();
-
+        var (labelSize, numberSize) = TaskbarFontSizes(bounds.Height);
         using var labelFont = new Font("Segoe UI", labelSize, FontStyle.Regular, GraphicsUnit.Point);
         using var numberFont = new Font("Segoe UI", numberSize, FontStyle.Bold, GraphicsUnit.Point);
         using var labelBrush = new SolidBrush(labelColor);
-        using var numberBrush = new SolidBrush(numberColor);
 
-        var labelMeasure = graphics.MeasureString(label, labelFont);
-        var numberMeasure = graphics.MeasureString(number, numberFont);
+        var labelMeasure = graphics.MeasureString(TaskbarLabel, labelFont);
+
+        float numberWidth = 0f, numberHeight = 0f;
+        foreach (var seg in numberSegments)
+        {
+            var m = graphics.MeasureString(seg.Text, numberFont);
+            numberWidth += m.Width;
+            numberHeight = Math.Max(numberHeight, m.Height);
+        }
 
         // Stack the two rows and centre the block vertically within the bounds.
-        var totalHeight = labelMeasure.Height + numberMeasure.Height;
+        var totalHeight = labelMeasure.Height + numberHeight;
         var top = bounds.Y + Math.Max(0, (bounds.Height - totalHeight) / 2);
 
         var labelX = bounds.X + (bounds.Width - labelMeasure.Width) / 2;
-        graphics.DrawString(label, labelFont, labelBrush, labelX, top);
+        graphics.DrawString(TaskbarLabel, labelFont, labelBrush, labelX, top);
 
-        var numberX = bounds.X + (bounds.Width - numberMeasure.Width) / 2;
-        graphics.DrawString(number, numberFont, numberBrush, numberX, top + labelMeasure.Height);
+        var numberX = bounds.X + (bounds.Width - numberWidth) / 2;
+        var numberY = top + labelMeasure.Height;
+        foreach (var seg in numberSegments)
+        {
+            using var brush = new SolidBrush(seg.Color);
+            graphics.DrawString(seg.Text, numberFont, brush, numberX, numberY);
+            numberX += graphics.MeasureString(seg.Text, numberFont).Width;
+        }
+    }
+
+    /// <summary>
+    /// Measures the overlay width needed to show the readout (single or dual) at the
+    /// given taskbar height without clipping, never below <see cref="MinTaskbarWidth"/>.
+    /// Sums per-segment widths to match how <see cref="DrawTaskbarRows"/> lays them out.
+    /// </summary>
+    public static int MeasureTaskbarUsageWidth(double fiveHourPct, double? sevenDayPct, int height)
+    {
+        using var bitmap = new Bitmap(1, 1);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+        var (labelSize, numberSize) = TaskbarFontSizes(height);
+        using var labelFont = new Font("Segoe UI", labelSize, FontStyle.Regular, GraphicsUnit.Point);
+        using var numberFont = new Font("Segoe UI", numberSize, FontStyle.Bold, GraphicsUnit.Point);
+
+        var labelWidth = graphics.MeasureString(TaskbarLabel, labelFont).Width;
+
+        var dummy = Color.White;
+        float numberWidth = 0f;
+        foreach (var seg in NumberSegments(fiveHourPct, sevenDayPct, dummy, dummy, dummy))
+            numberWidth += graphics.MeasureString(seg.Text, numberFont).Width;
+
+        var content = Math.Max(labelWidth, numberWidth);
+        return Math.Max(MinTaskbarWidth, (int)Math.Ceiling(content) + TaskbarWidthPadding);
     }
 
     /// <summary>

@@ -22,23 +22,30 @@ using Microsoft.Win32;
 /// </remarks>
 public sealed class TaskbarOverlayWindow : Form
 {
-    private const int OverlayWidth = 52;
-
     private readonly System.Windows.Forms.Timer _keepAliveTimer;
 
     private double? _percentage;
+    private double? _sevenDayPercentage;
+    private bool _showSevenDay;
     private TaskbarTextColor _labelColor = TaskbarTextColor.White;
     private TaskbarTextColor _numberColor = TaskbarTextColor.Auto;
     private int _x;
     private int _y;
+    private int _width = IconRenderer.MinTaskbarWidth;
     private int _height = 40;
+
+    // Inputs the cached _width was last measured for, so the 500 ms keep-alive tick
+    // doesn't re-measure (allocating fonts + a bitmap) when nothing changed.
+    private double _widthPct = double.NaN;
+    private double? _widthSeven;
+    private int _widthHeight;
 
     public TaskbarOverlayWindow()
     {
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
-        Size = new Size(OverlayWidth, _height);
+        Size = new Size(_width, _height);
 
         // Re-glue to the taskbar and re-assert topmost ordering periodically. Clicking
         // the taskbar can push us below it; this brings us back promptly.
@@ -79,10 +86,15 @@ public sealed class TaskbarOverlayWindow : Form
         }
     }
 
-    /// <summary>Update the displayed value and repaint.</summary>
-    public void UpdateUsage(double percentage)
+    /// <summary>
+    /// Update the displayed values and repaint. <paramref name="sevenDayPercentage"/> is
+    /// only shown when the "also show 7-day" option is on (see <see cref="SetShowSevenDay"/>);
+    /// pass null when the API didn't return a 7-day window.
+    /// </summary>
+    public void UpdateUsage(double percentage, double? sevenDayPercentage)
     {
         _percentage = percentage;
+        _sevenDayPercentage = sevenDayPercentage;
         if (Visible) Reposition();
     }
 
@@ -92,6 +104,37 @@ public sealed class TaskbarOverlayWindow : Form
         _labelColor = labelColor;
         _numberColor = numberColor;
         if (Visible) Redraw();
+    }
+
+    /// <summary>
+    /// Toggle whether the 7-day usage is shown alongside the 5-hour one. Re-measures the
+    /// overlay width and repaints live (no restart).
+    /// </summary>
+    public void SetShowSevenDay(bool showSevenDay)
+    {
+        _showSevenDay = showSevenDay;
+        if (Visible) Reposition();
+    }
+
+    /// <summary>The 7-day value to display, or null when the option is off.</summary>
+    private double? SevenDayForDisplay => _showSevenDay ? _sevenDayPercentage : null;
+
+    /// <summary>
+    /// Recomputes <see cref="_width"/> from the current readout, but only when the
+    /// percentage, 7-day value, or taskbar height changed — measuring allocates fonts
+    /// and a bitmap, and this runs on the 500 ms keep-alive tick.
+    /// </summary>
+    private void UpdateMeasuredWidth()
+    {
+        var pct = _percentage ?? 0;
+        var seven = SevenDayForDisplay;
+        if (_widthPct.Equals(pct) && _widthSeven.Equals(seven) && _widthHeight == _height)
+            return;
+
+        _width = IconRenderer.MeasureTaskbarUsageWidth(pct, seven, _height);
+        _widthPct = pct;
+        _widthSeven = seven;
+        _widthHeight = _height;
     }
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
@@ -120,11 +163,16 @@ public sealed class TaskbarOverlayWindow : Form
 
         var taskbarHeight = taskbar.Bottom - taskbar.Top;
         _height = taskbarHeight > 0 ? taskbarHeight : _height;
-        _x = left - OverlayWidth;
+
+        // Size the overlay to its content so the dual "5hr / 7day" readout never clips.
+        // The window is right-anchored, so a wider overlay extends leftward and the
+        // clock/tray stay put. Re-measure only when the inputs actually change.
+        UpdateMeasuredWidth();
+        _x = left - _width;
         _y = taskbar.Top;
 
         SetWindowPos(
-            Handle, HWND_TOPMOST, _x, _y, OverlayWidth, _height,
+            Handle, HWND_TOPMOST, _x, _y, _width, _height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
         Redraw();
@@ -135,15 +183,28 @@ public sealed class TaskbarOverlayWindow : Form
     {
         if (!IsHandleCreated || _percentage is null) return;
 
-        using var bitmap = new Bitmap(OverlayWidth, _height, PixelFormat.Format32bppArgb);
+        using var bitmap = new Bitmap(_width, _height, PixelFormat.Format32bppArgb);
         using (var graphics = Graphics.FromImage(bitmap))
         {
             graphics.Clear(Color.Transparent);
             var pct = _percentage.Value;
             var labelColor = IconRenderer.GetTextColor(_labelColor, pct);
-            var numberColor = IconRenderer.GetTextColor(_numberColor, pct);
-            IconRenderer.DrawTaskbarUsage(
-                graphics, pct, new Rectangle(0, 0, OverlayWidth, _height), labelColor, numberColor);
+            var bounds = new Rectangle(0, 0, _width, _height);
+            var sevenDay = SevenDayForDisplay;
+
+            if (sevenDay is null)
+            {
+                var numberColor = IconRenderer.GetTextColor(_numberColor, pct);
+                IconRenderer.DrawTaskbarUsage(graphics, pct, bounds, labelColor, numberColor);
+            }
+            else
+            {
+                // Each number is coloured for its own usage level (under the Auto preset).
+                var fiveColor = IconRenderer.GetTextColor(_numberColor, pct);
+                var sevenColor = IconRenderer.GetTextColor(_numberColor, sevenDay.Value);
+                IconRenderer.DrawTaskbarUsage(
+                    graphics, pct, sevenDay.Value, bounds, labelColor, fiveColor, sevenColor);
+            }
         }
 
         var screenDc = GetDC(IntPtr.Zero);
@@ -155,7 +216,7 @@ public sealed class TaskbarOverlayWindow : Form
             hBitmap = bitmap.GetHbitmap(Color.FromArgb(0));
             oldBitmap = SelectObject(memDc, hBitmap);
 
-            var size = new SIZE { cx = OverlayWidth, cy = _height };
+            var size = new SIZE { cx = _width, cy = _height };
             var source = new POINT { x = 0, y = 0 };
             var dest = new POINT { x = _x, y = _y };
             var blend = new BLENDFUNCTION

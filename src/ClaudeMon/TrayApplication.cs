@@ -1,5 +1,6 @@
 namespace ClaudeMon;
 
+using System.Diagnostics;
 using System.Drawing;
 using ClaudeMon.Configuration;
 using ClaudeMon.Monitoring;
@@ -8,6 +9,9 @@ using ClaudeMon.UI;
 
 public sealed class TrayApplication : IDisposable
 {
+    // How often to check GitHub for a newer release while running.
+    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(24);
+
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _contextMenu;
     private readonly UsageMonitor _monitor;
@@ -17,7 +21,16 @@ public sealed class TrayApplication : IDisposable
     private readonly FlyoutPanel _flyout;
     private readonly TaskbarOverlayWindow _taskbarOverlay;
     private readonly AlertManager _alertManager;
-    private bool _disposed;
+    private readonly UpdateChecker _updateChecker;
+    private readonly System.Timers.Timer _updateTimer;
+    private readonly CancellationTokenSource _updateCts = new();
+    private readonly ToolStripMenuItem _downloadUpdateItem =
+        new("Download update...") { Visible = false };
+    private string? _updateUrl;
+    private volatile bool _disposed;
+
+    private static Version CurrentVersion =>
+        typeof(TrayApplication).Assembly.GetName().Version ?? new Version(0, 0);
 
     public TrayApplication()
     {
@@ -52,7 +65,20 @@ public sealed class TrayApplication : IDisposable
         _notifyIcon.MouseClick += OnTrayMouseClick;
         _alertManager = new AlertManager(_notifyIcon);
 
+        _updateChecker = new UpdateChecker();
+        _updateTimer = new System.Timers.Timer(UpdateCheckInterval.TotalMilliseconds)
+        {
+            AutoReset = true,
+        };
+        _updateTimer.Elapsed += (_, _) => _ = CheckForUpdatesAsync(manual: false);
+
         _monitor.Start();
+
+        if (_configManager.Settings.CheckForUpdates)
+        {
+            _updateTimer.Start();
+            _ = CheckForUpdatesAsync(manual: false);
+        }
     }
 
     private void OnUsageUpdated(object? sender, UsageUpdatedEventArgs e)
@@ -126,9 +152,96 @@ public sealed class TrayApplication : IDisposable
         menu.Items.Add("Refresh Now", null, async (_, _) => await _monitor.RefreshNowAsync());
         menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
         menu.Items.Add(new ToolStripSeparator());
+
+        // Hidden until a check finds a newer release; clicking opens the release page.
+        _downloadUpdateItem.Click += (_, _) => OpenUpdatePage();
+        menu.Items.Add(_downloadUpdateItem);
+        menu.Items.Add("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(manual: true));
+
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("About ClaudeMon", null, (_, _) => ShowAbout());
         menu.Items.Add("Exit", null, (_, _) => Application.Exit());
         return menu;
+    }
+
+    /// <summary>
+    /// Queries GitHub for a newer release. On a manual check the user always gets
+    /// feedback (update / up-to-date / failed); automatic checks stay silent unless a
+    /// new version is found, and only balloon once per version (tracked in config).
+    /// </summary>
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        // Always invoked fire-and-forget (timer tick / menu click), so it must never let
+        // an exception escape. CheckAsync is already non-throwing, but guard regardless.
+        try
+        {
+            var result = await _updateChecker.CheckAsync(CurrentVersion, _updateCts.Token);
+
+            _syncContext.Post(_ =>
+            {
+                if (_disposed) return;
+
+                if (result.UpdateAvailable && result.LatestVersion is not null)
+                {
+                    var v = result.LatestVersion;
+                    var version = $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}";
+                    _updateUrl = result.ReleaseUrl;
+                    _downloadUpdateItem.Text = $"Download update (v{version})...";
+                    _downloadUpdateItem.Visible = true;
+
+                    // All _configManager.Update calls run on the UI thread (this posted
+                    // callback and the Settings dialog), so this read-modify-write is safe.
+                    var alreadyNotified = _configManager.Settings.LastNotifiedVersion == version;
+                    if (manual || !alreadyNotified)
+                    {
+                        _notifyIcon.ShowBalloonTip(
+                            5000,
+                            "Update available",
+                            $"ClaudeMon v{version} is available. Use \"Download update\" in the menu.",
+                            ToolTipIcon.Info);
+                    }
+
+                    if (!alreadyNotified)
+                        _configManager.Update(_configManager.Settings with { LastNotifiedVersion = version });
+                }
+                else if (manual && result.ErrorMessage is null)
+                {
+                    _notifyIcon.ShowBalloonTip(
+                        5000, "ClaudeMon", "You're on the latest version.", ToolTipIcon.Info);
+                }
+                else if (manual)
+                {
+                    _notifyIcon.ShowBalloonTip(
+                        5000, "Update check failed", "Couldn't check for updates right now.", ToolTipIcon.Warning);
+                }
+            }, null);
+        }
+        catch (OperationCanceledException)
+        {
+            // App is shutting down — ignore.
+        }
+        catch
+        {
+            // Update checks are best-effort; never crash the app over one.
+        }
+    }
+
+    private void OpenUpdatePage()
+    {
+        // Only ever shell out to an http(s) URL (GitHub's release page), never an
+        // arbitrary scheme, even though the value comes from a trusted HTTPS response.
+        if (!Uri.TryCreate(_updateUrl, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return;
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+        }
+        catch
+        {
+            // Best-effort: if the shell can't open the URL there's nothing useful to do.
+        }
     }
 
     private void ShowSettings()
@@ -142,6 +255,21 @@ public sealed class TrayApplication : IDisposable
                 _configManager.Settings.TaskbarDisplay.NumberColor);
             _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
             _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
+
+            // Start/stop update checks live to match the toggle; check immediately when
+            // newly enabled so the user doesn't wait up to a day for the first result.
+            if (_configManager.Settings.CheckForUpdates)
+            {
+                if (!_updateTimer.Enabled)
+                {
+                    _updateTimer.Start();
+                    _ = CheckForUpdatesAsync(manual: false);
+                }
+            }
+            else
+            {
+                _updateTimer.Stop();
+            }
         }
     }
 
@@ -162,6 +290,11 @@ public sealed class TrayApplication : IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _updateTimer.Stop();
+        _updateCts.Cancel();
+        _updateTimer.Dispose();
+        _updateCts.Dispose();
+        _updateChecker.Dispose();
         _monitor.Dispose();
         _apiClient.Dispose();
         _notifyIcon.Visible = false;

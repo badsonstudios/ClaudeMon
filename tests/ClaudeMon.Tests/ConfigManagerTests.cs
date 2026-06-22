@@ -124,6 +124,32 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void CheckForUpdates_DefaultsToTrue()
+    {
+        var settings = new AppSettings();
+        Assert.True(settings.CheckForUpdates);
+    }
+
+    [Fact]
+    public void UpdateSettings_RoundTrip()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+
+        manager.Update(new AppSettings
+        {
+            CheckForUpdates = false,
+            LastNotifiedVersion = "0.6.0",
+        });
+
+        var manager2 = new ConfigManager(path);
+        manager2.Load();
+
+        Assert.False(manager2.Settings.CheckForUpdates);
+        Assert.Equal("0.6.0", manager2.Settings.LastNotifiedVersion);
+    }
+
+    [Fact]
     public void Save_CreatesDirectoryIfNeeded()
     {
         var path = Path.Combine(_tempDir, "subdir", "config.json");

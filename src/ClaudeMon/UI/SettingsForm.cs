@@ -22,6 +22,7 @@ public sealed class SettingsForm : Form
     private readonly ComboBox _labelColorCombo;
     private readonly ComboBox _numberColorCombo;
     private readonly CheckBox _runAtStartupCheckbox;
+    private readonly CheckBox _checkForUpdatesCheckbox;
 
     // Dropdown options paired with the preset they map to.
     private static readonly (string Text, TaskbarTextColor Value)[] LabelColorOptions =
@@ -51,7 +52,7 @@ public sealed class SettingsForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9f);
-        ClientSize = new Size(700, 710);
+        ClientSize = new Size(700, 740);
 
         // --- Monitoring group ---
         var monitoringGroup = new GroupBox
@@ -299,7 +300,7 @@ public sealed class SettingsForm : Form
         {
             Text = "General",
             Location = new Point(20, 530),
-            Size = new Size(660, 126),
+            Size = new Size(660, 156),
         };
         Controls.Add(generalGroup);
 
@@ -328,12 +329,20 @@ public sealed class SettingsForm : Form
         };
         generalGroup.Controls.Add(_runAtStartupCheckbox);
 
+        _checkForUpdatesCheckbox = new CheckBox
+        {
+            Text = "Check for updates automatically",
+            Location = new Point(20, 120),
+            AutoSize = true,
+        };
+        generalGroup.Controls.Add(_checkForUpdatesCheckbox);
+
         // --- Buttons ---
         var okButton = new Button
         {
             Text = "OK",
             DialogResult = DialogResult.OK,
-            Location = new Point(500, 666),
+            Location = new Point(500, 696),
             Size = new Size(80, 32),
         };
         okButton.Click += OnOkClicked;
@@ -343,7 +352,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(594, 666),
+            Location = new Point(594, 696),
             Size = new Size(80, 32),
         };
         Controls.Add(cancelButton);
@@ -423,6 +432,7 @@ public sealed class SettingsForm : Form
         SelectColor(_numberColorCombo, NumberColorOptions, settings.TaskbarDisplay.NumberColor);
         OnTaskbarDisplayToggled(null, EventArgs.Empty);
         _runAtStartupCheckbox.Checked = ConfigManager.IsRunAtStartupEnabled();
+        _checkForUpdatesCheckbox.Checked = settings.CheckForUpdates;
     }
 
     private void OnOkClicked(object? sender, EventArgs e)
@@ -459,6 +469,7 @@ public sealed class SettingsForm : Form
                 LabelColor = SelectedColor(_labelColorCombo, LabelColorOptions),
                 NumberColor = SelectedColor(_numberColorCombo, NumberColorOptions),
             },
+            CheckForUpdates = _checkForUpdatesCheckbox.Checked,
         };
 
         _configManager.Update(newSettings);

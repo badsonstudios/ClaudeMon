@@ -38,6 +38,18 @@ public record AppSettings
     [JsonPropertyName("taskbarDisplay")]
     public TaskbarDisplaySettings TaskbarDisplay { get; init; } = new();
 
+    /// <summary>Whether ClaudeMon checks GitHub for newer releases (daily + on demand).</summary>
+    [JsonPropertyName("checkForUpdates")]
+    public bool CheckForUpdates { get; init; } = true;
+
+    /// <summary>
+    /// The newest release version the user has already been notified about, so we
+    /// notify only once per new version (across restarts). Internal state, not a user
+    /// setting — preserved automatically by the settings <c>with</c>-expression save.
+    /// </summary>
+    [JsonPropertyName("lastNotifiedVersion")]
+    public string? LastNotifiedVersion { get; init; }
+
     [JsonPropertyName("configVersion")]
     public int ConfigVersion { get; init; } = 1;
 

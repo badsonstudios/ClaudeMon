@@ -18,6 +18,7 @@ The usage percentage can also be shown directly on the taskbar:
   - **Threshold** - Warning and critical notifications at set percentages
   - **Progressive** - Notifications every 10% starting from a configurable level
 - **Reset countdown** - Shows time remaining until rate limits reset
+- **Update notifications** - Checks GitHub for newer releases (daily and on demand) and links you to the download; toggle in Settings
 - **Runs at startup** - Optional Windows startup registration
 
 ## Installation
@@ -51,6 +52,7 @@ ClaudeMon reads your existing Claude Code OAuth token from `~/.claude/.credentia
 | **Taskbar text colors** | Color of the "Claude" label and the percentage number (presets; the number can stay Auto / usage-level) |
 | **Enable desktop notifications** | Master toggle for all alerts |
 | **Notify when the rate limit resets** | Notify when your 5-hour limit resets to full capacity |
+| **Check for updates automatically** | Periodically check GitHub for a newer ClaudeMon release and notify you (on by default) |
 | **Start with Windows** | Launch ClaudeMon at login |
 
 ## Building from Source

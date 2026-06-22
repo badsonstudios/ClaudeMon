@@ -3,6 +3,17 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.6.0] - 2026-06-20
+
+### Added
+- **Update notifications** — ClaudeMon now checks GitHub for newer releases (daily and
+  on demand) and lets you know when one is available. A new **"Download update
+  (vX.Y.Z)…"** tray-menu item opens the release page, and a one-time notification fires
+  per new version (no nagging). A **"Check for updates"** menu item runs an on-demand
+  check, and a **"Check for updates automatically"** toggle (Settings → General, on by
+  default) controls the periodic check. Network failures are handled silently; the
+  check is unauthenticated and never installs anything on its own.
+
 ## [0.5.0] - 2026-06-19
 
 ### Added

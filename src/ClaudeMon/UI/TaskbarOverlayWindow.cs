@@ -27,6 +27,7 @@ public sealed class TaskbarOverlayWindow : Form
     private double? _percentage;
     private double? _sevenDayPercentage;
     private bool _showSevenDay;
+    private bool _signInExpired;
     private TaskbarTextColor _labelColor = TaskbarTextColor.White;
     private TaskbarTextColor _numberColor = TaskbarTextColor.Auto;
     private int _x;
@@ -39,6 +40,7 @@ public sealed class TaskbarOverlayWindow : Form
     private double _widthPct = double.NaN;
     private double? _widthSeven;
     private int _widthHeight;
+    private bool _widthSignInExpired;
 
     public TaskbarOverlayWindow()
     {
@@ -93,8 +95,24 @@ public sealed class TaskbarOverlayWindow : Form
     /// </summary>
     public void UpdateUsage(double percentage, double? sevenDayPercentage)
     {
+        // A fresh reading clears any sign-in-expired marker, so normal display returns
+        // automatically once credentials are refreshed.
+        _signInExpired = false;
         _percentage = percentage;
         _sevenDayPercentage = sevenDayPercentage;
+        if (Visible) Reposition();
+    }
+
+    /// <summary>
+    /// Replace the usage readout with a neutral sign-in-expired marker (see
+    /// <see cref="IconRenderer.DrawTaskbarSignInExpired"/>) so the overlay never shows a
+    /// stale percentage after the Claude Code token expires. Cleared by the next
+    /// <see cref="UpdateUsage"/>. Honoured the next time the overlay is shown if currently
+    /// disabled.
+    /// </summary>
+    public void ShowSignInExpired()
+    {
+        _signInExpired = true;
         if (Visible) Reposition();
     }
 
@@ -126,15 +144,26 @@ public sealed class TaskbarOverlayWindow : Form
     /// </summary>
     private void UpdateMeasuredWidth()
     {
+        if (_signInExpired)
+        {
+            if (_widthSignInExpired && _widthHeight == _height) return;
+
+            _width = IconRenderer.MeasureTaskbarSignInExpiredWidth(_height);
+            _widthSignInExpired = true;
+            _widthHeight = _height;
+            return;
+        }
+
         var pct = _percentage ?? 0;
         var seven = SevenDayForDisplay;
-        if (_widthPct.Equals(pct) && _widthSeven.Equals(seven) && _widthHeight == _height)
+        if (!_widthSignInExpired && _widthPct.Equals(pct) && _widthSeven.Equals(seven) && _widthHeight == _height)
             return;
 
         _width = IconRenderer.MeasureTaskbarUsageWidth(pct, seven, _height);
         _widthPct = pct;
         _widthSeven = seven;
         _widthHeight = _height;
+        _widthSignInExpired = false;
     }
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
@@ -181,29 +210,40 @@ public sealed class TaskbarOverlayWindow : Form
     /// <summary>Renders the readout to a 32bpp ARGB bitmap and pushes it via UpdateLayeredWindow.</summary>
     private void Redraw()
     {
-        if (!IsHandleCreated || _percentage is null) return;
+        // Sign-in-expired draws without a percentage; otherwise there's nothing to paint yet.
+        if (!IsHandleCreated || (!_signInExpired && _percentage is null)) return;
 
         using var bitmap = new Bitmap(_width, _height, PixelFormat.Format32bppArgb);
         using (var graphics = Graphics.FromImage(bitmap))
         {
             graphics.Clear(Color.Transparent);
-            var pct = _percentage.Value;
-            var labelColor = IconRenderer.GetTextColor(_labelColor, pct);
             var bounds = new Rectangle(0, 0, _width, _height);
-            var sevenDay = SevenDayForDisplay;
 
-            if (sevenDay is null)
+            if (_signInExpired)
             {
-                var numberColor = IconRenderer.GetTextColor(_numberColor, pct);
-                IconRenderer.DrawTaskbarUsage(graphics, pct, bounds, labelColor, numberColor);
+                // Resolve at 0% so the neutral marker isn't usage-coloured under the Auto preset.
+                var labelColor = IconRenderer.GetTextColor(_labelColor, 0);
+                IconRenderer.DrawTaskbarSignInExpired(graphics, bounds, labelColor);
             }
             else
             {
-                // Each number is coloured for its own usage level (under the Auto preset).
-                var fiveColor = IconRenderer.GetTextColor(_numberColor, pct);
-                var sevenColor = IconRenderer.GetTextColor(_numberColor, sevenDay.Value);
-                IconRenderer.DrawTaskbarUsage(
-                    graphics, pct, sevenDay.Value, bounds, labelColor, fiveColor, sevenColor);
+                var pct = _percentage!.Value;
+                var labelColor = IconRenderer.GetTextColor(_labelColor, pct);
+                var sevenDay = SevenDayForDisplay;
+
+                if (sevenDay is null)
+                {
+                    var numberColor = IconRenderer.GetTextColor(_numberColor, pct);
+                    IconRenderer.DrawTaskbarUsage(graphics, pct, bounds, labelColor, numberColor);
+                }
+                else
+                {
+                    // Each number is coloured for its own usage level (under the Auto preset).
+                    var fiveColor = IconRenderer.GetTextColor(_numberColor, pct);
+                    var sevenColor = IconRenderer.GetTextColor(_numberColor, sevenDay.Value);
+                    IconRenderer.DrawTaskbarUsage(
+                        graphics, pct, sevenDay.Value, bounds, labelColor, fiveColor, sevenColor);
+                }
             }
         }
 

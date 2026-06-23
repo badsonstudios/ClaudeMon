@@ -89,6 +89,18 @@ public sealed class TrayApplication : IDisposable
         {
             if (_disposed) return;
 
+            // Auth expired: show an actionable message instead of usage numbers.
+            // SetError carries the last (now-stale) usage, so this must precede the
+            // usage branch or we'd render old percentages with no hint of what's wrong.
+            if (e.Status == MonitorStatus.AuthError)
+            {
+                var oldIcon = _notifyIcon.Icon;
+                _notifyIcon.Icon = IconRenderer.RenderErrorIcon();
+                oldIcon?.Dispose();
+                _notifyIcon.Text = $"ClaudeMon\n{MonitorStatusText.SignInExpired}";
+                return;
+            }
+
             if (e.Usage is not null)
             {
                 var fiveHour = e.Usage.FiveHour;
@@ -273,7 +285,7 @@ public sealed class TrayApplication : IDisposable
         }
     }
 
-    private static void ShowAbout()
+    private void ShowAbout()
     {
         var version = typeof(TrayApplication).Assembly.GetName().Version;
         MessageBox.Show(
@@ -281,6 +293,7 @@ public sealed class TrayApplication : IDisposable
             "Windows system tray monitor for Claude AI usage.\n\n" +
             "Monitors 5-hour and 7-day rate limits\n" +
             "for Claude Max subscribers.\n\n" +
+            $"Status: {MonitorStatusText.Describe(_monitor.Status)}\n\n" +
             "github.com/badsonstudios/ClaudeMon",
             "About ClaudeMon",
             MessageBoxButtons.OK,

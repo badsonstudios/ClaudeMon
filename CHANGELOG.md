@@ -3,6 +3,16 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.7.0] - 2026-06-23
+
+### Changed
+- **Clear sign-in-expired state** — when your Claude Code sign-in expires, ClaudeMon now
+  shows an actionable **"Sign-in expired — run Claude Code to refresh"** message in the
+  tray tooltip and the click-through flyout instead of leaving the last (stale) usage
+  percentages on screen. The **About** dialog now also shows the current connection
+  status (Connected / Sign-in expired / Offline). Normal display returns automatically
+  once you re-authenticate in Claude Code.
+
 ## [0.6.0] - 2026-06-20
 
 ### Added

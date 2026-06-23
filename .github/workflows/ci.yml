@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel an in-progress run when a newer commit is pushed to the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: the job only reads the repo.
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build & test
+    # Windows is required: the projects target net10.0-windows (WinForms).
+    runs-on: windows-latest
+
+    env:
+      # Test project references src/ClaudeMon, so building it builds both.
+      TEST_PROJECT: tests/ClaudeMon.Tests/ClaudeMon.Tests.csproj
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: ga
+
+      - name: Restore
+        run: dotnet restore $env:TEST_PROJECT
+
+      - name: Build
+        run: dotnet build $env:TEST_PROJECT -c Release --no-restore
+
+      - name: Test
+        run: dotnet test $env:TEST_PROJECT -c Release --no-build --verbosity normal

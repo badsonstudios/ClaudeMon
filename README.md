@@ -1,5 +1,7 @@
 # ClaudeMon
 
+[![CI](https://github.com/badsonstudios/ClaudeMon/actions/workflows/ci.yml/badge.svg)](https://github.com/badsonstudios/ClaudeMon/actions/workflows/ci.yml)
+
 A Windows system tray application that monitors your Claude AI usage for Claude Max subscribers. It polls the Anthropic API for 5-hour and 7-day rate limit utilization, displays usage as a color-coded tray icon, and sends desktop notifications when approaching limits.
 
 ![System Tray](images/system_tray.png)

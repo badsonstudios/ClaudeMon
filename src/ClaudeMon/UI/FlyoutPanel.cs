@@ -105,24 +105,38 @@ public sealed class FlyoutPanel : Form
         using var labelFont = new Font("Segoe UI", 8.25f, FontStyle.Regular);
         using var dimBrush = new SolidBrush(DimTextColor);
 
-        if (_usage?.FiveHour is not null)
+        if (_status == MonitorStatus.AuthError)
         {
-            DrawUsageRow(g, "5-hour", _usage.FiveHour, left, y, contentWidth,
-                labelFont, textBrush, dimBrush);
-            y += 42;
+            // Auth expired: replace the usage rows with an actionable message rather
+            // than showing the last (now-stale) percentages. The message wraps to ~2
+            // lines in the content width; the rect height and the y advance match so the
+            // status line below never overlaps it.
+            const int messageHeight = 44;
+            var msgRect = new RectangleF(left, y, contentWidth, messageHeight);
+            g.DrawString(MonitorStatusText.SignInExpired, labelFont, textBrush, msgRect);
+            y += messageHeight;
         }
-
-        if (_usage?.SevenDay is not null)
+        else
         {
-            DrawUsageRow(g, "7-day", _usage.SevenDay, left, y, contentWidth,
-                labelFont, textBrush, dimBrush);
-            y += 42;
-        }
+            if (_usage?.FiveHour is not null)
+            {
+                DrawUsageRow(g, "5-hour", _usage.FiveHour, left, y, contentWidth,
+                    labelFont, textBrush, dimBrush);
+                y += 42;
+            }
 
-        if (_usage?.FiveHour is null && _usage?.SevenDay is null)
-        {
-            g.DrawString("No usage data available", labelFont, dimBrush, left, y);
-            y += 20;
+            if (_usage?.SevenDay is not null)
+            {
+                DrawUsageRow(g, "7-day", _usage.SevenDay, left, y, contentWidth,
+                    labelFont, textBrush, dimBrush);
+                y += 42;
+            }
+
+            if (_usage?.FiveHour is null && _usage?.SevenDay is null)
+            {
+                g.DrawString("No usage data available", labelFont, dimBrush, left, y);
+                y += 20;
+            }
         }
 
         // Status & last updated
@@ -175,17 +189,7 @@ public sealed class FlyoutPanel : Form
 
     private string FormatStatus()
     {
-        var parts = new List<string>();
-
-        var statusLabel = _status switch
-        {
-            MonitorStatus.Connected => "Connected",
-            MonitorStatus.RateLimited => "Rate limited",
-            MonitorStatus.AuthError => "Auth expired",
-            MonitorStatus.Offline => "Offline",
-            _ => "Initializing...",
-        };
-        parts.Add(statusLabel);
+        var parts = new List<string> { MonitorStatusText.Describe(_status) };
 
         if (_lastUpdated is not null)
         {

@@ -20,6 +20,7 @@ The usage percentage can also be shown directly on the taskbar:
   - **Threshold** - Warning and critical notifications at set percentages
   - **Progressive** - Notifications every 10% starting from a configurable level
 - **Reset countdown** - Shows time remaining until rate limits reset
+- **Sign-in-expired guidance** - When your Claude Code sign-in expires, the tooltip, flyout, and About dialog show a clear "run Claude Code to refresh" message instead of stale usage numbers; normal display returns automatically after you re-authenticate
 - **Update notifications** - Checks GitHub for newer releases (daily and on demand) and links you to the download; toggle in Settings
 - **Runs at startup** - Optional Windows startup registration
 

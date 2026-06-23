@@ -76,6 +76,12 @@ public static class IconRenderer
 
     private const string TaskbarLabel = "Claude";
 
+    /// <summary>
+    /// Neutral "no reading" marker shown on the overlay when sign-in has expired.
+    /// This is an em dash (U+2014), not a hyphen-minus — keep it as-is.
+    /// </summary>
+    private const string SignInExpiredMarker = "—";
+
     /// <summary>Minimum overlay width — keeps single-number mode pixel-identical to before.</summary>
     public const int MinTaskbarWidth = 52;
     private const int TaskbarWidthPadding = 6;
@@ -173,6 +179,17 @@ public static class IconRenderer
     /// </summary>
     public static int MeasureTaskbarUsageWidth(double fiveHourPct, double? sevenDayPct, int height)
     {
+        var dummy = Color.White;
+        return MeasureContentWidth(NumberSegments(fiveHourPct, sevenDayPct, dummy, dummy, dummy), height);
+    }
+
+    /// <summary>
+    /// Width-measuring core shared by the usage and sign-in-expired readouts: the wider of
+    /// the "Claude" label and the summed number-row segments, padded, never below
+    /// <see cref="MinTaskbarWidth"/>. Segment colours are irrelevant to width.
+    /// </summary>
+    private static int MeasureContentWidth((string Text, Color Color)[] numberSegments, int height)
+    {
         using var bitmap = new Bitmap(1, 1);
         using var graphics = Graphics.FromImage(bitmap);
         graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
@@ -183,14 +200,25 @@ public static class IconRenderer
 
         var labelWidth = graphics.MeasureString(TaskbarLabel, labelFont).Width;
 
-        var dummy = Color.White;
         float numberWidth = 0f;
-        foreach (var seg in NumberSegments(fiveHourPct, sevenDayPct, dummy, dummy, dummy))
+        foreach (var seg in numberSegments)
             numberWidth += graphics.MeasureString(seg.Text, numberFont).Width;
 
         var content = Math.Max(labelWidth, numberWidth);
         return Math.Max(MinTaskbarWidth, (int)Math.Ceiling(content) + TaskbarWidthPadding);
     }
+
+    /// <summary>
+    /// Draws the sign-in-expired marker on the taskbar overlay — the "Claude" label with a
+    /// neutral "—" where the percentage would be, so an expired session never leaves a stale
+    /// number on the taskbar. The tray icon and tooltip carry the actionable detail.
+    /// </summary>
+    public static void DrawTaskbarSignInExpired(Graphics graphics, Rectangle bounds, Color labelColor)
+        => DrawTaskbarRows(graphics, bounds, labelColor, new[] { (SignInExpiredMarker, labelColor) });
+
+    /// <summary>Overlay width for the sign-in-expired marker at the given taskbar height.</summary>
+    public static int MeasureTaskbarSignInExpiredWidth(int height)
+        => MeasureContentWidth(new[] { (SignInExpiredMarker, Color.White) }, height);
 
     /// <summary>
     /// Renders the taskbar usage readout onto a transparent bitmap of the given size,

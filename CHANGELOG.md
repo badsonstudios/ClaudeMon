@@ -9,9 +9,10 @@ GitHub release; the release notes are taken from these entries.
 - **Clear sign-in-expired state** — when your Claude Code sign-in expires, ClaudeMon now
   shows an actionable **"Sign-in expired — run Claude Code to refresh"** message in the
   tray tooltip and the click-through flyout instead of leaving the last (stale) usage
-  percentages on screen. The **About** dialog now also shows the current connection
-  status (Connected / Sign-in expired / Offline). Normal display returns automatically
-  once you re-authenticate in Claude Code.
+  percentages on screen. The taskbar usage display likewise replaces the number with a
+  neutral **"—"** marker rather than a stale percentage. The **About** dialog now also
+  shows the current connection status (Connected / Sign-in expired / Offline). Normal
+  display returns automatically once you re-authenticate in Claude Code.
 
 ## [0.6.0] - 2026-06-20
 

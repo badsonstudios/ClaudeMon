@@ -98,6 +98,7 @@ public sealed class TrayApplication : IDisposable
                 _notifyIcon.Icon = IconRenderer.RenderErrorIcon();
                 oldIcon?.Dispose();
                 _notifyIcon.Text = $"ClaudeMon\n{MonitorStatusText.SignInExpired}";
+                _taskbarOverlay.ShowSignInExpired();
                 return;
             }
 

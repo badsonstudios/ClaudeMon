@@ -1,6 +1,7 @@
 namespace ClaudeMon.Tests;
 
 using System.Drawing;
+using System.Drawing.Imaging;
 using ClaudeMon.Models;
 using ClaudeMon.UI;
 
@@ -115,5 +116,36 @@ public class IconRendererTests
 
         Assert.Equal(width, bitmap.Width);
         Assert.Equal(40, bitmap.Height);
+    }
+
+    [Theory]
+    [InlineData(30)]   // Win10 taskbar height
+    [InlineData(40)]   // Win11 taskbar height
+    public void MeasureTaskbarSignInExpiredWidth_IsAtLeastMinimum(int height)
+    {
+        var width = IconRenderer.MeasureTaskbarSignInExpiredWidth(height);
+        Assert.True(width >= IconRenderer.MinTaskbarWidth, $"expected >= {IconRenderer.MinTaskbarWidth}, got {width}");
+    }
+
+    [Fact]
+    public void DrawTaskbarSignInExpired_RendersVisibleMarker()
+    {
+        var width = IconRenderer.MeasureTaskbarSignInExpiredWidth(40);
+        using var bitmap = new Bitmap(width, 40, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.Transparent);
+            IconRenderer.DrawTaskbarSignInExpired(
+                graphics, new Rectangle(0, 0, width, 40),
+                IconRenderer.GetTextColor(TaskbarTextColor.White, 0));
+        }
+
+        // The label + marker should leave some non-transparent pixels.
+        var painted = false;
+        for (var x = 0; x < bitmap.Width && !painted; x++)
+            for (var y = 0; y < bitmap.Height; y++)
+                if (bitmap.GetPixel(x, y).A > 0) { painted = true; break; }
+
+        Assert.True(painted, "expected the sign-in-expired marker to render visible pixels");
     }
 }

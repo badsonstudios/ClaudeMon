@@ -19,4 +19,12 @@ public record OAuthCredential(
     public bool IsExpired => DateTimeOffset.FromUnixTimeMilliseconds(ExpiresAt) < DateTimeOffset.UtcNow;
 
     public DateTimeOffset ExpiresAtUtc => DateTimeOffset.FromUnixTimeMilliseconds(ExpiresAt);
+
+    /// <summary>
+    /// True if the token has already expired or will expire within <paramref name="skew"/>.
+    /// Used to refresh proactively a little ahead of the hard expiry.
+    /// </summary>
+    public bool WillExpireWithin(TimeSpan skew) => ExpiresAtUtc - DateTimeOffset.UtcNow < skew;
+
+    public bool HasRefreshToken => !string.IsNullOrWhiteSpace(RefreshToken);
 }

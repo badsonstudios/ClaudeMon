@@ -3,6 +3,20 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.8.0] - 2026-06-27
+
+### Added
+- **Automatic token refresh — stay signed in without the CLI** — ClaudeMon now renews its
+  own Claude Code OAuth access token instead of relying on whichever client last refreshed
+  it. When the on-disk token is expired (or about to be), it uses the saved **refresh
+  token** to obtain a new access token, then writes the renewed token back to
+  `~/.claude/.credentials.json` (atomically, preserving the file's structure) so the CLI
+  and VS Code extension benefit too. This fixes the common case where ClaudeMon falsely
+  showed **"sign-in expired"** during idle periods (e.g. overnight) for users who
+  authenticate mainly through the VS Code extension. The sign-in-expired state now appears
+  **only** when no valid sign-in can be obtained — the refresh token is missing, rejected,
+  or itself expired. Token values are never logged.
+
 ## [0.7.0] - 2026-06-23
 
 ### Changed

@@ -20,7 +20,8 @@ The usage percentage can also be shown directly on the taskbar:
   - **Threshold** - Warning and critical notifications at set percentages
   - **Progressive** - Notifications every 10% starting from a configurable level
 - **Reset countdown** - Shows time remaining until rate limits reset
-- **Sign-in-expired guidance** - When your Claude Code sign-in expires, the tooltip, flyout, and About dialog show a clear "run Claude Code to refresh" message instead of stale usage numbers (the taskbar display shows a neutral "—"); normal display returns automatically after you re-authenticate
+- **Stays signed in on its own** - When the on-disk access token goes stale (common if you only use the Claude Code VS Code extension), ClaudeMon refreshes it automatically using your saved refresh token, so it keeps showing usage instead of falsely reporting a sign-in problem
+- **Sign-in-expired guidance** - When your Claude Code sign-in genuinely can't be refreshed, the tooltip, flyout, and About dialog show a clear "run Claude Code to refresh" message instead of stale usage numbers (the taskbar display shows a neutral "—"); normal display returns automatically after you re-authenticate
 - **Update notifications** - Checks GitHub for newer releases (daily and on demand) and links you to the download; toggle in Settings
 - **Runs at startup** - Optional Windows startup registration
 
@@ -38,7 +39,7 @@ The installer will optionally configure ClaudeMon to start with Windows.
 
 ### Credentials
 
-ClaudeMon reads your existing Claude Code OAuth token from `~/.claude/.credentials.json`. No additional setup is needed if you already use Claude Code.
+ClaudeMon reads your existing Claude Code OAuth token from `~/.claude/.credentials.json`. No additional setup is needed if you already use Claude Code. When that token expires, ClaudeMon refreshes it for you using the saved refresh token and writes the renewed token back to the same file (so the CLI and VS Code extension benefit too) — you only need to re-authenticate in Claude Code if the refresh token itself has expired.
 
 ## Settings
 

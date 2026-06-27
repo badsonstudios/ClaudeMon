@@ -5,8 +5,12 @@ using ClaudeMon.Services;
 
 public sealed class UsageMonitor : IDisposable
 {
+    // Refresh a little ahead of the hard expiry so a poll never races the cutoff.
+    private static readonly TimeSpan RefreshSkew = TimeSpan.FromSeconds(60);
+
     private readonly CredentialReader _credentialReader;
     private readonly ClaudeApiClient _apiClient;
+    private readonly TokenRefresher? _tokenRefresher;
     private readonly System.Timers.Timer _timer;
     private readonly object _lock = new();
     private bool _polling;
@@ -22,10 +26,12 @@ public sealed class UsageMonitor : IDisposable
     public UsageMonitor(
         CredentialReader credentialReader,
         ClaudeApiClient apiClient,
-        TimeSpan pollInterval)
+        TimeSpan pollInterval,
+        TokenRefresher? tokenRefresher = null)
     {
         _credentialReader = credentialReader;
         _apiClient = apiClient;
+        _tokenRefresher = tokenRefresher;
         _timer = new System.Timers.Timer(pollInterval.TotalMilliseconds);
         _timer.Elapsed += async (_, _) => await PollAsync();
         _timer.AutoReset = true;
@@ -72,7 +78,64 @@ public sealed class UsageMonitor : IDisposable
             }
 
             var token = _cts?.Token ?? CancellationToken.None;
-            var apiResult = await _apiClient.GetUsageAsync(credResult.Credential!.AccessToken, token);
+            var credential = credResult.Credential!;
+            var canRefresh = _tokenRefresher is not null && credential.HasRefreshToken;
+            var refreshedThisPoll = false;
+
+            // Proactive refresh: if the on-disk token is expired (or about to be),
+            // try to renew it ourselves before spending the poll on a doomed call.
+            if (credential.WillExpireWithin(RefreshSkew))
+            {
+                if (canRefresh)
+                {
+                    var (refreshed, outcome) = await TryRefreshAsync(credential, token);
+                    switch (outcome)
+                    {
+                        case RefreshOutcome.Refreshed:
+                            credential = refreshed!;
+                            refreshedThisPoll = true;
+                            break;
+                        case RefreshOutcome.SignInExpired:
+                            SetError("Sign-in expired. Run 'claude' to re-authenticate.", MonitorStatus.AuthError);
+                            return;
+                        default: // Transient — couldn't reach the token endpoint.
+                            // Treat as offline and keep the last known usage rather
+                            // than flapping to auth-error.
+                            SetOffline("Could not refresh sign-in (offline?). Will retry.");
+                            return;
+                    }
+                }
+                else if (credential.IsExpired)
+                {
+                    // Genuinely expired and nothing to refresh with — report it.
+                    SetError("OAuth token has expired. Run 'claude' to re-authenticate.", MonitorStatus.AuthError);
+                    return;
+                }
+                // Otherwise: still valid for under the skew window and not
+                // refreshable — fall through and use it while it lasts.
+            }
+
+            var apiResult = await _apiClient.GetUsageAsync(credential.AccessToken, token);
+
+            // Reactive refresh: the token looked valid by its timestamp but the
+            // server rejected it. Refresh once and retry before giving up.
+            if (apiResult.IsAuthError && !refreshedThisPoll && canRefresh)
+            {
+                var (refreshed, outcome) = await TryRefreshAsync(credential, token);
+                switch (outcome)
+                {
+                    case RefreshOutcome.Refreshed:
+                        credential = refreshed!;
+                        apiResult = await _apiClient.GetUsageAsync(credential.AccessToken, token);
+                        break;
+                    case RefreshOutcome.SignInExpired:
+                        SetError("Sign-in expired. Run 'claude' to re-authenticate.", MonitorStatus.AuthError);
+                        return;
+                    default: // Transient
+                        SetOffline("Could not refresh sign-in (offline?). Will retry.");
+                        return;
+                }
+            }
 
             if (apiResult.IsSuccess)
             {
@@ -117,11 +180,45 @@ public sealed class UsageMonitor : IDisposable
         }
     }
 
+    /// <summary>
+    /// Refreshes <paramref name="credential"/> (callers ensure a refresher and a
+    /// refresh token are present), writing a successful result back to the
+    /// credentials file so the CLI/extension benefit too. Returns the (possibly
+    /// new) credential and a classified outcome.
+    /// </summary>
+    private async Task<(OAuthCredential? Credential, RefreshOutcome Outcome)> TryRefreshAsync(
+        OAuthCredential credential, CancellationToken token)
+    {
+        var result = await _tokenRefresher!.RefreshAsync(credential, token);
+
+        if (result.IsSuccess)
+        {
+            _credentialReader.WriteBack(result.Credential!);
+            return (result.Credential, RefreshOutcome.Refreshed);
+        }
+
+        return (null, result.IsSignInExpired ? RefreshOutcome.SignInExpired : RefreshOutcome.Transient);
+    }
+
+    private enum RefreshOutcome
+    {
+        Refreshed,
+        SignInExpired,
+        Transient,
+    }
+
     private void SetError(string error, MonitorStatus status)
     {
         LastError = error;
         Status = status;
         UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(LastUsage, error, status));
+    }
+
+    private void SetOffline(string message)
+    {
+        Status = MonitorStatus.Offline;
+        LastError = message;
+        UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(LastUsage, message, MonitorStatus.Offline));
     }
 
     public void Dispose()

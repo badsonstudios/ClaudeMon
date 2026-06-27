@@ -17,6 +17,14 @@ GitHub release; the release notes are taken from these entries.
   **only** when no valid sign-in can be obtained — the refresh token is missing, rejected,
   or itself expired. Token values are never logged.
 
+### Fixed
+- **Hover flyout no longer renders compressed/overlapping on high-DPI displays** — the tray
+  hover popup drew DPI-scaled text into a fixed-pixel box, so on displays scaled above 100%
+  the title, usage rows, and status line could collapse and overlap (most visibly on the
+  first launch right after an update). The flyout now scales its whole layout from the
+  current display DPI and sizes itself to fit its content, so it lays out cleanly at 100%,
+  125%, 150%, and 200% scaling.
+
 ## [0.7.0] - 2026-06-23
 
 ### Changed

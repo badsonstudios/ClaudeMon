@@ -25,7 +25,10 @@ public sealed class FlyoutPanel : Form
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
         BackColor = BackgroundColor;
-        Size = new Size(280, 180);
+        // Scale the layout ourselves from the live DeviceDpi rather than relying on
+        // WinForms' construction-time auto-scale (which bakes in whatever DPI context
+        // existed at startup and produced the compressed/overlapping first-launch flyout).
+        AutoScaleMode = AutoScaleMode.None;
 
         _contentPanel = new Panel
         {
@@ -34,6 +37,8 @@ public sealed class FlyoutPanel : Form
         };
         _contentPanel.Paint += OnPanelPaint;
         Controls.Add(_contentPanel);
+
+        Relayout();
     }
 
     public void UpdateData(UsageResponse? usage, MonitorStatus status, DateTimeOffset? lastUpdated)
@@ -41,7 +46,31 @@ public sealed class FlyoutPanel : Form
         _usage = usage;
         _status = status;
         _lastUpdated = lastUpdated;
+        Relayout();
+    }
+
+    /// <summary>
+    /// Re-measures the flyout for the current <see cref="Control.DeviceDpi"/> and
+    /// content, sizes the box to fit, and repaints. Called on construction and
+    /// whenever the data changes.
+    /// </summary>
+    private void Relayout()
+    {
+        var metrics = FlyoutMetrics.ForDpi(DeviceDpi);
+        Size = metrics.ContentSize(
+            _status == MonitorStatus.AuthError,
+            _usage?.FiveHour is not null,
+            _usage?.SevenDay is not null);
         _contentPanel.Invalidate();
+    }
+
+    // The app currently runs SystemAware, where DeviceDpi is fixed for the process
+    // lifetime and this never fires. It's wired up so the flyout re-fits for free
+    // if/when the app opts into PerMonitorV2 (tracked separately).
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        Relayout();
     }
 
     public void ShowNear(Point anchor)
@@ -86,21 +115,23 @@ public sealed class FlyoutPanel : Form
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
         var bounds = _contentPanel.ClientRectangle;
+        var m = FlyoutMetrics.ForDpi(DeviceDpi);
 
         // Border
         using var borderPen = new Pen(BorderColor);
         g.DrawRectangle(borderPen, 0, 0, bounds.Width - 1, bounds.Height - 1);
 
-        var left = 14;
-        var right = bounds.Width - 14;
+        var left = m.LeftInset;
+        var right = bounds.Width - m.LeftInset;
         var contentWidth = right - left;
-        var y = 12;
+        var y = m.TopPadding;
 
-        // Title
+        // Title — fonts are sized in points and so scale with the device DPI on
+        // their own; the (now DPI-scaled) advances below keep pace with them.
         using var titleFont = new Font("Segoe UI", 10f, FontStyle.Bold);
         using var textBrush = new SolidBrush(TextColor);
         g.DrawString("ClaudeMon", titleFont, textBrush, left, y);
-        y += 28;
+        y += m.TitleAdvance;
 
         using var labelFont = new Font("Segoe UI", 8.25f, FontStyle.Regular);
         using var dimBrush = new SolidBrush(DimTextColor);
@@ -111,36 +142,35 @@ public sealed class FlyoutPanel : Form
             // than showing the last (now-stale) percentages. The message wraps to ~2
             // lines in the content width; the rect height and the y advance match so the
             // status line below never overlaps it.
-            const int messageHeight = 44;
-            var msgRect = new RectangleF(left, y, contentWidth, messageHeight);
+            var msgRect = new RectangleF(left, y, contentWidth, m.AuthMessageHeight);
             g.DrawString(MonitorStatusText.SignInExpired, labelFont, textBrush, msgRect);
-            y += messageHeight;
+            y += m.AuthMessageHeight;
         }
         else
         {
             if (_usage?.FiveHour is not null)
             {
                 DrawUsageRow(g, "5-hour", _usage.FiveHour, left, y, contentWidth,
-                    labelFont, textBrush, dimBrush);
-                y += 42;
+                    labelFont, textBrush, dimBrush, m);
+                y += m.RowAdvance;
             }
 
             if (_usage?.SevenDay is not null)
             {
                 DrawUsageRow(g, "7-day", _usage.SevenDay, left, y, contentWidth,
-                    labelFont, textBrush, dimBrush);
-                y += 42;
+                    labelFont, textBrush, dimBrush, m);
+                y += m.RowAdvance;
             }
 
             if (_usage?.FiveHour is null && _usage?.SevenDay is null)
             {
                 g.DrawString("No usage data available", labelFont, dimBrush, left, y);
-                y += 20;
+                y += m.NoDataAdvance;
             }
         }
 
         // Status & last updated
-        y += 4;
+        y += m.StatusGap;
         var statusText = FormatStatus();
         g.DrawString(statusText, labelFont, dimBrush, left, y);
     }
@@ -148,7 +178,7 @@ public sealed class FlyoutPanel : Form
     private void DrawUsageRow(
         Graphics g, string label, UsageBucket bucket,
         int x, int y, int width,
-        Font font, Brush textBrush, Brush dimBrush)
+        Font font, Brush textBrush, Brush dimBrush, FlyoutMetrics m)
     {
         var pct = bucket.UtilizationPct;
         var pctText = $"{pct:F0}%";
@@ -159,13 +189,13 @@ public sealed class FlyoutPanel : Form
         var pctSize = g.MeasureString(pctText, font);
         g.DrawString(pctText, font, textBrush, x + width - pctSize.Width, y);
 
-        y += 18;
+        y += m.LabelToBarGap;
 
         // Progress bar
-        var barHeight = 8;
+        var barHeight = m.BarHeight;
         var barRect = new Rectangle(x, y, width, barHeight);
         using var barBgBrush = new SolidBrush(BarBackgroundColor);
-        using var barBgPath = CreateRoundedRect(barRect, 4);
+        using var barBgPath = CreateRoundedRect(barRect, barHeight / 2);
         g.FillPath(barBgBrush, barBgPath);
 
         if (pct > 0)
@@ -176,12 +206,12 @@ public sealed class FlyoutPanel : Form
                 var fillRect = new Rectangle(x, y, fillWidth, barHeight);
                 var barColor = IconRenderer.GetColorForPercentage(pct);
                 using var barFillBrush = new SolidBrush(barColor);
-                using var fillPath = CreateRoundedRect(fillRect, 4);
+                using var fillPath = CreateRoundedRect(fillRect, barHeight / 2);
                 g.FillPath(barFillBrush, fillPath);
             }
         }
 
-        y += barHeight + 2;
+        y += barHeight + m.BarBottomGap;
 
         // Reset countdown
         g.DrawString(resetText, font, dimBrush, x, y);

@@ -16,6 +16,7 @@ public sealed class TrayApplication : IDisposable
     private readonly ContextMenuStrip _contextMenu;
     private readonly UsageMonitor _monitor;
     private readonly ClaudeApiClient _apiClient;
+    private readonly TokenRefresher _tokenRefresher;
     private readonly ConfigManager _configManager;
     private readonly SynchronizationContext _syncContext;
     private readonly FlyoutPanel _flyout;
@@ -40,9 +41,10 @@ public sealed class TrayApplication : IDisposable
         _configManager.Load();
 
         _apiClient = new ClaudeApiClient();
+        _tokenRefresher = new TokenRefresher();
         var credentialReader = new CredentialReader();
         _monitor = new UsageMonitor(
-            credentialReader, _apiClient, _configManager.Settings.PollInterval);
+            credentialReader, _apiClient, _configManager.Settings.PollInterval, _tokenRefresher);
         _monitor.UsageUpdated += OnUsageUpdated;
 
         _flyout = new FlyoutPanel();
@@ -311,6 +313,7 @@ public sealed class TrayApplication : IDisposable
         _updateChecker.Dispose();
         _monitor.Dispose();
         _apiClient.Dispose();
+        _tokenRefresher.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _contextMenu.Dispose();

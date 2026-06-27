@@ -17,6 +17,7 @@ public sealed class TrayApplication : IDisposable
     private readonly UsageMonitor _monitor;
     private readonly ClaudeApiClient _apiClient;
     private readonly TokenRefresher _tokenRefresher;
+    private readonly Logger _logger;
     private readonly ConfigManager _configManager;
     private readonly SynchronizationContext _syncContext;
     private readonly FlyoutPanel _flyout;
@@ -40,11 +41,14 @@ public sealed class TrayApplication : IDisposable
         _configManager = new ConfigManager();
         _configManager.Load();
 
+        _logger = new Logger();
+        _logger.Info($"ClaudeMon {CurrentVersion} starting.");
+
         _apiClient = new ClaudeApiClient();
         _tokenRefresher = new TokenRefresher();
         var credentialReader = new CredentialReader();
         _monitor = new UsageMonitor(
-            credentialReader, _apiClient, _configManager.Settings.PollInterval, _tokenRefresher);
+            credentialReader, _apiClient, _configManager.Settings.PollInterval, _tokenRefresher, _logger);
         _monitor.UsageUpdated += OnUsageUpdated;
 
         _flyout = new FlyoutPanel();
@@ -174,6 +178,7 @@ public sealed class TrayApplication : IDisposable
         menu.Items.Add("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(manual: true));
 
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("View logs", null, (_, _) => OpenLogs());
         menu.Items.Add("About ClaudeMon", null, (_, _) => ShowAbout());
         menu.Items.Add("Exit", null, (_, _) => Application.Exit());
         return menu;
@@ -259,6 +264,30 @@ public sealed class TrayApplication : IDisposable
         }
     }
 
+    private void OpenLogs()
+    {
+        try
+        {
+            // Open the log file if it exists; otherwise open the logs folder so the
+            // user still lands somewhere useful before anything has been logged.
+            if (File.Exists(_logger.FilePath))
+            {
+                Process.Start(new ProcessStartInfo(_logger.FilePath) { UseShellExecute = true });
+            }
+            else
+            {
+                Directory.CreateDirectory(_logger.DirectoryPath);
+                Process.Start(new ProcessStartInfo(_logger.DirectoryPath) { UseShellExecute = true });
+            }
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: record why the shell couldn't open the log (path is
+            // app-controlled, so this is a rare environment issue, not user input).
+            _logger.Warn($"Could not open logs: {ex.Message}");
+        }
+    }
+
     private void ShowSettings()
     {
         using var form = new SettingsForm(_configManager);
@@ -306,6 +335,7 @@ public sealed class TrayApplication : IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _logger.Info("ClaudeMon shutting down.");
         _updateTimer.Stop();
         _updateCts.Cancel();
         _updateTimer.Dispose();

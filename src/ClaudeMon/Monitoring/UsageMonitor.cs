@@ -11,9 +11,11 @@ public sealed class UsageMonitor : IDisposable
     private readonly CredentialReader _credentialReader;
     private readonly ClaudeApiClient _apiClient;
     private readonly TokenRefresher? _tokenRefresher;
+    private readonly Logger? _logger;
     private readonly System.Timers.Timer _timer;
     private readonly object _lock = new();
     private bool _polling;
+    private MonitorStatus _loggedStatus = MonitorStatus.Initializing;
     private CancellationTokenSource? _cts;
 
     public UsageResponse? LastUsage { get; private set; }
@@ -27,11 +29,13 @@ public sealed class UsageMonitor : IDisposable
         CredentialReader credentialReader,
         ClaudeApiClient apiClient,
         TimeSpan pollInterval,
-        TokenRefresher? tokenRefresher = null)
+        TokenRefresher? tokenRefresher = null,
+        Logger? logger = null)
     {
         _credentialReader = credentialReader;
         _apiClient = apiClient;
         _tokenRefresher = tokenRefresher;
+        _logger = logger;
         _timer = new System.Timers.Timer(pollInterval.TotalMilliseconds);
         _timer.Elapsed += async (_, _) => await PollAsync();
         _timer.AutoReset = true;
@@ -143,6 +147,7 @@ public sealed class UsageMonitor : IDisposable
                 LastError = null;
                 LastUpdated = DateTimeOffset.UtcNow;
                 Status = MonitorStatus.Connected;
+                LogTransition(MonitorStatus.Connected, "usage poll succeeded");
 
                 UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(
                     apiResult.Data!, null, MonitorStatus.Connected));
@@ -152,6 +157,7 @@ public sealed class UsageMonitor : IDisposable
                 // Keep last known data, just update status
                 Status = MonitorStatus.RateLimited;
                 LastError = apiResult.ErrorMessage;
+                LogTransition(MonitorStatus.RateLimited, apiResult.ErrorMessage ?? "rate limited");
 
                 UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(
                     LastUsage, apiResult.ErrorMessage, MonitorStatus.RateLimited));
@@ -165,6 +171,7 @@ public sealed class UsageMonitor : IDisposable
                 // Network or other error — keep last known data
                 Status = MonitorStatus.Offline;
                 LastError = apiResult.ErrorMessage;
+                LogTransition(MonitorStatus.Offline, apiResult.ErrorMessage ?? "offline");
 
                 UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(
                     LastUsage, apiResult.ErrorMessage, MonitorStatus.Offline));
@@ -189,13 +196,20 @@ public sealed class UsageMonitor : IDisposable
     private async Task<(OAuthCredential? Credential, RefreshOutcome Outcome)> TryRefreshAsync(
         OAuthCredential credential, CancellationToken token)
     {
+        _logger?.Info("Access token expired or near expiry — attempting refresh.");
         var result = await _tokenRefresher!.RefreshAsync(credential, token);
 
         if (result.IsSuccess)
         {
             _credentialReader.WriteBack(result.Credential!);
+            _logger?.Info("Access token refreshed.");
             return (result.Credential, RefreshOutcome.Refreshed);
         }
+
+        if (result.IsSignInExpired)
+            _logger?.Warn("Token refresh rejected — sign-in expired.");
+        else
+            _logger?.Warn($"Token refresh failed (transient): {result.Error}");
 
         return (null, result.IsSignInExpired ? RefreshOutcome.SignInExpired : RefreshOutcome.Transient);
     }
@@ -211,6 +225,7 @@ public sealed class UsageMonitor : IDisposable
     {
         LastError = error;
         Status = status;
+        LogTransition(status, error);
         UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(LastUsage, error, status));
     }
 
@@ -218,7 +233,32 @@ public sealed class UsageMonitor : IDisposable
     {
         Status = MonitorStatus.Offline;
         LastError = message;
+        LogTransition(MonitorStatus.Offline, message);
         UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(LastUsage, message, MonitorStatus.Offline));
+    }
+
+    // Logs only when the status actually changes, so a steady state (e.g. polling
+    // along happily Connected) doesn't fill the log with identical lines.
+    private void LogTransition(MonitorStatus status, string detail)
+    {
+        if (_logger is null || status == _loggedStatus)
+            return;
+
+        _loggedStatus = status;
+        var entry = $"Status -> {status}: {detail}";
+        switch (status)
+        {
+            case MonitorStatus.AuthError:
+                _logger.Error(entry);
+                break;
+            case MonitorStatus.Offline:
+            case MonitorStatus.RateLimited:
+                _logger.Warn(entry);
+                break;
+            default:
+                _logger.Info(entry);
+                break;
+        }
     }
 
     public void Dispose()

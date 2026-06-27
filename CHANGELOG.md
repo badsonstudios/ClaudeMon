@@ -3,6 +3,16 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.9.0] - 2026-06-27
+
+### Added
+- **Diagnostic logging + "View logs"** — ClaudeMon now writes timestamped diagnostics (poll
+  results, connection/sign-in/offline status changes, and the token-refresh lifecycle) to a
+  rolling, size-bounded log file at `%LocalAppData%\ClaudeMon\logs\claudemon.log` (capped at
+  ~1 MB with a single rotated backup, so it never grows without bound). A new **View logs**
+  tray-menu item opens it. Logging is best-effort and never interrupts the app, and **token
+  values are never written to the log**.
+
 ## [0.8.0] - 2026-06-27
 
 ### Added

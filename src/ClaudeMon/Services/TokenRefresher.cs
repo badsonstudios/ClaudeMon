@@ -116,9 +116,11 @@ public sealed class TokenRefresher : IDisposable
         {
             return TokenRefreshResult.Transient($"Network error during token refresh: {ex.Message}");
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            return TokenRefreshResult.Transient($"Failed to parse token refresh response: {ex.Message}");
+            // Never interpolate the exception message: it can echo a fragment of the
+            // response body, which here contains the fresh access/refresh tokens.
+            return TokenRefreshResult.Transient("Failed to parse token refresh response.");
         }
     }
 

@@ -49,9 +49,11 @@ public sealed class CredentialReader
             // auth-error state. Only structural problems are treated as failures.
             return CredentialResult.Success(oauth);
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            return CredentialResult.Failure($"Failed to parse credentials file: {ex.Message}");
+            // Never interpolate the exception message: it can echo a fragment of the
+            // file contents, which holds the on-disk access/refresh tokens.
+            return CredentialResult.Failure("Failed to parse credentials file (invalid JSON).");
         }
         catch (IOException ex)
         {

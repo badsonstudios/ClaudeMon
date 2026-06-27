@@ -23,6 +23,7 @@ The usage percentage can also be shown directly on the taskbar:
 - **Stays signed in on its own** - When the on-disk access token goes stale (common if you only use the Claude Code VS Code extension), ClaudeMon refreshes it automatically using your saved refresh token, so it keeps showing usage instead of falsely reporting a sign-in problem
 - **Sign-in-expired guidance** - When your Claude Code sign-in genuinely can't be refreshed, the tooltip, flyout, and About dialog show a clear "run Claude Code to refresh" message instead of stale usage numbers (the taskbar display shows a neutral "—"); normal display returns automatically after you re-authenticate
 - **Update notifications** - Checks GitHub for newer releases (daily and on demand) and links you to the download; toggle in Settings
+- **Diagnostic logging** - Writes timestamped diagnostics (poll results, status changes, API/auth/network errors) to a size-bounded log file; a **View logs** tray-menu item opens it. Token values are never written
 - **Runs at startup** - Optional Windows startup registration
 
 ## Installation
@@ -40,6 +41,10 @@ The installer will optionally configure ClaudeMon to start with Windows.
 ### Credentials
 
 ClaudeMon reads your existing Claude Code OAuth token from `~/.claude/.credentials.json`. No additional setup is needed if you already use Claude Code. When that token expires, ClaudeMon refreshes it for you using the saved refresh token and writes the renewed token back to the same file (so the CLI and VS Code extension benefit too) — you only need to re-authenticate in Claude Code if the refresh token itself has expired.
+
+### Logs
+
+ClaudeMon writes diagnostics to `%LocalAppData%\ClaudeMon\logs\claudemon.log` (with one rotated backup, `claudemon.log.1`). Open it any time from the tray menu via **View logs**. The log records poll results, status changes, and API/auth/network errors to help diagnose intermittent issues — **token values are never written**.
 
 ## Settings
 

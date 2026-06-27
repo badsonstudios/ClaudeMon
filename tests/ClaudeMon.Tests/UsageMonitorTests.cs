@@ -245,6 +245,100 @@ public class UsageMonitorTests : IDisposable
     }
 
     [Fact]
+    public async Task RefreshNow_Connected_LogsTransition_NeverLogsToken()
+    {
+        const string secretToken = "super-secret-access-token";
+        var credPath = WriteCredentialFile(token: secretToken);
+        var logPath = Path.Combine(_tempDir, "monitor.log");
+        var logger = new Logger(logPath);
+
+        var handler = new MockHttpHandler(HttpStatusCode.OK, """
+        {"five_hour": {"utilization": 5.0, "resets_at": "2026-06-01T00:00:00Z"}}
+        """);
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), tokenRefresher: null, logger: logger);
+
+        await monitor.RefreshNowAsync();
+
+        var log = File.ReadAllText(logPath);
+        Assert.Contains("Connected", log);
+        Assert.DoesNotContain(secretToken, log);
+    }
+
+    [Fact]
+    public async Task RefreshNow_ExpiredToken_LogsRefresh_NeverLogsTokens()
+    {
+        var credPath = WriteExpiredCredentialFile(); // accessToken "stale-access", refreshToken "valid-refresh"
+        var logPath = Path.Combine(_tempDir, "refresh.log");
+        var logger = new Logger(logPath);
+
+        var handler = new RoutingHttpHandler(
+            tokenResponse: """{"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":28800}""",
+            usageResponse: """{"five_hour":{"utilization":3.0,"resets_at":"2026-06-01T00:00:00Z"}}""");
+
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher, logger);
+
+        await monitor.RefreshNowAsync();
+
+        var log = File.ReadAllText(logPath);
+        Assert.Contains("refresh", log, StringComparison.OrdinalIgnoreCase);
+        foreach (var token in new[] { "stale-access", "valid-refresh", "fresh-access", "fresh-refresh" })
+            Assert.DoesNotContain(token, log);
+    }
+
+    [Fact]
+    public async Task RefreshNow_SteadyConnected_LogsTransitionOnlyOnce()
+    {
+        var credPath = WriteCredentialFile();
+        var logPath = Path.Combine(_tempDir, "dedup.log");
+        var logger = new Logger(logPath);
+
+        var handler = new MockHttpHandler(HttpStatusCode.OK, """
+        {"five_hour": {"utilization": 1.0, "resets_at": "2026-06-01T00:00:00Z"}}
+        """);
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), tokenRefresher: null, logger: logger);
+
+        // Three successful polls in a row are one logical state — log once, not thrice.
+        await monitor.RefreshNowAsync();
+        await monitor.RefreshNowAsync();
+        await monitor.RefreshNowAsync();
+
+        var connectedLines = File.ReadAllLines(logPath).Count(l => l.Contains("-> Connected"));
+        Assert.Equal(1, connectedLines);
+    }
+
+    [Fact]
+    public async Task RefreshNow_MalformedTokenResponse_NeverLeaksBodyIntoLog()
+    {
+        // The token-endpoint response is malformed but contains a token-shaped string.
+        // A naive parse-error message would echo that fragment; the log must not.
+        const string leak = "sk-ant-oat01-LEAKED";
+        var credPath = WriteExpiredCredentialFile();
+        var logPath = Path.Combine(_tempDir, "leak.log");
+        var logger = new Logger(logPath);
+
+        var handler = new RoutingHttpHandler(
+            tokenResponse: $$"""{ "access_token": "{{leak}}" this is broken json """,
+            usageResponse: "{}");
+
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher, logger);
+
+        await monitor.RefreshNowAsync();
+
+        var log = File.ReadAllText(logPath);
+        Assert.DoesNotContain(leak, log);
+    }
+
+    [Fact]
     public async Task RefreshNow_ConcurrentCalls_OnlyOneExecutes()
     {
         var credPath = WriteCredentialFile();

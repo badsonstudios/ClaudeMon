@@ -29,6 +29,8 @@ public sealed class FlyoutMetrics
     internal const int BaseBarHeight = 8;
     internal const int BaseLabelToBarGap = 18;
     internal const int BaseBarBottomGap = 2;
+    internal const int BaseSparklineGap = 8;
+    internal const int BaseSparklineHeight = 26;
 
     public int LeftInset { get; }
     public int TopPadding { get; }
@@ -43,6 +45,8 @@ public sealed class FlyoutMetrics
     public int BarHeight { get; }
     public int LabelToBarGap { get; }
     public int BarBottomGap { get; }
+    public int SparklineGap { get; }
+    public int SparklineHeight { get; }
 
     private FlyoutMetrics(int dpi)
     {
@@ -62,6 +66,8 @@ public sealed class FlyoutMetrics
         BarHeight = S(BaseBarHeight);
         LabelToBarGap = S(BaseLabelToBarGap);
         BarBottomGap = S(BaseBarBottomGap);
+        SparklineGap = S(BaseSparklineGap);
+        SparklineHeight = S(BaseSparklineHeight);
     }
 
     /// <summary>Builds the scaled metrics for the given device DPI (96 = 100%).</summary>
@@ -72,7 +78,7 @@ public sealed class FlyoutMetrics
     /// clipping or overlap. The form is sized to this so the box can never be
     /// shorter than what the paint code draws.
     /// </summary>
-    public Size ContentSize(bool isAuthError, bool hasFiveHour, bool hasSevenDay)
+    public Size ContentSize(bool isAuthError, bool hasFiveHour, bool hasSevenDay, bool hasHistory = false)
     {
         int body;
         if (isAuthError)
@@ -84,6 +90,11 @@ public sealed class FlyoutMetrics
             var rows = (hasFiveHour ? 1 : 0) + (hasSevenDay ? 1 : 0);
             body = rows > 0 ? rows * RowAdvance : NoDataAdvance;
         }
+
+        // The sparkline band is only present with usable data (not in the
+        // auth-expired state, and only when there is history to draw).
+        if (hasHistory && !isAuthError)
+            body += SparklineGap + SparklineHeight;
 
         var height = TopPadding + TitleAdvance + body + StatusGap + StatusLineHeight + BottomPadding;
         return new Size(Width, height);

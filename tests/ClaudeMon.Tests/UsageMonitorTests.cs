@@ -339,6 +339,47 @@ public class UsageMonitorTests : IDisposable
     }
 
     [Fact]
+    public async Task RefreshNow_Success_RecordsHistorySample()
+    {
+        var credPath = WriteCredentialFile();
+        var histPath = Path.Combine(_tempDir, "history.json");
+        var history = new UsageHistoryStore(histPath);
+
+        var handler = new MockHttpHandler(HttpStatusCode.OK, """
+        {"five_hour": {"utilization": 42.0, "resets_at": "2026-06-01T00:00:00Z"},
+         "seven_day": {"utilization": 18.0, "resets_at": "2026-06-05T00:00:00Z"}}
+        """);
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1),
+            tokenRefresher: null, logger: null, history: history);
+
+        await monitor.RefreshNowAsync();
+
+        var samples = history.Samples;
+        Assert.Single(samples);
+        Assert.Equal(42.0, samples[0].FiveHourPct);
+        Assert.Equal(18.0, samples[0].SevenDayPct);
+    }
+
+    [Fact]
+    public async Task RefreshNow_AuthError_RecordsNoHistory()
+    {
+        var credPath = Path.Combine(_tempDir, "nonexistent.json"); // read fails → AuthError
+        var histPath = Path.Combine(_tempDir, "history.json");
+        var history = new UsageHistoryStore(histPath);
+
+        using var apiClient = new ClaudeApiClient(new HttpClient(new MockHttpHandler(HttpStatusCode.OK, "{}")));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1),
+            tokenRefresher: null, logger: null, history: history);
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Empty(history.Samples);
+    }
+
+    [Fact]
     public async Task RefreshNow_ConcurrentCalls_OnlyOneExecutes()
     {
         var credPath = WriteCredentialFile();

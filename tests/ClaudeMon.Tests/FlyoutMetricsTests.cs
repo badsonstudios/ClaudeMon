@@ -127,6 +127,29 @@ public class FlyoutMetricsTests
     }
 
     [Fact]
+    public void ContentSize_WithHistory_AddsSparklineBand()
+    {
+        var m = FlyoutMetrics.ForDpi(96);
+
+        var without = m.ContentSize(false, hasFiveHour: true, hasSevenDay: true, hasHistory: false).Height;
+        var with = m.ContentSize(false, hasFiveHour: true, hasSevenDay: true, hasHistory: true).Height;
+
+        Assert.Equal(m.SparklineGap + m.SparklineHeight, with - without);
+    }
+
+    [Fact]
+    public void ContentSize_AuthError_IgnoresHistory()
+    {
+        var m = FlyoutMetrics.ForDpi(96);
+
+        // No sparkline in the sign-in-expired state, even if history exists.
+        var withHistory = m.ContentSize(isAuthError: true, false, false, hasHistory: true).Height;
+        var withoutHistory = m.ContentSize(isAuthError: true, false, false, hasHistory: false).Height;
+
+        Assert.Equal(withoutHistory, withHistory);
+    }
+
+    [Fact]
     public void ForDpi_NonPositiveDpi_FallsBackTo96()
     {
         var fallback = FlyoutMetrics.ForDpi(0);

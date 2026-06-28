@@ -11,6 +11,13 @@ GitHub release; the release notes are taken from these entries.
   install and unchecked on upgrades), so ClaudeMon starts with Windows out of the box. You
   can still untick it during setup to opt out.
 
+### Fixed
+- **Installer no longer hangs when ClaudeMon is already running** — upgrading over a running
+  instance could stall the installer on a non-cancellable "closing applications" step,
+  because the Windows Restart Manager can't close ClaudeMon's windowless tray process. The
+  installer now stops the running instance itself (and waits for it to exit) instead of
+  relying on the Restart Manager, so upgrades complete cleanly and the app relaunches.
+
 ## [0.9.0] - 2026-06-27
 
 ### Added

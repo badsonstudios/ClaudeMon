@@ -6,6 +6,12 @@ GitHub release; the release notes are taken from these entries.
 ## [0.9.0] - 2026-06-27
 
 ### Added
+- **Usage trend sparkline** — the click-through flyout now draws a compact sparkline of
+  recent 5-hour usage, so you can see at a glance whether you're climbing fast or leveling
+  off. Samples are recorded to a small rolling history file under `%LocalAppData%\ClaudeMon`
+  (pruned by age and count, so it never grows without bound) and survive restarts. The
+  sparkline appears once there are at least two samples; the history holds only utilization
+  percentages and timestamps — no account or token data.
 - **Diagnostic logging + "View logs"** — ClaudeMon now writes timestamped diagnostics (poll
   results, connection/sign-in/offline status changes, and the token-refresh lifecycle) to a
   rolling, size-bounded log file at `%LocalAppData%\ClaudeMon\logs\claudemon.log` (capped at

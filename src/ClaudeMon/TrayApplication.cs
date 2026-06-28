@@ -18,6 +18,7 @@ public sealed class TrayApplication : IDisposable
     private readonly ClaudeApiClient _apiClient;
     private readonly TokenRefresher _tokenRefresher;
     private readonly Logger _logger;
+    private readonly UsageHistoryStore _history;
     private readonly ConfigManager _configManager;
     private readonly SynchronizationContext _syncContext;
     private readonly FlyoutPanel _flyout;
@@ -44,11 +45,15 @@ public sealed class TrayApplication : IDisposable
         _logger = new Logger();
         _logger.Info($"ClaudeMon {CurrentVersion} starting.");
 
+        _history = new UsageHistoryStore();
+        _history.Load();
+
         _apiClient = new ClaudeApiClient();
         _tokenRefresher = new TokenRefresher();
         var credentialReader = new CredentialReader();
         _monitor = new UsageMonitor(
-            credentialReader, _apiClient, _configManager.Settings.PollInterval, _tokenRefresher, _logger);
+            credentialReader, _apiClient, _configManager.Settings.PollInterval,
+            _tokenRefresher, _logger, _history);
         _monitor.UsageUpdated += OnUsageUpdated;
 
         _flyout = new FlyoutPanel();
@@ -157,7 +162,10 @@ public sealed class TrayApplication : IDisposable
         }
         else
         {
-            _flyout.UpdateData(_monitor.LastUsage, _monitor.Status, _monitor.LastUpdated);
+            var fiveHourTrend = _history.Recent(TimeSpan.FromHours(5))
+                .Select(s => s.FiveHourPct)
+                .ToList();
+            _flyout.UpdateData(_monitor.LastUsage, _monitor.Status, _monitor.LastUpdated, fiveHourTrend);
             _flyout.ShowNear(Cursor.Position);
         }
     }

@@ -12,6 +12,7 @@ public sealed class UsageMonitor : IDisposable
     private readonly ClaudeApiClient _apiClient;
     private readonly TokenRefresher? _tokenRefresher;
     private readonly Logger? _logger;
+    private readonly UsageHistoryStore? _history;
     private readonly System.Timers.Timer _timer;
     private readonly object _lock = new();
     private bool _polling;
@@ -30,12 +31,14 @@ public sealed class UsageMonitor : IDisposable
         ClaudeApiClient apiClient,
         TimeSpan pollInterval,
         TokenRefresher? tokenRefresher = null,
-        Logger? logger = null)
+        Logger? logger = null,
+        UsageHistoryStore? history = null)
     {
         _credentialReader = credentialReader;
         _apiClient = apiClient;
         _tokenRefresher = tokenRefresher;
         _logger = logger;
+        _history = history;
         _timer = new System.Timers.Timer(pollInterval.TotalMilliseconds);
         _timer.Elapsed += async (_, _) => await PollAsync();
         _timer.AutoReset = true;
@@ -148,6 +151,7 @@ public sealed class UsageMonitor : IDisposable
                 LastUpdated = DateTimeOffset.UtcNow;
                 Status = MonitorStatus.Connected;
                 LogTransition(MonitorStatus.Connected, "usage poll succeeded");
+                RecordHistory(apiResult.Data!);
 
                 UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(
                     apiResult.Data!, null, MonitorStatus.Connected));
@@ -235,6 +239,19 @@ public sealed class UsageMonitor : IDisposable
         LastError = message;
         LogTransition(MonitorStatus.Offline, message);
         UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(LastUsage, message, MonitorStatus.Offline));
+    }
+
+    // Records a usage sample for the trend sparkline. Only fresh, successful polls
+    // with a 5-hour value contribute (the 5-hour series is what the sparkline draws).
+    private void RecordHistory(UsageResponse usage)
+    {
+        if (_history is null || usage.FiveHour is null)
+            return;
+
+        _history.Record(new UsageSample(
+            DateTimeOffset.UtcNow,
+            usage.FiveHour.UtilizationPct,
+            usage.SevenDay?.UtilizationPct));
     }
 
     // Logs only when the status actually changes, so a steady state (e.g. polling

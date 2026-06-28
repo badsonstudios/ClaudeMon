@@ -11,12 +11,17 @@ public sealed class FlyoutPanel : Form
     private UsageResponse? _usage;
     private MonitorStatus _status = MonitorStatus.Initializing;
     private DateTimeOffset? _lastUpdated;
+    private IReadOnlyList<double> _history = Array.Empty<double>();
 
     private static readonly Color BackgroundColor = Color.FromArgb(30, 30, 30);
     private static readonly Color BorderColor = Color.FromArgb(60, 60, 60);
     private static readonly Color TextColor = Color.FromArgb(220, 220, 220);
     private static readonly Color DimTextColor = Color.FromArgb(140, 140, 140);
     private static readonly Color BarBackgroundColor = Color.FromArgb(50, 50, 50);
+    private static readonly Color SparklineColor = Color.FromArgb(120, 170, 255);
+
+    // At least two points are needed to draw a line between samples.
+    private bool HasHistory => _history.Count >= 2;
 
     public FlyoutPanel()
     {
@@ -41,11 +46,16 @@ public sealed class FlyoutPanel : Form
         Relayout();
     }
 
-    public void UpdateData(UsageResponse? usage, MonitorStatus status, DateTimeOffset? lastUpdated)
+    public void UpdateData(
+        UsageResponse? usage,
+        MonitorStatus status,
+        DateTimeOffset? lastUpdated,
+        IReadOnlyList<double>? history = null)
     {
         _usage = usage;
         _status = status;
         _lastUpdated = lastUpdated;
+        _history = history ?? Array.Empty<double>();
         Relayout();
     }
 
@@ -60,7 +70,8 @@ public sealed class FlyoutPanel : Form
         Size = metrics.ContentSize(
             _status == MonitorStatus.AuthError,
             _usage?.FiveHour is not null,
-            _usage?.SevenDay is not null);
+            _usage?.SevenDay is not null,
+            HasHistory);
         _contentPanel.Invalidate();
     }
 
@@ -167,12 +178,33 @@ public sealed class FlyoutPanel : Form
                 g.DrawString("No usage data available", labelFont, dimBrush, left, y);
                 y += m.NoDataAdvance;
             }
+
+            if (HasHistory)
+            {
+                y += m.SparklineGap;
+                DrawSparkline(g, new Rectangle(left, y, contentWidth, m.SparklineHeight));
+                y += m.SparklineHeight;
+            }
         }
 
         // Status & last updated
         y += m.StatusGap;
         var statusText = FormatStatus();
         g.DrawString(statusText, labelFont, dimBrush, left, y);
+    }
+
+    private void DrawSparkline(Graphics g, Rectangle rect)
+    {
+        var points = Sparkline.BuildPoints(_history, rect);
+        if (points.Length < 2)
+            return;
+
+        // Faint baseline so a flat/low trend still reads as a chart, not a stray line.
+        using var baselinePen = new Pen(BarBackgroundColor);
+        g.DrawLine(baselinePen, rect.Left, rect.Bottom, rect.Right, rect.Bottom);
+
+        using var linePen = new Pen(SparklineColor, Math.Max(1f, rect.Height / 18f));
+        g.DrawLines(linePen, points);
     }
 
     private void DrawUsageRow(

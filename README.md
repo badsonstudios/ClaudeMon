@@ -21,6 +21,7 @@ The usage percentage can also be shown directly on the taskbar:
   - **Progressive** - Notifications every 10% starting from a configurable level
 - **Reset countdown** - Shows time remaining until rate limits reset
 - **Usage trend sparkline** - The flyout draws a compact sparkline of recent 5-hour usage so you can see whether you're climbing fast or leveling off; history is recorded locally and survives restarts
+- **Time-to-limit estimate** - When 5-hour usage is rising, the flyout projects how long until you hit 100% at the current rate (e.g. "~35m to limit"); shows "—" when usage is flat/declining or there isn't enough recent history
 - **Stays signed in on its own** - When the on-disk access token goes stale (common if you only use the Claude Code VS Code extension), ClaudeMon refreshes it automatically using your saved refresh token, so it keeps showing usage instead of falsely reporting a sign-in problem
 - **Sign-in-expired guidance** - When your Claude Code sign-in genuinely can't be refreshed, the tooltip, flyout, and About dialog show a clear "run Claude Code to refresh" message instead of stale usage numbers (the taskbar display shows a neutral "—"); normal display returns automatically after you re-authenticate
 - **Update notifications** - Checks GitHub for newer releases (daily and on demand) and links you to the download; toggle in Settings

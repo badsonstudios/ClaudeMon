@@ -12,6 +12,7 @@ public sealed class FlyoutPanel : Form
     private MonitorStatus _status = MonitorStatus.Initializing;
     private DateTimeOffset? _lastUpdated;
     private IReadOnlyList<double> _history = Array.Empty<double>();
+    private TimeSpan? _timeToLimit;
 
     private static readonly Color BackgroundColor = Color.FromArgb(30, 30, 30);
     private static readonly Color BorderColor = Color.FromArgb(60, 60, 60);
@@ -50,12 +51,14 @@ public sealed class FlyoutPanel : Form
         UsageResponse? usage,
         MonitorStatus status,
         DateTimeOffset? lastUpdated,
-        IReadOnlyList<double>? history = null)
+        IReadOnlyList<double>? history = null,
+        TimeSpan? timeToLimit = null)
     {
         _usage = usage;
         _status = status;
         _lastUpdated = lastUpdated;
         _history = history ?? Array.Empty<double>();
+        _timeToLimit = timeToLimit;
         Relayout();
     }
 
@@ -184,6 +187,16 @@ public sealed class FlyoutPanel : Form
                 y += m.SparklineGap;
                 DrawSparkline(g, new Rectangle(left, y, contentWidth, m.SparklineHeight));
                 y += m.SparklineHeight;
+            }
+
+            // Burn-rate forecast for the 5-hour window (shown whenever 5-hour data
+            // is present; "—" when the rate is flat/declining or history is short).
+            if (_usage?.FiveHour is not null)
+            {
+                y += m.ForecastGap;
+                var forecast = $"5-hour: {BurnRate.FormatTimeToLimit(_timeToLimit)}";
+                g.DrawString(forecast, labelFont, dimBrush, left, y);
+                y += m.ForecastHeight;
             }
         }
 

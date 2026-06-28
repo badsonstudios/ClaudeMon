@@ -6,6 +6,11 @@ GitHub release; the release notes are taken from these entries.
 ## [0.9.0] - 2026-06-27
 
 ### Added
+- **Time-to-limit estimate (burn rate)** — when your 5-hour usage is rising, the flyout now
+  projects how long until you hit 100% at the current rate (e.g. **"~35m to limit"**),
+  computed from the recent slope of your usage history. It shows **"—"** when usage is flat
+  or declining, when there isn't enough recent history, or when you wouldn't reach the cap
+  before the window resets — so the estimate is only shown when it's meaningful.
 - **Usage trend sparkline** — the click-through flyout now draws a compact sparkline of
   recent 5-hour usage, so you can see at a glance whether you're climbing fast or leveling
   off. Samples are recorded to a small rolling history file under `%LocalAppData%\ClaudeMon`

@@ -12,6 +12,9 @@ public sealed class TrayApplication : IDisposable
     // How often to check GitHub for a newer release while running.
     private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(24);
 
+    // Recent window used to estimate the 5-hour burn rate ("current rate").
+    private static readonly TimeSpan BurnRateWindow = TimeSpan.FromMinutes(30);
+
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _contextMenu;
     private readonly UsageMonitor _monitor;
@@ -165,7 +168,26 @@ public sealed class TrayApplication : IDisposable
             var fiveHourTrend = _history.Recent(TimeSpan.FromHours(5))
                 .Select(s => s.FiveHourPct)
                 .ToList();
-            _flyout.UpdateData(_monitor.LastUsage, _monitor.Status, _monitor.LastUpdated, fiveHourTrend);
+
+            // Project time-to-limit from the recent burn rate (last 30 min of samples).
+            // The latest history sample is recorded from the same poll that set
+            // LastUsage, so this current pct and the slope's newest point agree.
+            // Pass a null reset when ResetAt is unknown (TimeUntilReset returns Zero
+            // for both "unknown" and "already resetting" — only the latter should
+            // suppress the estimate).
+            TimeSpan? timeToLimit = null;
+            var fiveHour = _monitor.LastUsage?.FiveHour;
+            if (fiveHour is not null)
+            {
+                TimeSpan? timeUntilReset = fiveHour.ResetAt is null ? null : fiveHour.TimeUntilReset;
+                timeToLimit = BurnRate.EstimateTimeToLimit(
+                    _history.Recent(BurnRateWindow),
+                    fiveHour.UtilizationPct,
+                    timeUntilReset);
+            }
+
+            _flyout.UpdateData(
+                _monitor.LastUsage, _monitor.Status, _monitor.LastUpdated, fiveHourTrend, timeToLimit);
             _flyout.ShowNear(Cursor.Position);
         }
     }

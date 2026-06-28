@@ -39,7 +39,12 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
-CloseApplications=yes
+; ClaudeMon is a windowless tray app. The Windows Restart Manager (which
+; CloseApplications=yes uses) closes apps by messaging their top-level windows,
+; so it cannot close ClaudeMon and stalls the wizard on a non-cancellable
+; "closing applications" step (#34). We stop the running instance ourselves with
+; taskkill in [Code] instead, so the Restart Manager close/restart paths are off.
+CloseApplications=no
 RestartApplications=no
 MinVersion=10.0
 
@@ -94,13 +99,33 @@ begin
   Result := AppWasRunning;
 end;
 
+// Stop a running ClaudeMon so its files aren't locked during the copy. Force-kill
+// (the app is a tray monitor with no unsaved state) then wait, bounded, for the
+// process to actually exit so [Files] can't race a lingering handle.
+procedure StopAppIfRunning();
+var
+  Waited: Integer;
+begin
+  AppWasRunning := IsAppRunning();
+  if not AppWasRunning then
+    Exit;
+
+  Exec(ExpandConstant('{cmd}'), '/C taskkill /IM ClaudeMon.exe /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // Poll up to ~3s (20 x 150ms) for the process to disappear.
+  Waited := 0;
+  while IsAppRunning() and (Waited < 20) do
+  begin
+    Sleep(150);
+    Waited := Waited + 1;
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    // Remember whether it was running, then stop it so its files aren't locked.
-    AppWasRunning := IsAppRunning();
-    Exec(ExpandConstant('{cmd}'), '/C taskkill /IM ClaudeMon.exe /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    StopAppIfRunning();
   end
   else if CurStep = ssPostInstall then
   begin

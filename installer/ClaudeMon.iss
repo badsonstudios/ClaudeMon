@@ -47,7 +47,10 @@ MinVersion=10.0
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "startup"; Description: "Run {#MyAppName} at Windows startup"; GroupDescription: "Additional options:"; Flags: checkedonce
+; No 'unchecked'/'checkedonce' flag: the task is checked by default on every
+; install (including upgrades), so new users opt into start-with-Windows by
+; default. They can still untick it to opt out.
+Name: "startup"; Description: "Run {#MyAppName} at Windows startup"; GroupDescription: "Additional options:"
 
 [Files]
 Source: "..\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

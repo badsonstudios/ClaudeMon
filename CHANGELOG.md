@@ -3,6 +3,14 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.9.1] - 2026-06-28
+
+### Changed
+- **Installer now enables "Run at Windows startup" by default** — the startup checkbox in
+  the installer is pre-checked on every install (previously it was only checked on a first
+  install and unchecked on upgrades), so ClaudeMon starts with Windows out of the box. You
+  can still untick it during setup to opt out.
+
 ## [0.9.0] - 2026-06-27
 
 ### Added

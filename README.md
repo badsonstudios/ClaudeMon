@@ -26,7 +26,7 @@ The usage percentage can also be shown directly on the taskbar:
 - **Sign-in-expired guidance** - When your Claude Code sign-in genuinely can't be refreshed, the tooltip, flyout, and About dialog show a clear "run Claude Code to refresh" message instead of stale usage numbers (the taskbar display shows a neutral "—"); normal display returns automatically after you re-authenticate
 - **Update notifications** - Checks GitHub for newer releases (daily and on demand) and links you to the download; toggle in Settings
 - **Diagnostic logging** - Writes timestamped diagnostics (poll results, status changes, API/auth/network errors) to a size-bounded log file; a **View logs** tray-menu item opens it. Token values are never written
-- **Runs at startup** - Optional Windows startup registration
+- **Runs at startup** - Starts with Windows by default (the installer's startup option is pre-checked; you can opt out during setup or later in Settings)
 
 ## Installation
 

@@ -31,6 +31,8 @@ public sealed class FlyoutMetrics
     internal const int BaseBarBottomGap = 2;
     internal const int BaseSparklineGap = 8;
     internal const int BaseSparklineHeight = 26;
+    internal const int BaseForecastGap = 6;
+    internal const int BaseForecastHeight = 16;
 
     public int LeftInset { get; }
     public int TopPadding { get; }
@@ -47,6 +49,8 @@ public sealed class FlyoutMetrics
     public int BarBottomGap { get; }
     public int SparklineGap { get; }
     public int SparklineHeight { get; }
+    public int ForecastGap { get; }
+    public int ForecastHeight { get; }
 
     private FlyoutMetrics(int dpi)
     {
@@ -68,6 +72,8 @@ public sealed class FlyoutMetrics
         BarBottomGap = S(BaseBarBottomGap);
         SparklineGap = S(BaseSparklineGap);
         SparklineHeight = S(BaseSparklineHeight);
+        ForecastGap = S(BaseForecastGap);
+        ForecastHeight = S(BaseForecastHeight);
     }
 
     /// <summary>Builds the scaled metrics for the given device DPI (96 = 100%).</summary>
@@ -95,6 +101,10 @@ public sealed class FlyoutMetrics
         // auth-expired state, and only when there is history to draw).
         if (hasHistory && !isAuthError)
             body += SparklineGap + SparklineHeight;
+
+        // The burn-rate forecast line accompanies the 5-hour usage display.
+        if (hasFiveHour && !isAuthError)
+            body += ForecastGap + ForecastHeight;
 
         var height = TopPadding + TitleAdvance + body + StatusGap + StatusLineHeight + BottomPadding;
         return new Size(Width, height);

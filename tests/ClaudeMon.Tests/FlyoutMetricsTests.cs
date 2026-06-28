@@ -99,9 +99,10 @@ public class FlyoutMetricsTests
     [Fact]
     public void ContentSize_96Dpi_TwoRows_PinsBaselineHeight()
     {
-        // Locks the at-100% layout: 12 + 28 + (42*2) + 4 + 18 + 14 = 160.
+        // Locks the at-100% layout. Base rows: 12 + 28 + (42*2) + 4 + 18 + 14 = 160,
+        // plus the 5-hour forecast band (6 + 16) = 182.
         var m = FlyoutMetrics.ForDpi(96);
-        Assert.Equal(160, m.ContentSize(false, hasFiveHour: true, hasSevenDay: true).Height);
+        Assert.Equal(182, m.ContentSize(false, hasFiveHour: true, hasSevenDay: true).Height);
     }
 
     [Theory]
@@ -147,6 +148,32 @@ public class FlyoutMetricsTests
         var withoutHistory = m.ContentSize(isAuthError: true, false, false, hasHistory: false).Height;
 
         Assert.Equal(withoutHistory, withHistory);
+    }
+
+    [Fact]
+    public void ContentSize_WithFiveHour_AddsForecastBand()
+    {
+        var m = FlyoutMetrics.ForDpi(96);
+
+        // The forecast line accompanies the 5-hour display. Compare the 5-hour case
+        // against a no-data flyout, isolating the forecast + the one usage row.
+        var withFiveHour = m.ContentSize(false, hasFiveHour: true, hasSevenDay: false).Height;
+        var noData = m.ContentSize(false, hasFiveHour: false, hasSevenDay: false).Height;
+
+        var expectedDelta = (m.RowAdvance - m.NoDataAdvance) + m.ForecastGap + m.ForecastHeight;
+        Assert.Equal(expectedDelta, withFiveHour - noData);
+    }
+
+    [Fact]
+    public void ContentSize_AuthError_HasNoForecastBand()
+    {
+        var m = FlyoutMetrics.ForDpi(96);
+
+        // Auth-error height must not include the forecast band regardless of flags.
+        var authNoData = m.ContentSize(isAuthError: true, hasFiveHour: false, hasSevenDay: false).Height;
+        var authFiveHour = m.ContentSize(isAuthError: true, hasFiveHour: true, hasSevenDay: false).Height;
+
+        Assert.Equal(authNoData, authFiveHour);
     }
 
     [Fact]

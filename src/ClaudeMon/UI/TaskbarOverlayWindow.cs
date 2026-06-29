@@ -4,12 +4,13 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using ClaudeMon.Models;
-using Microsoft.Win32;
+using ClaudeMon.Services;
 
 /// <summary>
 /// A borderless, click-through, always-on-top window that paints the current Claude
-/// usage percentage directly over the right end of the primary Windows taskbar,
-/// just left of the system tray / clock.
+/// usage percentage directly over the right end of one Windows taskbar, just left of
+/// that taskbar's system tray / clock. One instance is created per taskbar (the primary
+/// and each secondary-monitor taskbar) by <see cref="TaskbarOverlayManager"/>.
 /// </summary>
 /// <remarks>
 /// This is the lightweight alternative to a deskband COM shell extension: it needs no
@@ -18,11 +19,27 @@ using Microsoft.Win32;
 /// text shows cleanly over the taskbar (a colour-keyed <c>TransparencyKey</c> can't —
 /// it fringes anti-aliased glyphs). A low-frequency timer re-asserts the topmost
 /// z-order and position so the overlay survives taskbar clicks and layout changes.
-/// Positioning is best-effort for the primary, horizontal taskbar.
+/// The instance re-finds its taskbar each tick by monitor device name, so it follows
+/// Explorer restarts (which recreate the taskbar windows) and hides itself while its
+/// taskbar is absent. Positioning is best-effort for a horizontal taskbar.
 /// </remarks>
 public sealed class TaskbarOverlayWindow : Form
 {
     private readonly System.Windows.Forms.Timer _keepAliveTimer;
+
+    // The monitor whose taskbar this overlay paints on; re-resolved to a live taskbar
+    // window each reposition so the overlay survives Explorer restarts.
+    private readonly string _targetMonitorDevice;
+
+    // Best-effort diagnostics for transient native failures; null when not supplied.
+    private readonly Logger? _logger;
+
+    // Drives the keep-alive loop and whether Reposition shows or hides the overlay.
+    private bool _enabled;
+
+    // User nudge applied to the computed X on secondary taskbars only (positive = right,
+    // negative = left); the primary ignores it since it's anchored exactly to its tray.
+    private int _horizontalOffset;
 
     private double? _percentage;
     private double? _sevenDayPercentage;
@@ -42,20 +59,41 @@ public sealed class TaskbarOverlayWindow : Form
     private int _widthHeight;
     private bool _widthSignInExpired;
 
-    public TaskbarOverlayWindow()
+    // Cached clock reserve for secondary taskbars (whose clock has no queryable window),
+    // re-measured only when the taskbar height changes — see IconRenderer.MeasureTaskbarClockReserve.
+    private int _clockReserve;
+    private int _clockReserveHeight = -1;
+
+    public TaskbarOverlayWindow(string targetMonitorDevice, Logger? logger = null)
     {
+        _targetMonitorDevice = targetMonitorDevice;
+        _logger = logger;
+
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
         Size = new Size(_width, _height);
 
         // Re-glue to the taskbar and re-assert topmost ordering periodically. Clicking
-        // the taskbar can push us below it; this brings us back promptly.
+        // the taskbar can push us below it; this brings us back promptly. Guarded by
+        // _enabled (not Visible) so the loop keeps running even while we're hidden — that
+        // is how we recover when our taskbar momentarily disappears (Explorer restart).
+        // This same tick also picks up display-layout changes (resolution/DPI) within 500 ms.
+        // The body is wrapped: a transient GDI/Win32 failure (most likely mid-restart) must
+        // never escape into the UI message loop and crash the app — the next tick retries.
         _keepAliveTimer = new System.Windows.Forms.Timer { Interval = 500 };
-        _keepAliveTimer.Tick += (_, _) => { if (Visible) Reposition(); };
-
-        // Also react immediately to display layout changes (resolution, DPI, monitors).
-        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        _keepAliveTimer.Tick += (_, _) =>
+        {
+            if (!_enabled) return;
+            try
+            {
+                Reposition();
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn($"Taskbar overlay reposition failed ({_targetMonitorDevice}): {ex.Message}");
+            }
+        };
     }
 
     // Don't steal focus from the taskbar / foreground app when shown.
@@ -75,6 +113,7 @@ public sealed class TaskbarOverlayWindow : Form
     /// <summary>Show or hide the overlay live, without restarting the app.</summary>
     public void SetEnabled(bool enabled)
     {
+        _enabled = enabled;
         if (enabled)
         {
             if (!Visible) Show();
@@ -134,6 +173,16 @@ public sealed class TaskbarOverlayWindow : Form
         if (Visible) Reposition();
     }
 
+    /// <summary>
+    /// Set the horizontal nudge (positive = right, negative = left) and reposition live. Only
+    /// affects secondary taskbars; the primary is anchored exactly to its tray and ignores it.
+    /// </summary>
+    public void SetHorizontalOffset(int offset)
+    {
+        _horizontalOffset = offset;
+        if (Visible) Reposition();
+    }
+
     /// <summary>The 7-day value to display, or null when the option is off.</summary>
     private double? SevenDayForDisplay => _showSevenDay ? _sevenDayPercentage : null;
 
@@ -166,40 +215,64 @@ public sealed class TaskbarOverlayWindow : Form
         _widthSignInExpired = false;
     }
 
-    private void OnDisplaySettingsChanged(object? sender, EventArgs e)
+    /// <summary>
+    /// Clock-reserve width for a secondary taskbar, cached per taskbar height so the keep-alive
+    /// tick doesn't re-measure (allocating fonts + a bitmap) when the height hasn't changed.
+    /// </summary>
+    private int ClockReserve()
     {
-        if (Visible) Reposition();
+        if (_clockReserveHeight != _height)
+        {
+            _clockReserve = IconRenderer.MeasureTaskbarClockReserve(_height);
+            _clockReserveHeight = _height;
+        }
+
+        return _clockReserve;
     }
 
     /// <summary>
-    /// Positions the overlay against the right edge of the primary taskbar, immediately
-    /// to the left of the notification area, re-asserts topmost ordering, and repaints.
+    /// Positions the overlay against the right edge of its target taskbar, immediately to
+    /// the left of the notification area, re-asserts topmost ordering, and repaints. If the
+    /// target taskbar isn't present right now (Explorer restarting, or that display's
+    /// taskbar was turned off), the overlay hides itself but keeps polling so it reappears
+    /// automatically once the taskbar returns.
     /// </summary>
     private void Reposition()
     {
         if (!IsHandleCreated) return;
 
-        var trayHwnd = FindWindow("Shell_TrayWnd", null);
-        if (trayHwnd == IntPtr.Zero || !GetWindowRect(trayHwnd, out var taskbar))
+        var taskbar = TaskbarEnumerator.FindByDevice(_targetMonitorDevice);
+        if (taskbar is null || !GetWindowRect(taskbar.Value.Handle, out var rect))
+        {
+            if (Visible) Hide();
             return;
+        }
 
-        // Left edge of the notification area (clock/tray); fall back to the taskbar's
-        // right edge if it can't be found.
-        var left = taskbar.Right;
-        var notifyHwnd = FindWindowEx(trayHwnd, IntPtr.Zero, "TrayNotifyWnd", null);
+        // Left edge of the notification area (clock/tray). The primary taskbar exposes a
+        // TrayNotifyWnd we can anchor exactly to; secondary taskbars don't (their clock is a
+        // windowless XAML surface), so there we reserve estimated clock space at the right.
+        int? notifyLeft = null;
+        var notifyHwnd = FindWindowEx(taskbar.Value.Handle, IntPtr.Zero, "TrayNotifyWnd", null);
         if (notifyHwnd != IntPtr.Zero && GetWindowRect(notifyHwnd, out var notify))
-            left = notify.Left;
+            notifyLeft = notify.Left;
 
-        var taskbarHeight = taskbar.Bottom - taskbar.Top;
+        var taskbarHeight = rect.Bottom - rect.Top;
         _height = taskbarHeight > 0 ? taskbarHeight : _height;
+
+        var rightReserve = notifyLeft is null ? ClockReserve() : 0;
+
+        // The horizontal nudge only tunes secondary taskbars, where the clock width is
+        // estimated. The primary is anchored exactly to its tray, so it ignores the offset.
+        var offset = taskbar.Value.IsPrimary ? 0 : _horizontalOffset;
 
         // Size the overlay to its content so the dual "5hr / 7day" readout never clips.
         // The window is right-anchored, so a wider overlay extends leftward and the
         // clock/tray stay put. Re-measure only when the inputs actually change.
         UpdateMeasuredWidth();
-        _x = left - _width;
-        _y = taskbar.Top;
+        (_x, _y) = TaskbarOverlayLayout.Compute(
+            new TaskbarRect(rect.Left, rect.Top, rect.Right), notifyLeft, _width, rightReserve, offset);
 
+        if (!Visible) Show();
         SetWindowPos(
             Handle, HWND_TOPMOST, _x, _y, _width, _height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -286,7 +359,6 @@ public sealed class TaskbarOverlayWindow : Form
     {
         if (disposing)
         {
-            SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             _keepAliveTimer.Dispose();
         }
         base.Dispose(disposing);
@@ -338,9 +410,6 @@ public sealed class TaskbarOverlayWindow : Form
         public byte SourceConstantAlpha;
         public byte AlphaFormat;
     }
-
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
 
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern IntPtr FindWindowEx(

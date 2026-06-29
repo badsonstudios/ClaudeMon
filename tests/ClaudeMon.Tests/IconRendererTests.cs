@@ -148,4 +148,26 @@ public class IconRendererTests
 
         Assert.True(painted, "expected the sign-in-expired marker to render visible pixels");
     }
+
+    [Theory]
+    [InlineData(30)]   // Win10 taskbar height
+    [InlineData(40)]   // Win11 taskbar height
+    [InlineData(72)]   // ~150% DPI
+    public void MeasureTaskbarClockReserve_ReservesPositiveWidth(int height)
+    {
+        // A zero/negative reserve would let the readout draw on top of the secondary-taskbar
+        // clock — the exact overlap this measurement exists to prevent.
+        var reserve = IconRenderer.MeasureTaskbarClockReserve(height);
+        Assert.True(reserve > 0, $"expected a positive clock reserve, got {reserve}");
+    }
+
+    [Fact]
+    public void MeasureTaskbarClockReserve_DoesNotShrinkWithTallerTaskbar()
+    {
+        // Both the padding and the font scale with height, so a taller (higher-DPI) taskbar
+        // must reserve at least as much clock space as a shorter one.
+        Assert.True(
+            IconRenderer.MeasureTaskbarClockReserve(48) >= IconRenderer.MeasureTaskbarClockReserve(30),
+            "a taller taskbar should not reserve less clock space than a shorter one");
+    }
 }

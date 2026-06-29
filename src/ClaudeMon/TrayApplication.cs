@@ -25,7 +25,7 @@ public sealed class TrayApplication : IDisposable
     private readonly ConfigManager _configManager;
     private readonly SynchronizationContext _syncContext;
     private readonly FlyoutPanel _flyout;
-    private readonly TaskbarOverlayWindow _taskbarOverlay;
+    private readonly TaskbarOverlayManager _taskbarOverlay;
     private readonly AlertManager _alertManager;
     private readonly UpdateChecker _updateChecker;
     private readonly System.Timers.Timer _updateTimer;
@@ -61,11 +61,13 @@ public sealed class TrayApplication : IDisposable
 
         _flyout = new FlyoutPanel();
 
-        _taskbarOverlay = new TaskbarOverlayWindow();
+        _taskbarOverlay = new TaskbarOverlayManager(_logger);
         _taskbarOverlay.SetColors(
             _configManager.Settings.TaskbarDisplay.LabelColor,
             _configManager.Settings.TaskbarDisplay.NumberColor);
         _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
+        _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
+        _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
         _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
 
         _contextMenu = CreateContextMenu();
@@ -320,7 +322,10 @@ public sealed class TrayApplication : IDisposable
 
     private void ShowSettings()
     {
-        using var form = new SettingsForm(_configManager);
+        // Live-preview the secondary-monitor toggle and position nudge as the user changes
+        // them; the form reverts to the saved values if the dialog is cancelled.
+        using var form = new SettingsForm(
+            _configManager, _taskbarOverlay.SetHorizontalOffset, _taskbarOverlay.SetAllMonitors);
         if (form.ShowDialog() == DialogResult.OK)
         {
             _monitor.UpdateInterval(_configManager.Settings.PollInterval);
@@ -328,6 +333,8 @@ public sealed class TrayApplication : IDisposable
                 _configManager.Settings.TaskbarDisplay.LabelColor,
                 _configManager.Settings.TaskbarDisplay.NumberColor);
             _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
+            _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
+            _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
             _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
 
             // Start/stop update checks live to match the toggle; check immediately when

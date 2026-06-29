@@ -73,6 +73,22 @@ public record TaskbarDisplaySettings
     /// </summary>
     [JsonPropertyName("showSevenDay")]
     public bool ShowSevenDay { get; init; }
+
+    /// <summary>
+    /// When true, the readout is shown on every monitor's taskbar (on setups where Windows
+    /// shows the taskbar on all displays), not just the primary. Off by default — opt-in.
+    /// </summary>
+    [JsonPropertyName("allMonitors")]
+    public bool AllMonitors { get; init; }
+
+    /// <summary>
+    /// Horizontal nudge in pixels applied to the readout on secondary-monitor taskbars only:
+    /// negative moves it left, positive moves it right. Lets you fine-tune the spacing from
+    /// the clock, whose width on secondary taskbars can only be estimated. The primary is
+    /// anchored exactly to its tray and is unaffected. 0 by default.
+    /// </summary>
+    [JsonPropertyName("horizontalOffset")]
+    public int HorizontalOffset { get; init; }
 }
 
 public record AlertThresholds

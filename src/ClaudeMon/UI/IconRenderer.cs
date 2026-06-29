@@ -2,6 +2,7 @@ namespace ClaudeMon.UI;
 
 using System.Drawing;
 using System.Drawing.Text;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using ClaudeMon.Models;
 
@@ -219,6 +220,43 @@ public static class IconRenderer
     /// <summary>Overlay width for the sign-in-expired marker at the given taskbar height.</summary>
     public static int MeasureTaskbarSignInExpiredWidth(int height)
         => MeasureContentWidth(new[] { (SignInExpiredMarker, Color.White) }, height);
+
+    /// <summary>
+    /// Estimates the horizontal space the Windows clock occupies at the right end of a
+    /// secondary-monitor taskbar, so the usage readout can sit just to its left. Windows 11
+    /// draws that clock inside a windowless XAML surface, so its bounds can't be queried;
+    /// instead we measure worst-case short date/time strings (the same patterns the taskbar
+    /// shows) at the taskbar's font size and add padding for the clock's own margins. The
+    /// samples are fixed (not the live time) so the reserved width doesn't jitter each
+    /// minute, and we err slightly wide — a small gap is fine, overlap is not.
+    /// </summary>
+    public static int MeasureTaskbarClockReserve(int height)
+    {
+        using var bitmap = new Bitmap(1, 1);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+        var (_, numberSize) = TaskbarFontSizes(height);
+        using var font = new Font("Segoe UI", numberSize, FontStyle.Regular, GraphicsUnit.Point);
+
+        // A representative two-line clock measured with the current culture's short date and
+        // short time patterns (the same the taskbar shows). A fixed wide-ish sample, not the
+        // live time, so the reserve is stable; width still varies by culture, which is fine.
+        var culture = CultureInfo.CurrentCulture;
+        var sample = new DateTime(2000, 12, 28, 22, 38, 0);
+        var date = sample.ToString("d", culture);
+        var time = sample.ToString("t", culture);
+        var widest = Math.Max(
+            graphics.MeasureString(date, font).Width,
+            graphics.MeasureString(time, font).Width);
+
+        // Padding covers the clock's left/right margins within the tray and keeps a small
+        // visible gap between the readout and the clock. Scales with the taskbar height (DPI).
+        // The worst-case sample above already over-estimates the real text a little, so this
+        // stays modest; the user can fine-tune with the horizontal-offset setting.
+        var padding = (int)Math.Round(height * 0.4);
+        return (int)Math.Ceiling(widest) + padding;
+    }
 
     /// <summary>
     /// Renders the taskbar usage readout onto a transparent bitmap of the given size,

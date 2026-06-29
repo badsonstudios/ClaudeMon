@@ -14,7 +14,7 @@ The usage percentage can also be shown directly on the taskbar:
 
 - **Real-time usage tracking** - Monitors both 5-hour and 7-day usage windows
 - **Color-coded tray icon** - Green, yellow, orange, or red based on current utilization
-- **Taskbar usage display** - Optional always-visible percentage on the taskbar, color-coded to match the tray icon (on by default; toggle in Settings). Can also show the 7-day usage alongside the 5-hour one (`5hr / 7day`).
+- **Taskbar usage display** - Optional always-visible percentage on the taskbar, color-coded to match the tray icon (on by default; toggle in Settings). Can also show the 7-day usage alongside the 5-hour one (`5hr / 7day`). Optionally shows on **every** monitor's taskbar (opt-in, when Windows is set to show the taskbar on all displays), and follows monitors as they're connected or disconnected. A position setting lets you fine-tune the spacing from the clock on secondary monitors.
 - **Desktop notifications** - Alerts when usage crosses configurable thresholds
 - **Two alert modes**:
   - **Threshold** - Warning and critical notifications at set percentages
@@ -63,7 +63,9 @@ Recent usage samples are recorded to `%LocalAppData%\ClaudeMon\history.json` to 
 | **Progressive alerts** | Recurring notifications every 10% above a starting level (5-hour usage) |
 | **7-day warning** | Notification when 7-day (weekly) usage crosses this percentage |
 | **Show usage on the Windows taskbar** | Show the usage percentage on the taskbar, next to the clock (on by default) |
+| **Show on secondary monitors** | Also show the readout on secondary monitors' taskbars, not just the primary (off by default; needs Windows set to show the taskbar on all displays) |
 | **Also show 7-day usage (5hr / 7day)** | Also display the 7-day percentage next to the 5-hour one, slash-separated (off by default) |
+| **Position** (under *Show on secondary monitors*) | Nudge the readout left (−) or right (+) on secondary monitors to fine-tune the gap from the clock; previews live as you change it (0 by default). The primary monitor is anchored exactly and isn't affected |
 | **Taskbar text colors** | Color of the "Claude" label and the percentage number (presets; the number can stay Auto / usage-level) |
 | **Enable desktop notifications** | Master toggle for all alerts |
 | **Notify when the rate limit resets** | Notify when your 5-hour limit resets to full capacity |

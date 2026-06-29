@@ -3,6 +3,30 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [Unreleased]
+
+### Added
+- **Taskbar usage display on secondary monitors (opt-in)** — a new **Show on secondary
+  monitors** option in Settings shows the usage readout on every monitor's taskbar, not just
+  the primary one (on setups where Windows shows the taskbar on all displays). It's off by
+  default. One
+  overlay is maintained per taskbar and the set follows the display layout live, so plugging
+  in or unplugging a monitor (or toggling "show taskbar on all displays") adds or removes the
+  readout automatically — no restart needed. Each overlay re-finds its taskbar continuously,
+  so it also survives an Explorer restart. On secondary taskbars (whose clock is a windowless
+  surface with no queryable bounds) the readout reserves estimated space so it sits just left
+  of the clock instead of over it.
+- **Secondary-monitor readout position** — a new **Position** setting (under *Show on secondary
+  monitors*) nudges the readout left or right (in pixels) on secondary monitors to fine-tune the
+  spacing from the clock, whose width on those taskbars can only be estimated. The primary
+  monitor is anchored exactly to its tray and is unaffected. Both the toggle and the position
+  preview live as you change them, and revert if you cancel the dialog.
+
+### Notes
+- Positioning is best-effort; on mixed-DPI multi-monitor setups the placement on secondary
+  taskbars may be slightly off (the app is system-DPI-aware) — use the horizontal-position
+  setting to compensate.
+
 ## [0.9.1] - 2026-06-28
 
 ### Changed

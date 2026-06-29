@@ -6,6 +6,14 @@ using ClaudeMon.Models;
 public sealed class SettingsForm : Form
 {
     private readonly ConfigManager _configManager;
+
+    // Invoked live as the secondary-monitor settings change so the overlays update while the
+    // dialog is open; the saved values are restored if the dialog is cancelled.
+    private readonly Action<int>? _onHorizontalOffsetPreview;
+    private readonly Action<bool>? _onAllMonitorsPreview;
+    private int _originalOffset;
+    private bool _originalAllMonitors;
+
     private readonly ComboBox _pollIntervalCombo;
     private readonly RadioButton _thresholdRadio;
     private readonly RadioButton _progressiveRadio;
@@ -18,9 +26,11 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _notificationsCheckbox;
     private readonly CheckBox _notifyOnResetCheckbox;
     private readonly CheckBox _taskbarDisplayCheckbox;
+    private readonly CheckBox _allMonitorsCheckbox;
     private readonly CheckBox _showSevenDayCheckbox;
     private readonly ComboBox _labelColorCombo;
     private readonly ComboBox _numberColorCombo;
+    private readonly NumericUpDown _horizontalOffsetNumeric;
     private readonly CheckBox _runAtStartupCheckbox;
     private readonly CheckBox _checkForUpdatesCheckbox;
 
@@ -42,9 +52,14 @@ public sealed class SettingsForm : Form
         ("Dark gray", TaskbarTextColor.DarkGray),
     ];
 
-    public SettingsForm(ConfigManager configManager)
+    public SettingsForm(
+        ConfigManager configManager,
+        Action<int>? onHorizontalOffsetPreview = null,
+        Action<bool>? onAllMonitorsPreview = null)
     {
         _configManager = configManager;
+        _onHorizontalOffsetPreview = onHorizontalOffsetPreview;
+        _onAllMonitorsPreview = onAllMonitorsPreview;
 
         Text = "ClaudeMon Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -52,7 +67,7 @@ public sealed class SettingsForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9f);
-        ClientSize = new Size(700, 740);
+        ClientSize = new Size(700, 800);
 
         // --- Monitoring group ---
         var monitoringGroup = new GroupBox
@@ -240,7 +255,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Taskbar Display",
             Location = new Point(20, 342),
-            Size = new Size(660, 172),
+            Size = new Size(660, 224),
         };
         Controls.Add(taskbarGroup);
 
@@ -256,7 +271,7 @@ public sealed class SettingsForm : Form
         _showSevenDayCheckbox = new CheckBox
         {
             Text = "Also show 7-day usage (5hr / 7day)",
-            Location = new Point(40, 60),
+            Location = new Point(40, 58),
             AutoSize = true,
         };
         taskbarGroup.Controls.Add(_showSevenDayCheckbox);
@@ -264,14 +279,14 @@ public sealed class SettingsForm : Form
         var labelColorLabel = new Label
         {
             Text = "\"Claude\" label color:",
-            Location = new Point(40, 100),
+            Location = new Point(40, 90),
             AutoSize = true,
         };
         taskbarGroup.Controls.Add(labelColorLabel);
 
         _labelColorCombo = new ComboBox
         {
-            Location = new Point(300, 97),
+            Location = new Point(300, 87),
             Width = 200,
             DropDownStyle = ComboBoxStyle.DropDownList,
         };
@@ -281,25 +296,66 @@ public sealed class SettingsForm : Form
         var numberColorLabel = new Label
         {
             Text = "Percentage color:",
-            Location = new Point(40, 134),
+            Location = new Point(40, 122),
             AutoSize = true,
         };
         taskbarGroup.Controls.Add(numberColorLabel);
 
         _numberColorCombo = new ComboBox
         {
-            Location = new Point(300, 131),
+            Location = new Point(300, 119),
             Width = 200,
             DropDownStyle = ComboBoxStyle.DropDownList,
         };
         _numberColorCombo.Items.AddRange(NumberColorOptions.Select(o => (object)o.Text).ToArray());
         taskbarGroup.Controls.Add(_numberColorCombo);
 
+        // The multi-monitor options sit last (lowest priority) and together: enable the
+        // secondary-monitor readout, then fine-tune its position relative to the clock.
+        _allMonitorsCheckbox = new CheckBox
+        {
+            Text = "Show on secondary monitors",
+            Location = new Point(40, 154),
+            AutoSize = true,
+        };
+        // Gates the position nudge below, and live-previews the secondary overlays appearing.
+        _allMonitorsCheckbox.CheckedChanged += OnTaskbarDisplayToggled;
+        _allMonitorsCheckbox.CheckedChanged += OnAllMonitorsChanged;
+        taskbarGroup.Controls.Add(_allMonitorsCheckbox);
+
+        var offsetLabel = new Label
+        {
+            Text = "Position:",
+            Location = new Point(40, 186),
+            AutoSize = true,
+        };
+        taskbarGroup.Controls.Add(offsetLabel);
+
+        _horizontalOffsetNumeric = new NumericUpDown
+        {
+            Location = new Point(300, 183),
+            Width = 100,
+            Minimum = -300,
+            Maximum = 300,
+            Increment = 2,
+        };
+        _horizontalOffsetNumeric.ValueChanged += OnHorizontalOffsetChanged;
+        taskbarGroup.Controls.Add(_horizontalOffsetNumeric);
+
+        var offsetHint = new Label
+        {
+            Text = "− left  /  + right",
+            Location = new Point(410, 186),
+            AutoSize = true,
+            ForeColor = SystemColors.GrayText,
+        };
+        taskbarGroup.Controls.Add(offsetHint);
+
         // --- General group ---
         var generalGroup = new GroupBox
         {
             Text = "General",
-            Location = new Point(20, 530),
+            Location = new Point(20, 582),
             Size = new Size(660, 156),
         };
         Controls.Add(generalGroup);
@@ -342,7 +398,7 @@ public sealed class SettingsForm : Form
         {
             Text = "OK",
             DialogResult = DialogResult.OK,
-            Location = new Point(500, 696),
+            Location = new Point(500, 752),
             Size = new Size(80, 32),
         };
         okButton.Click += OnOkClicked;
@@ -352,7 +408,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(594, 696),
+            Location = new Point(594, 752),
             Size = new Size(80, 32),
         };
         Controls.Add(cancelButton);
@@ -377,10 +433,41 @@ public sealed class SettingsForm : Form
 
     private void OnTaskbarDisplayToggled(object? sender, EventArgs e)
     {
-        // The 7-day option and colours only matter when the taskbar display is on.
-        _showSevenDayCheckbox.Enabled = _taskbarDisplayCheckbox.Checked;
-        _labelColorCombo.Enabled = _taskbarDisplayCheckbox.Checked;
-        _numberColorCombo.Enabled = _taskbarDisplayCheckbox.Checked;
+        // The sub-options only matter when the taskbar display is on.
+        var on = _taskbarDisplayCheckbox.Checked;
+        _allMonitorsCheckbox.Enabled = on;
+        _showSevenDayCheckbox.Enabled = on;
+        _labelColorCombo.Enabled = on;
+        _numberColorCombo.Enabled = on;
+        // The position nudge only affects secondary monitors, so it's only meaningful when
+        // the display is on AND showing on all monitors.
+        _horizontalOffsetNumeric.Enabled = on && _allMonitorsCheckbox.Checked;
+    }
+
+    private void OnHorizontalOffsetChanged(object? sender, EventArgs e)
+    {
+        // Live-preview the nudge so the user can see the readout move while choosing.
+        _onHorizontalOffsetPreview?.Invoke((int)_horizontalOffsetNumeric.Value);
+    }
+
+    private void OnAllMonitorsChanged(object? sender, EventArgs e)
+    {
+        // Live-preview the secondary overlays appearing/disappearing, so the position preview
+        // below has something to move when the user is enabling this in the same session.
+        _onAllMonitorsPreview?.Invoke(_allMonitorsCheckbox.Checked);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        // Undo any live previews if the dialog wasn't accepted. Restore the all-monitors
+        // state first (it rebuilds the overlay set), then the offset on what remains.
+        if (DialogResult != DialogResult.OK)
+        {
+            _onAllMonitorsPreview?.Invoke(_originalAllMonitors);
+            _onHorizontalOffsetPreview?.Invoke(_originalOffset);
+        }
+
+        base.OnFormClosing(e);
     }
 
     private static void SelectColor(
@@ -427,9 +514,22 @@ public sealed class SettingsForm : Form
         _notifyOnResetCheckbox.Checked = settings.Notifications.NotifyOnReset;
         OnNotificationsToggled(null, EventArgs.Empty);
         _taskbarDisplayCheckbox.Checked = settings.TaskbarDisplay.Enabled;
+
+        // Baseline before assigning the control, so cancel-revert restores the saved value
+        // (assigning Checked fires CheckedChanged → the live preview).
+        _originalAllMonitors = settings.TaskbarDisplay.AllMonitors;
+        _allMonitorsCheckbox.Checked = settings.TaskbarDisplay.AllMonitors;
+
         _showSevenDayCheckbox.Checked = settings.TaskbarDisplay.ShowSevenDay;
         SelectColor(_labelColorCombo, LabelColorOptions, settings.TaskbarDisplay.LabelColor);
         SelectColor(_numberColorCombo, NumberColorOptions, settings.TaskbarDisplay.NumberColor);
+
+        // Set the baseline before assigning the control, so the cancel-revert restores the
+        // saved value (assigning Value fires ValueChanged → the live preview).
+        _originalOffset = settings.TaskbarDisplay.HorizontalOffset;
+        _horizontalOffsetNumeric.Value = Math.Clamp(
+            _originalOffset, (int)_horizontalOffsetNumeric.Minimum, (int)_horizontalOffsetNumeric.Maximum);
+
         OnTaskbarDisplayToggled(null, EventArgs.Empty);
         _runAtStartupCheckbox.Checked = ConfigManager.IsRunAtStartupEnabled();
         _checkForUpdatesCheckbox.Checked = settings.CheckForUpdates;
@@ -468,6 +568,8 @@ public sealed class SettingsForm : Form
                 ShowSevenDay = _showSevenDayCheckbox.Checked,
                 LabelColor = SelectedColor(_labelColorCombo, LabelColorOptions),
                 NumberColor = SelectedColor(_numberColorCombo, NumberColorOptions),
+                AllMonitors = _allMonitorsCheckbox.Checked,
+                HorizontalOffset = (int)_horizontalOffsetNumeric.Value,
             },
             CheckForUpdates = _checkForUpdatesCheckbox.Checked,
         };

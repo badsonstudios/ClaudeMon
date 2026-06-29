@@ -28,8 +28,9 @@ public class ConfigManagerTests : IDisposable
         manager.Load();
 
         Assert.Equal(5, manager.Settings.PollIntervalMinutes);
-        Assert.Equal(50, manager.Settings.AlertThresholds.FiveHourWarning);
-        Assert.Equal(80, manager.Settings.AlertThresholds.FiveHourCritical);
+        Assert.True(manager.Settings.AlertThresholds.PaceAlertsEnabled);
+        Assert.Equal(PaceSensitivity.Balanced, manager.Settings.AlertThresholds.PaceSensitivity);
+        Assert.Equal(90, manager.Settings.AlertThresholds.NearCapWarning);
         Assert.True(manager.Settings.Notifications.Enabled);
         Assert.True(File.Exists(path)); // Should have created the file
     }
@@ -45,8 +46,9 @@ public class ConfigManagerTests : IDisposable
             PollIntervalMinutes = 3,
             AlertThresholds = new AlertThresholds
             {
-                FiveHourWarning = 70,
-                FiveHourCritical = 90,
+                PaceAlertsEnabled = false,
+                PaceSensitivity = PaceSensitivity.Late,
+                NearCapWarning = 85,
                 SevenDayWarning = 60,
             },
             Notifications = new NotificationSettings
@@ -63,8 +65,9 @@ public class ConfigManagerTests : IDisposable
         manager2.Load();
 
         Assert.Equal(3, manager2.Settings.PollIntervalMinutes);
-        Assert.Equal(70, manager2.Settings.AlertThresholds.FiveHourWarning);
-        Assert.Equal(90, manager2.Settings.AlertThresholds.FiveHourCritical);
+        Assert.False(manager2.Settings.AlertThresholds.PaceAlertsEnabled);
+        Assert.Equal(PaceSensitivity.Late, manager2.Settings.AlertThresholds.PaceSensitivity);
+        Assert.Equal(85, manager2.Settings.AlertThresholds.NearCapWarning);
         Assert.Equal(60, manager2.Settings.AlertThresholds.SevenDayWarning);
         Assert.False(manager2.Settings.Notifications.Enabled);
         Assert.True(manager2.Settings.Notifications.NotifyOnReset);
@@ -211,8 +214,9 @@ public class ConfigManagerTests : IDisposable
     {
         var settings = new AppSettings();
         Assert.Equal(5, settings.PollIntervalMinutes);
-        Assert.Equal(50, settings.AlertThresholds.FiveHourWarning);
-        Assert.Equal(80, settings.AlertThresholds.FiveHourCritical);
+        Assert.True(settings.AlertThresholds.PaceAlertsEnabled);
+        Assert.Equal(PaceSensitivity.Balanced, settings.AlertThresholds.PaceSensitivity);
+        Assert.Equal(90, settings.AlertThresholds.NearCapWarning);
         Assert.Equal(50, settings.AlertThresholds.SevenDayWarning);
         Assert.True(settings.Notifications.Enabled);
         Assert.False(settings.Notifications.NotifyOnReset);

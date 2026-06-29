@@ -2,17 +2,25 @@ namespace ClaudeMon.UI;
 
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 using ClaudeMon.Models;
 using ClaudeMon.Monitoring;
+using ClaudeMon.Services;
 
 public sealed class FlyoutPanel : Form
 {
     private readonly Panel _contentPanel;
+    private readonly Button _settingsButton;
+    private readonly Logger? _logger;
     private UsageResponse? _usage;
     private MonitorStatus _status = MonitorStatus.Initializing;
     private DateTimeOffset? _lastUpdated;
     private IReadOnlyList<double> _history = Array.Empty<double>();
     private TimeSpan? _timeToLimit;
+    private UsageColorMode _colorMode = UsageColorMode.Pace;
+
+    /// <summary>Raised when the flyout's settings button is clicked.</summary>
+    public event EventHandler? SettingsRequested;
 
     private static readonly Color BackgroundColor = Color.FromArgb(30, 30, 30);
     private static readonly Color BorderColor = Color.FromArgb(60, 60, 60);
@@ -20,12 +28,16 @@ public sealed class FlyoutPanel : Form
     private static readonly Color DimTextColor = Color.FromArgb(140, 140, 140);
     private static readonly Color BarBackgroundColor = Color.FromArgb(50, 50, 50);
     private static readonly Color SparklineColor = Color.FromArgb(120, 170, 255);
+    // The time-position marker drawn on each usage bar (where "now" is in the reset window).
+    private static readonly Color TimeMarkerColor = Color.FromArgb(235, 235, 235);
 
     // At least two points are needed to draw a line between samples.
     private bool HasHistory => _history.Count >= 2;
 
-    public FlyoutPanel()
+    public FlyoutPanel(Logger? logger = null)
     {
+        _logger = logger;
+
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
@@ -44,6 +56,23 @@ public sealed class FlyoutPanel : Form
         _contentPanel.Paint += OnPanelPaint;
         Controls.Add(_contentPanel);
 
+        // A quiet gear in the bottom-right corner that opens Settings. Flat and borderless so
+        // it reads as part of the dark flyout; brightens on hover.
+        _settingsButton = new Button
+        {
+            Text = "⚙", // gear
+            Font = new Font("Segoe UI Symbol", 12f),
+            FlatStyle = FlatStyle.Flat,
+            ForeColor = DimTextColor,
+            BackColor = BackgroundColor,
+            TabStop = false,
+            Cursor = Cursors.Hand,
+        };
+        _settingsButton.FlatAppearance.BorderSize = 0;
+        _settingsButton.FlatAppearance.MouseOverBackColor = BorderColor;
+        _settingsButton.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+        _contentPanel.Controls.Add(_settingsButton);
+
         Relayout();
     }
 
@@ -52,13 +81,15 @@ public sealed class FlyoutPanel : Form
         MonitorStatus status,
         DateTimeOffset? lastUpdated,
         IReadOnlyList<double>? history = null,
-        TimeSpan? timeToLimit = null)
+        TimeSpan? timeToLimit = null,
+        UsageColorMode colorMode = UsageColorMode.Pace)
     {
         _usage = usage;
         _status = status;
         _lastUpdated = lastUpdated;
         _history = history ?? Array.Empty<double>();
         _timeToLimit = timeToLimit;
+        _colorMode = colorMode;
         Relayout();
     }
 
@@ -75,6 +106,20 @@ public sealed class FlyoutPanel : Form
             _usage?.FiveHour is not null,
             _usage?.SevenDay is not null,
             HasHistory);
+
+        // Gear in the right corner, vertically centred on the status line (the bottom-left text)
+        // so it reads as part of that row. The point-size glyph scales with DPI on its own; only
+        // the pixel box/margin need scaling.
+        var scale = DeviceDpi / 96f;
+        var btn = (int)Math.Round(28 * scale);
+        var margin = (int)Math.Round(8 * scale);
+        var statusCentre = Size.Height - metrics.BottomPadding - metrics.StatusLineHeight / 2;
+        _settingsButton.Size = new Size(btn, btn);
+        _settingsButton.Location = new Point(
+            _contentPanel.ClientSize.Width - btn - margin,
+            statusCentre - btn / 2);
+        _settingsButton.BringToFront();
+
         _contentPanel.Invalidate();
     }
 
@@ -102,8 +147,46 @@ public sealed class FlyoutPanel : Form
 
         Location = new Point(x, y);
         Show();
-        Activate();
+        ForceForeground();
     }
+
+    /// <summary>
+    /// Bring the flyout to the foreground and make it the OS <em>active</em> window, so its child
+    /// controls (the gear) receive clicks and it auto-hides on the next deactivate. The opening
+    /// click — the tray icon, or a taskbar readout that posts the open on a clean message-loop
+    /// turn (see <see cref="TaskbarOverlayWindow"/>) — gives this process the one-shot right to set
+    /// the foreground, so a direct <c>SetForegroundWindow</c> suffices; if the lock ever refuses
+    /// it, the flyout simply shows inactive and the user's first click activates it the normal way.
+    /// </summary>
+    /// <remarks>
+    /// An earlier version merged input queues via <c>AttachThreadInput</c> to force the foreground.
+    /// That was the bug, not the cure: the merge left the flyout reporting active while its input
+    /// queue stayed mis-wired, so the gear silently dropped every click on the readout-open path
+    /// (the tray-open path skipped the merge — it was already foreground — and always worked).
+    /// </remarks>
+    private void ForceForeground()
+    {
+        if (!IsHandleCreated) return;
+        var hwnd = Handle;
+
+        SetForegroundWindow(hwnd);
+        SetActiveWindow(hwnd);
+        BringToFront();
+        Activate();
+
+        if (GetForegroundWindow() != hwnd)
+            _logger?.Warn("Flyout could not take foreground.");
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetActiveWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 
     protected override void OnDeactivate(EventArgs e)
     {
@@ -164,15 +247,15 @@ public sealed class FlyoutPanel : Form
         {
             if (_usage?.FiveHour is not null)
             {
-                DrawUsageRow(g, "5-hour", _usage.FiveHour, left, y, contentWidth,
-                    labelFont, textBrush, dimBrush, m);
+                DrawUsageRow(g, "5-hour", _usage.FiveHour, UsageWindows.FiveHour, segments: 5,
+                    left, y, contentWidth, labelFont, textBrush, dimBrush, m);
                 y += m.RowAdvance;
             }
 
             if (_usage?.SevenDay is not null)
             {
-                DrawUsageRow(g, "7-day", _usage.SevenDay, left, y, contentWidth,
-                    labelFont, textBrush, dimBrush, m);
+                DrawUsageRow(g, "7-day", _usage.SevenDay, UsageWindows.SevenDay, segments: 7,
+                    left, y, contentWidth, labelFont, textBrush, dimBrush, m);
                 y += m.RowAdvance;
             }
 
@@ -189,13 +272,19 @@ public sealed class FlyoutPanel : Form
                 y += m.SparklineHeight;
             }
 
-            // Burn-rate forecast for the 5-hour window (shown whenever 5-hour data
-            // is present; "—" when the rate is flat/declining or history is short).
+            // Pace forecast for the 5-hour window: the projected end-of-window % at the current
+            // average rate (the limit-avoidance signal) plus the recent burn-rate "time to limit".
+            // Coloured by pace so a runaway pace stands out.
             if (_usage?.FiveHour is not null)
             {
                 y += m.ForecastGap;
-                var forecast = $"5-hour: {BurnRate.FormatTimeToLimit(_timeToLimit)}";
-                g.DrawString(forecast, labelFont, dimBrush, left, y);
+                var fh = _usage.FiveHour;
+                var wf = fh.ElapsedFraction(UsageWindows.FiveHour);
+                var color = _colorMode == UsageColorMode.Pace && wf is not null
+                    ? IconRenderer.GetUsageColor(fh.UtilizationPct, wf, _colorMode)
+                    : DimTextColor;
+                using var forecastBrush = new SolidBrush(color);
+                g.DrawString(FormatForecast(fh.UtilizationPct, wf), labelFont, forecastBrush, left, y);
                 y += m.ForecastHeight;
             }
         }
@@ -205,6 +294,34 @@ public sealed class FlyoutPanel : Form
         var statusText = FormatStatus();
         g.DrawString(statusText, labelFont, dimBrush, left, y);
     }
+
+    /// <summary>
+    /// The 5-hour forecast text: the projected end-of-window % at the current average rate
+    /// ("on pace" when ≤100%, i.e. you'll reset before exhausting), plus the recent burn-rate
+    /// "time to limit" when it's rising. Falls back to just the time-to-limit with no window data.
+    /// </summary>
+    private string FormatForecast(double pct, double? windowFraction)
+    {
+        if (windowFraction is not { } wf)
+            return $"5-hour: {BurnRate.FormatTimeToLimit(_timeToLimit)}";
+
+        // Pace ratio → a clear gradient. ≤1 means you'll finish the window under the cap (headroom
+        // to use more); >1 means you'd hit 100% before reset and get locked out (no overages).
+        var ratio = Pace.Ratio(pct, wf);
+        var proj = (int)Math.Round(ratio * 100);
+        var projText = proj > 200 ? ">200%" : $"{proj}%";
+        return $"5-hour: {PaceLabel(ratio)} · projected {projText}";
+    }
+
+    private static string PaceLabel(double ratio) => ratio switch
+    {
+        < 0.6 => "well below pace",
+        < 0.9 => "below pace",
+        <= 1.1 => "on pace",
+        <= 1.5 => "ahead of pace",
+        <= 2.0 => "well ahead of pace",
+        _ => "way ahead of pace",
+    };
 
     private void DrawSparkline(Graphics g, Rectangle rect)
     {
@@ -221,13 +338,14 @@ public sealed class FlyoutPanel : Form
     }
 
     private void DrawUsageRow(
-        Graphics g, string label, UsageBucket bucket,
+        Graphics g, string label, UsageBucket bucket, TimeSpan window, int segments,
         int x, int y, int width,
         Font font, Brush textBrush, Brush dimBrush, FlyoutMetrics m)
     {
         var pct = bucket.UtilizationPct;
         var pctText = $"{pct:F0}%";
         var resetText = bucket.FormatResetCountdown();
+        var windowFraction = bucket.ElapsedFraction(window);
 
         // Label and percentage on the same line
         g.DrawString(label, font, textBrush, x, y);
@@ -249,17 +367,45 @@ public sealed class FlyoutPanel : Form
             if (fillWidth > 0)
             {
                 var fillRect = new Rectangle(x, y, fillWidth, barHeight);
-                var barColor = IconRenderer.GetColorForPercentage(pct);
+                var barColor = IconRenderer.GetUsageColor(pct, windowFraction, _colorMode);
                 using var barFillBrush = new SolidBrush(barColor);
                 using var fillPath = CreateRoundedRect(fillRect, barHeight / 2);
                 g.FillPath(barFillBrush, fillPath);
             }
         }
 
+        // Faint dividers turn the bar into a time ruler (hours on the 5-hour bar, days on the
+        // 7-day bar). Semi-transparent so they read on both the coloured fill and the dark track.
+        if (segments > 1)
+        {
+            using var dividerPen = new Pen(Color.FromArgb(90, 0, 0, 0));
+            for (var i = 1; i < segments; i++)
+            {
+                var dx = x + (int)Math.Round(width * (i / (double)segments));
+                g.DrawLine(dividerPen, dx, y, dx, y + barHeight);
+            }
+        }
+
+        // Time marker: where "now" sits in the reset window. Fill past the marker means you're
+        // ahead of pace (burning faster than the clock); fill behind it means headroom.
+        int? markerX = null;
+        if (windowFraction is { } tf)
+        {
+            markerX = x + (int)Math.Round(width * tf);
+            var overhang = Math.Max(2, barHeight / 3);
+            using var markerPen = new Pen(TimeMarkerColor, Math.Max(1.5f, barHeight / 6f));
+            g.DrawLine(markerPen, markerX.Value, y - overhang, markerX.Value, y + barHeight + overhang);
+        }
+
         y += barHeight + m.BarBottomGap;
 
-        // Reset countdown
-        g.DrawString(resetText, font, dimBrush, x, y);
+        // Reset countdown, centred under the time marker so "time remaining" sits below "where
+        // time is" — clamped to the bar's edges so it stops at an edge rather than spilling past.
+        var resetWidth = g.MeasureString(resetText, font).Width;
+        float resetX = x;
+        if (markerX is { } mx && resetWidth <= width)
+            resetX = Math.Clamp(mx - resetWidth / 2f, x, x + width - resetWidth);
+        g.DrawString(resetText, font, dimBrush, resetX, y);
     }
 
     private string FormatStatus()

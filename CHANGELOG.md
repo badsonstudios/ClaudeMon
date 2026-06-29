@@ -6,6 +6,17 @@ GitHub release; the release notes are taken from these entries.
 ## [Unreleased]
 
 ### Added
+- **Selectable taskbar style — Numbers or Bar** — a new **Style** option in Settings switches the
+  taskbar readout between the original stacked **Numbers** (`5hr · 7day`) and a compact **Bar +
+  time tick**: a horizontal usage bar with faint hour/day dividers and a bright "now" tick marking
+  how far through the reset window you are. Fill past the tick means you're burning faster than the
+  clock. The bar is pace-coloured (green→red by usage-vs-time, matching the tray icon and flyout).
+  Defaults to **Numbers**, so existing installs look unchanged until you opt in. Switches live, no
+  restart.
+- **Bar width** — a new **Bar width** option (Compact / Standard / Wide / Extra wide) sizes the bar
+  style; wider bars give the dividers and time tick more room to read. Only applies to the **Bar**
+  style. The label/percentage colour options apply only to the **Numbers** style, and the dialog
+  enables each set for the style it affects.
 - **Taskbar usage display on secondary monitors (opt-in)** — a new **Show on secondary
   monitors** option in Settings shows the usage readout on every monitor's taskbar, not just
   the primary one (on setups where Windows shows the taskbar on all displays). It's off by
@@ -21,6 +32,36 @@ GitHub release; the release notes are taken from these entries.
   spacing from the clock, whose width on those taskbars can only be estimated. The primary
   monitor is anchored exactly to its tray and is unaffected. Both the toggle and the position
   preview live as you change them, and revert if you cancel the dialog.
+
+### Changed
+- **Alerts are now pace-aware** — the old fixed-percentage alert modes (Warning/Critical
+  thresholds and Progressive every-10%) are replaced by a model built around usage-vs-time-left.
+  The primary **pace early-warning** fires when your usage relative to how far through the 5-hour
+  window you are means you're on track to run out before it resets (with a configurable
+  sensitivity: Early / Balanced / Late). A separate absolute **near-cap backstop** still fires a
+  critical "almost out" alert near the limit (default 90%) regardless of pace, and the weekly
+  (7-day) warning is unchanged. This matches the tray icon and flyout, which already colour by
+  pace. Existing configs fall back to the new defaults automatically.
+- **Settings window redesigned** — the dialog was rebuilt as flat sections (a section header over
+  a hairline divider) with consistent spacing and a single aligned label→control column, replacing
+  the boxy, unevenly-spaced GroupBox layout. Notification options now live under an **Alerts**
+  section alongside the new pace settings.
+- **Live preview of taskbar appearance in Settings** — changing any of the visual taskbar settings
+  (show on taskbar, style, bar width, also-show-7-day, label/percentage colours, secondary monitors,
+  position) now updates the real taskbar readout immediately while the dialog is open, so you can
+  see each choice before committing. Cancelling the dialog reverts to the saved appearance.
+- **Modern Settings window that follows the Windows theme** — the app now follows the Windows
+  light/dark setting (matching window chrome + themed controls), so the Settings dialog is light on
+  a light Windows and dark on a dark one. The dialog was modernised further: boolean options are
+  **toggle switches** instead of checkboxes, and a section's sub-options **collapse** when its master
+  toggle is off (so the dialog only shows what's relevant and shrinks to fit). The section headers,
+  toggle switches, numeric spin buttons, dialog buttons, and title bar all themed to match.
+
+### Fixed
+- **Taskbar bar tick is readable on a light taskbar** — the bar style's time-in-window tick was a
+  plain light line that washed out on a light-themed taskbar. It now detects the taskbar theme and
+  draws the tick with a contrasting halo (a dark mark with a light outline on light taskbars; a
+  light mark with a dark outline on dark ones), so it reads on either.
 
 ### Notes
 - Positioning is best-effort; on mixed-DPI multi-monitor setups the placement on secondary

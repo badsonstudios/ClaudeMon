@@ -3,7 +3,7 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
-## [Unreleased]
+## [0.10.0] - 2026-06-29
 
 ### Added
 - **Selectable taskbar style — Numbers or Bar** — a new **Style** option in Settings switches the
@@ -46,6 +46,10 @@ GitHub release; the release notes are taken from these entries.
   a hairline divider) with consistent spacing and a single aligned label→control column, replacing
   the boxy, unevenly-spaced GroupBox layout. Notification options now live under an **Alerts**
   section alongside the new pace settings.
+- **Installer enables "Run at Windows startup" by default** — the startup checkbox in the
+  installer is pre-checked on every install (previously it was only checked on a first install and
+  unchecked on upgrades), so ClaudeMon starts with Windows out of the box. You can still untick it
+  during setup to opt out.
 - **Live preview of taskbar appearance in Settings** — changing any of the visual taskbar settings
   (show on taskbar, style, bar width, also-show-7-day, label/percentage colours, secondary monitors,
   position) now updates the real taskbar readout immediately while the dialog is open, so you can
@@ -62,26 +66,16 @@ GitHub release; the release notes are taken from these entries.
   plain light line that washed out on a light-themed taskbar. It now detects the taskbar theme and
   draws the tick with a contrasting halo (a dark mark with a light outline on light taskbars; a
   light mark with a dark outline on dark ones), so it reads on either.
+- **Installer no longer hangs when ClaudeMon is already running** — upgrading over a running
+  instance could stall the installer on a non-cancellable "closing applications" step, because the
+  Windows Restart Manager can't close ClaudeMon's windowless tray process. The installer now stops
+  the running instance itself (and waits for it to exit) instead of relying on the Restart Manager,
+  so upgrades complete cleanly and the app relaunches.
 
 ### Notes
 - Positioning is best-effort; on mixed-DPI multi-monitor setups the placement on secondary
   taskbars may be slightly off (the app is system-DPI-aware) — use the horizontal-position
   setting to compensate.
-
-## [0.9.1] - 2026-06-28
-
-### Changed
-- **Installer now enables "Run at Windows startup" by default** — the startup checkbox in
-  the installer is pre-checked on every install (previously it was only checked on a first
-  install and unchecked on upgrades), so ClaudeMon starts with Windows out of the box. You
-  can still untick it during setup to opt out.
-
-### Fixed
-- **Installer no longer hangs when ClaudeMon is already running** — upgrading over a running
-  instance could stall the installer on a non-cancellable "closing applications" step,
-  because the Windows Restart Manager can't close ClaudeMon's windowless tray process. The
-  installer now stops the running instance itself (and waits for it to exit) instead of
-  relying on the Restart Manager, so upgrades complete cleanly and the app relaunches.
 
 ## [0.9.0] - 2026-06-27
 

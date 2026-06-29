@@ -9,7 +9,6 @@ public class AlertManagerTests : IDisposable
     private readonly NotifyIcon _notifyIcon;
     private readonly List<(string Title, string Text, ToolTipIcon Icon)> _notifications;
     private readonly AlertManager _alertManager;
-    private readonly DateTimeOffset _futureReset = DateTimeOffset.UtcNow.AddHours(3);
 
     public AlertManagerTests()
     {
@@ -21,12 +20,9 @@ public class AlertManagerTests : IDisposable
         });
     }
 
-    public void Dispose()
-    {
-        _notifyIcon.Dispose();
-    }
+    public void Dispose() => _notifyIcon.Dispose();
 
-    // --- Helper methods ---
+    // --- Helpers ---
 
     private static AppSettings DefaultSettings() => new();
 
@@ -36,150 +32,225 @@ public class AlertManagerTests : IDisposable
     private static AppSettings ResetEnabledSettings() =>
         new() { Notifications = new NotificationSettings { Enabled = true, NotifyOnReset = true } };
 
-    private static AppSettings ProgressiveSettings(int startPct = 70) =>
-        new()
-        {
-            AlertThresholds = new AlertThresholds
-            {
-                Mode = AlertMode.Progressive,
-                ProgressiveStartPct = startPct,
-            },
-        };
+    private static AppSettings SensitivitySettings(PaceSensitivity sensitivity) =>
+        new() { AlertThresholds = new AlertThresholds { PaceSensitivity = sensitivity } };
 
-    private UsageResponse FiveHourUsage(double pct) =>
-        new(new UsageBucket(pct, _futureReset), null);
+    private static AppSettings PaceDisabledSettings() =>
+        new() { AlertThresholds = new AlertThresholds { PaceAlertsEnabled = false } };
 
-    private UsageResponse SevenDayUsage(double pct) =>
-        new(null, new UsageBucket(pct, _futureReset));
-
-    private UsageResponse BothUsage(double fiveHourPct, double sevenDayPct) =>
-        new(new UsageBucket(fiveHourPct, _futureReset), new UsageBucket(sevenDayPct, _futureReset));
-
-    // ================================================================
-    // 1. No notification when notifications are disabled in settings
-    // ================================================================
-
-    [Fact]
-    public void Check_NotificationsDisabled_NoNotificationFired()
+    // A 5-hour bucket whose reset time places "now" at the given fraction through the window, so
+    // the pace ratio (usage ÷ elapsed-fraction) is controllable. Default 0.4 ⇒ 60% past pace ≈ 65%.
+    private static UsageBucket FiveHourBucket(double pct, double elapsedFraction = 0.4)
     {
-        var settings = DisabledSettings();
-        var usage = FiveHourUsage(99);
-
-        _alertManager.Check(usage, settings);
-
-        Assert.Empty(_notifications);
+        var reset = DateTimeOffset.UtcNow + TimeSpan.FromHours(5 * (1 - elapsedFraction));
+        return new UsageBucket(pct, reset);
     }
 
+    private static UsageResponse FiveHour(double pct, double elapsedFraction = 0.4) =>
+        new(FiveHourBucket(pct, elapsedFraction), null);
+
+    // A 5-hour bucket with an unknown reset time, so ElapsedFraction is null (no pace signal).
+    private static UsageResponse FiveHourNoReset(double pct) =>
+        new(new UsageBucket(pct, null), null);
+
+    private static UsageResponse SevenDay(double pct) =>
+        new(null, new UsageBucket(pct, DateTimeOffset.UtcNow.AddDays(3)));
+
+    private static UsageResponse Both(double fiveHourPct, double sevenDayPct, double elapsedFraction = 0.4) =>
+        new(FiveHourBucket(fiveHourPct, elapsedFraction), new UsageBucket(sevenDayPct, DateTimeOffset.UtcNow.AddDays(3)));
+
+    // ================================================================
+    // Notifications disabled
+    // ================================================================
+
     [Fact]
-    public void Check_NotificationsDisabledWith7DayAboveThreshold_NoNotificationFired()
+    public void Check_NotificationsDisabled_FiresNothing()
     {
-        var settings = DisabledSettings();
-        var usage = SevenDayUsage(90);
-
-        _alertManager.Check(usage, settings);
-
+        _alertManager.Check(FiveHour(95), DisabledSettings());
+        _alertManager.Check(SevenDay(90), DisabledSettings());
         Assert.Empty(_notifications);
     }
 
     // ================================================================
-    // 2. Warning notification fires when 5-hour usage crosses warning threshold
+    // Near-cap backstop (critical "Almost Out")
     // ================================================================
 
     [Fact]
-    public void Check_FiveHourAtWarningThreshold_FiresWarningNotification()
+    public void NearCap_AtThreshold_FiresCritical()
     {
-        var settings = DefaultSettings();
-        var usage = FiveHourUsage(50);
-
-        _alertManager.Check(usage, settings);
+        _alertManager.Check(FiveHour(90), DefaultSettings());
 
         Assert.Single(_notifications);
-        Assert.Equal("Usage Warning", _notifications[0].Title);
+        Assert.Equal("Almost Out", _notifications[0].Title);
+        Assert.Equal(ToolTipIcon.Error, _notifications[0].Icon);
+        Assert.Contains("90%", _notifications[0].Text);
+    }
+
+    [Fact]
+    public void NearCap_FiresOnlyOnce()
+    {
+        _alertManager.Check(FiveHour(92), DefaultSettings());
+        _alertManager.Check(FiveHour(95), DefaultSettings());
+        Assert.Single(_notifications);
+    }
+
+    [Fact]
+    public void NearCap_RefiresAfterDroppingClearAndRising()
+    {
+        _alertManager.Check(FiveHour(92), DefaultSettings());
+        Assert.Single(_notifications);
+
+        // Drop well clear of the near-cap and below pace, then rise back.
+        _alertManager.Check(FiveHour(30), DefaultSettings());
+        _alertManager.Check(FiveHour(92), DefaultSettings());
+
+        Assert.Equal(2, _notifications.Count);
+        Assert.All(_notifications, n => Assert.Equal("Almost Out", n.Title));
+    }
+
+    [Fact]
+    public void NearCap_RespectsCustomThreshold()
+    {
+        var settings = new AppSettings { AlertThresholds = new AlertThresholds { NearCapWarning = 75 } };
+
+        _alertManager.Check(FiveHour(76), settings);
+
+        Assert.Single(_notifications);
+        Assert.Equal("Almost Out", _notifications[0].Title);
+    }
+
+    // ================================================================
+    // Pace early-warning ("On Track to Run Out")
+    // ================================================================
+
+    [Fact]
+    public void Pace_OverPace_FiresWarning()
+    {
+        // 65% used at 40% through the window ⇒ ratio 1.625 ≥ 1.5 (Balanced).
+        _alertManager.Check(FiveHour(65, elapsedFraction: 0.4), DefaultSettings());
+
+        Assert.Single(_notifications);
+        Assert.Equal("On Track to Run Out", _notifications[0].Title);
         Assert.Equal(ToolTipIcon.Warning, _notifications[0].Icon);
-        Assert.Contains("50%", _notifications[0].Text);
     }
 
     [Fact]
-    public void Check_FiveHourAboveWarningThreshold_FiresWarningNotification()
+    public void Pace_OnPace_FiresNothing()
     {
-        var settings = DefaultSettings();
-        var usage = FiveHourUsage(65);
+        // 40% used at 40% elapsed ⇒ ratio 1.0, exactly on pace.
+        _alertManager.Check(FiveHour(40, elapsedFraction: 0.4), DefaultSettings());
+        Assert.Empty(_notifications);
+    }
 
-        _alertManager.Check(usage, settings);
+    [Fact]
+    public void Pace_JustUnderTrigger_FiresNothing()
+    {
+        // 55% used at 40% elapsed ⇒ ratio 1.375 < 1.5.
+        _alertManager.Check(FiveHour(55, elapsedFraction: 0.4), DefaultSettings());
+        Assert.Empty(_notifications);
+    }
+
+    [Fact]
+    public void Pace_FiresOnlyOnce()
+    {
+        _alertManager.Check(FiveHour(65, 0.4), DefaultSettings());
+        _alertManager.Check(FiveHour(68, 0.4), DefaultSettings());
+        Assert.Single(_notifications);
+    }
+
+    [Fact]
+    public void Pace_RefiresAfterDroppingClearAndRising()
+    {
+        _alertManager.Check(FiveHour(65, 0.4), DefaultSettings());
+        Assert.Single(_notifications);
+
+        // 45% at 40% ⇒ ratio 1.125, clear of 1.5 − 0.15.
+        _alertManager.Check(FiveHour(45, 0.4), DefaultSettings());
+        _alertManager.Check(FiveHour(65, 0.4), DefaultSettings());
+
+        Assert.Equal(2, _notifications.Count);
+        Assert.All(_notifications, n => Assert.Equal("On Track to Run Out", n.Title));
+    }
+
+    [Fact]
+    public void Pace_BelowUsageFloor_FiresNothing_EvenWhenPaceIsHigh()
+    {
+        // 15% used at 5% elapsed ⇒ ratio 3.0, but below the 20% usage floor → no cry-wolf.
+        _alertManager.Check(FiveHour(15, elapsedFraction: 0.05), DefaultSettings());
+        Assert.Empty(_notifications);
+    }
+
+    [Fact]
+    public void Pace_AtUsageFloorAndOverPace_Fires()
+    {
+        // 25% used at 10% elapsed ⇒ ratio 2.5 ≥ 1.5, above the floor.
+        _alertManager.Check(FiveHour(25, elapsedFraction: 0.10), DefaultSettings());
 
         Assert.Single(_notifications);
-        Assert.Equal("Usage Warning", _notifications[0].Title);
+        Assert.Equal("On Track to Run Out", _notifications[0].Title);
     }
 
     [Fact]
-    public void Check_FiveHourBelowWarningThreshold_NoNotificationFired()
+    public void Pace_Disabled_FiresNothing()
     {
-        var settings = DefaultSettings();
-        var usage = FiveHourUsage(49);
+        _alertManager.Check(FiveHour(65, 0.4), PaceDisabledSettings());
+        Assert.Empty(_notifications);
+    }
 
-        _alertManager.Check(usage, settings);
-
+    [Fact]
+    public void Pace_UnknownResetTime_FiresNothing()
+    {
+        // No reset time ⇒ no elapsed fraction ⇒ no pace signal (and below near-cap).
+        _alertManager.Check(FiveHourNoReset(65), DefaultSettings());
         Assert.Empty(_notifications);
     }
 
     [Theory]
-    [InlineData(50)]
-    [InlineData(65)]
-    [InlineData(79)]
-    public void Check_FiveHourAtOrAboveWarningBelowCritical_FiresWarningOnly(double pct)
+    [InlineData(PaceSensitivity.Early, true)]    // trigger 1.25 — 1.375 ratio fires
+    [InlineData(PaceSensitivity.Balanced, false)] // trigger 1.50 — 1.375 ratio does not
+    [InlineData(PaceSensitivity.Late, false)]     // trigger 2.00 — 1.375 ratio does not
+    public void Pace_Sensitivity_GovernsTrigger(PaceSensitivity sensitivity, bool shouldFire)
     {
-        var settings = DefaultSettings();
-        var usage = FiveHourUsage(pct);
+        // 55% used at 40% elapsed ⇒ ratio 1.375.
+        _alertManager.Check(FiveHour(55, elapsedFraction: 0.4), SensitivitySettings(sensitivity));
 
-        _alertManager.Check(usage, settings);
-
-        Assert.Single(_notifications);
-        Assert.Equal("Usage Warning", _notifications[0].Title);
-        Assert.Equal(ToolTipIcon.Warning, _notifications[0].Icon);
+        Assert.Equal(shouldFire ? 1 : 0, _notifications.Count);
     }
 
     // ================================================================
-    // 3. Critical notification fires when 5-hour usage crosses critical threshold
+    // Near-cap vs pace interaction
     // ================================================================
 
     [Fact]
-    public void Check_FiveHourAtCriticalThreshold_FiresCriticalNotification()
+    public void NearCap_SuppressesPace_WhenJumpingStraightToCritical()
     {
-        var settings = DefaultSettings();
-        var usage = FiveHourUsage(80);
-
-        _alertManager.Check(usage, settings);
+        // 95% is over pace AND past the near-cap — only the critical should fire.
+        _alertManager.Check(FiveHour(95, 0.4), DefaultSettings());
 
         Assert.Single(_notifications);
-        Assert.Equal("Usage Critical", _notifications[0].Title);
-        Assert.Equal(ToolTipIcon.Error, _notifications[0].Icon);
-        Assert.Contains("80%", _notifications[0].Text);
+        Assert.Equal("Almost Out", _notifications[0].Title);
     }
 
     [Fact]
-    public void Check_FiveHourAboveCriticalThreshold_FiresCriticalNotification()
+    public void Pace_ThenNearCap_FiresBoth()
     {
-        var settings = DefaultSettings();
-        var usage = FiveHourUsage(100);
-
-        _alertManager.Check(usage, settings);
-
+        _alertManager.Check(FiveHour(65, 0.4), DefaultSettings());
         Assert.Single(_notifications);
-        Assert.Equal("Usage Critical", _notifications[0].Title);
-        Assert.Contains("100%", _notifications[0].Text);
+        Assert.Equal("On Track to Run Out", _notifications[0].Title);
+
+        _alertManager.Check(FiveHour(95, 0.4), DefaultSettings());
+        Assert.Equal(2, _notifications.Count);
+        Assert.Equal("Almost Out", _notifications[1].Title);
     }
 
     // ================================================================
-    // 4. 7-day warning notification fires when crossing threshold
+    // 7-day warning
     // ================================================================
 
     [Fact]
-    public void Check_SevenDayAtWarningThreshold_FiresWeeklyWarning()
+    public void SevenDay_AtThreshold_FiresWeeklyWarning()
     {
-        var settings = DefaultSettings();
-        var usage = SevenDayUsage(50);
-
-        _alertManager.Check(usage, settings);
+        _alertManager.Check(SevenDay(50), DefaultSettings());
 
         Assert.Single(_notifications);
         Assert.Equal("Weekly Usage Warning", _notifications[0].Title);
@@ -188,561 +259,143 @@ public class AlertManagerTests : IDisposable
     }
 
     [Fact]
-    public void Check_SevenDayBelowWarningThreshold_NoNotificationFired()
+    public void SevenDay_BelowThreshold_FiresNothing()
     {
-        var settings = DefaultSettings();
-        var usage = SevenDayUsage(49);
-
-        _alertManager.Check(usage, settings);
-
+        _alertManager.Check(SevenDay(49), DefaultSettings());
         Assert.Empty(_notifications);
     }
 
     [Fact]
-    public void Check_SevenDayAboveWarningThreshold_FiresWeeklyWarning()
+    public void SevenDay_FiresOnlyOnce_ThenRefiresAfterDropAndRise()
     {
-        var settings = DefaultSettings();
-        var usage = SevenDayUsage(65);
-
-        _alertManager.Check(usage, settings);
-
-        Assert.Single(_notifications);
-        Assert.Equal("Weekly Usage Warning", _notifications[0].Title);
-    }
-
-    // ================================================================
-    // 5. Deduplication: notifications don't re-fire on consecutive checks
-    // ================================================================
-
-    [Fact]
-    public void Check_FiveHourWarningTwice_FiresOnlyOnce()
-    {
-        var settings = DefaultSettings();
-
-        _alertManager.Check(FiveHourUsage(55), settings);
-        _alertManager.Check(FiveHourUsage(60), settings);
-
-        Assert.Single(_notifications);
-    }
-
-    [Fact]
-    public void Check_FiveHourCriticalTwice_FiresOnlyOnce()
-    {
-        var settings = DefaultSettings();
-
-        _alertManager.Check(FiveHourUsage(85), settings);
-        _alertManager.Check(FiveHourUsage(90), settings);
-
-        Assert.Single(_notifications);
-    }
-
-    [Fact]
-    public void Check_SevenDayWarningTwice_FiresOnlyOnce()
-    {
-        var settings = DefaultSettings();
-
-        _alertManager.Check(SevenDayUsage(55), settings);
-        _alertManager.Check(SevenDayUsage(60), settings);
-
-        Assert.Single(_notifications);
-    }
-
-    [Fact]
-    public void Check_FiveHourWarningMultipleChecksAtSameLevel_FiresOnlyOnce()
-    {
-        var settings = DefaultSettings();
-
-        _alertManager.Check(FiveHourUsage(65), settings);
-        _alertManager.Check(FiveHourUsage(65), settings);
-        _alertManager.Check(FiveHourUsage(65), settings);
-
-        Assert.Single(_notifications);
-    }
-
-    // ================================================================
-    // 6. Notifications re-fire after usage drops and crosses again
-    // ================================================================
-
-    [Fact]
-    public void Check_FiveHourWarningDropsAndRises_FiresTwice()
-    {
-        var settings = DefaultSettings();
-
-        // First crossing
-        _alertManager.Check(FiveHourUsage(65), settings);
+        _alertManager.Check(SevenDay(55), DefaultSettings());
+        _alertManager.Check(SevenDay(60), DefaultSettings());
         Assert.Single(_notifications);
 
-        // Drop below warning threshold
-        _alertManager.Check(FiveHourUsage(30), settings);
-
-        // Second crossing
-        _alertManager.Check(FiveHourUsage(65), settings);
-        Assert.Equal(2, _notifications.Count);
-        Assert.All(_notifications, n => Assert.Equal("Usage Warning", n.Title));
-    }
-
-    [Fact]
-    public void Check_FiveHourCriticalDropsAndRises_FiresTwice()
-    {
-        var settings = DefaultSettings();
-
-        // First crossing
-        _alertManager.Check(FiveHourUsage(85), settings);
-        Assert.Single(_notifications);
-
-        // Drop below critical but stay above warning
-        _alertManager.Check(FiveHourUsage(65), settings);
-
-        // Second crossing
-        _alertManager.Check(FiveHourUsage(90), settings);
-        Assert.Equal(2, _notifications.Count);
-        Assert.All(_notifications, n => Assert.Equal("Usage Critical", n.Title));
-    }
-
-    [Fact]
-    public void Check_SevenDayWarningDropsAndRises_FiresTwice()
-    {
-        var settings = DefaultSettings();
-
-        _alertManager.Check(SevenDayUsage(55), settings);
-        Assert.Single(_notifications);
-
-        _alertManager.Check(SevenDayUsage(30), settings);
-
-        _alertManager.Check(SevenDayUsage(60), settings);
+        _alertManager.Check(SevenDay(30), DefaultSettings());
+        _alertManager.Check(SevenDay(60), DefaultSettings());
         Assert.Equal(2, _notifications.Count);
     }
 
-    // ================================================================
-    // 7. Critical notification suppresses warning (no double-notify)
-    // ================================================================
-
     [Fact]
-    public void Check_FiveHourJumpsToCritical_FiresCriticalOnly()
+    public void BothBucketsRisky_FiresPaceAndWeekly()
     {
-        var settings = DefaultSettings();
-        var usage = FiveHourUsage(85);
+        _alertManager.Check(Both(65, 55, elapsedFraction: 0.4), DefaultSettings());
 
-        _alertManager.Check(usage, settings);
-
-        Assert.Single(_notifications);
-        Assert.Equal("Usage Critical", _notifications[0].Title);
-        Assert.Equal(ToolTipIcon.Error, _notifications[0].Icon);
-    }
-
-    [Fact]
-    public void Check_FiveHourCriticalSuppressesSubsequentWarning_NoDoubleNotify()
-    {
-        var settings = DefaultSettings();
-
-        // Jump directly to critical
-        _alertManager.Check(FiveHourUsage(85), settings);
-        Assert.Single(_notifications);
-        Assert.Equal("Usage Critical", _notifications[0].Title);
-
-        // Drop to warning range -- warning flag was already set by critical
-        _alertManager.Check(FiveHourUsage(65), settings);
-
-        // Should not fire a warning because warning was already marked fired when critical fired
-        Assert.Single(_notifications);
-    }
-
-    [Fact]
-    public void Check_FiveHourWarningThenCritical_FiresBoth()
-    {
-        var settings = DefaultSettings();
-
-        // First: warning
-        _alertManager.Check(FiveHourUsage(65), settings);
-        Assert.Single(_notifications);
-        Assert.Equal("Usage Warning", _notifications[0].Title);
-
-        // Then: critical
-        _alertManager.Check(FiveHourUsage(85), settings);
         Assert.Equal(2, _notifications.Count);
-        Assert.Equal("Usage Critical", _notifications[1].Title);
+        Assert.Contains(_notifications, n => n.Title == "On Track to Run Out");
+        Assert.Contains(_notifications, n => n.Title == "Weekly Usage Warning");
     }
 
     // ================================================================
-    // 8. Reset notification fires when usage drops from >=20% to <5%
+    // Reset notification
     // ================================================================
 
     [Fact]
-    public void Check_UsageDropsFromHighToLow_FiresResetNotification()
+    public void Reset_DropFromHighToLow_FiresAndClearsFlags()
     {
         var settings = ResetEnabledSettings();
 
-        // First check at high usage to establish previous percentage
-        _alertManager.Check(FiveHourUsage(50), settings);
+        // Establish a high previous reading, then drop to a reset level.
+        _alertManager.Check(FiveHour(50, 0.4), settings);
         _notifications.Clear();
 
-        // Drop to below 5%
-        _alertManager.Check(FiveHourUsage(3), settings);
+        _alertManager.Check(FiveHour(3, 0.0), settings);
 
         Assert.Single(_notifications);
         Assert.Equal("Rate Limit Reset", _notifications[0].Title);
         Assert.Equal(ToolTipIcon.Info, _notifications[0].Icon);
-        Assert.Contains("reset", _notifications[0].Text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void Check_UsageDropsButNotifyOnResetDisabled_NoResetNotification()
+    public void Reset_Disabled_FiresNothing()
     {
         var settings = DefaultSettings(); // NotifyOnReset defaults to false
 
-        _alertManager.Check(FiveHourUsage(50), settings);
+        _alertManager.Check(FiveHour(50, 0.4), settings);
         _notifications.Clear();
-
-        _alertManager.Check(FiveHourUsage(3), settings);
+        _alertManager.Check(FiveHour(3, 0.0), settings);
 
         Assert.Empty(_notifications);
     }
 
     [Fact]
-    public void Check_UsageDropsFromLowToLow_NoResetNotification()
+    public void Reset_DoesNotRefireOnConsecutiveLowChecks()
     {
         var settings = ResetEnabledSettings();
 
-        // Previous was 10% (below 20 threshold)
-        _alertManager.Check(FiveHourUsage(10), settings);
+        _alertManager.Check(FiveHour(50, 0.4), settings);
         _notifications.Clear();
 
-        // Drop to 3% -- but previous was below 20, so no reset
-        _alertManager.Check(FiveHourUsage(3), settings);
-
-        Assert.Empty(_notifications);
-    }
-
-    [Fact]
-    public void Check_UsageDropsFromHighButNotBelowFive_NoResetNotification()
-    {
-        var settings = ResetEnabledSettings();
-
-        _alertManager.Check(FiveHourUsage(50), settings);
-        _notifications.Clear();
-
-        // Drop to 6% -- not below 5%
-        _alertManager.Check(FiveHourUsage(6), settings);
-
-        Assert.Empty(_notifications);
-    }
-
-    [Fact]
-    public void Check_ResetNotificationDoesNotReFireOnConsecutiveChecks()
-    {
-        var settings = ResetEnabledSettings();
-
-        _alertManager.Check(FiveHourUsage(50), settings);
-        _notifications.Clear();
-
-        // First reset notification
-        _alertManager.Check(FiveHourUsage(3), settings);
-        Assert.Single(_notifications);
-
-        // Second check still below 5% -- should not re-fire
-        _alertManager.Check(FiveHourUsage(2), settings);
+        _alertManager.Check(FiveHour(3, 0.0), settings);
+        _alertManager.Check(FiveHour(2, 0.0), settings);
         Assert.Single(_notifications);
     }
 
     [Fact]
-    public void Check_ResetClearsWarningAndCriticalFlags_AllowsRefire()
+    public void Reset_WithNotifyOff_StillRearmsAlerts()
+    {
+        // The reset notice is off (default), but a genuine window reset must still re-arm the
+        // 5-hour alerts so the next window fires fresh.
+        var settings = DefaultSettings();
+
+        _alertManager.Check(FiveHour(95, 0.4), settings);
+        Assert.Single(_notifications);
+        Assert.Equal("Almost Out", _notifications[0].Title);
+
+        // Window resets — no reset notice (NotifyOnReset off), and no new alert at ~0%.
+        _alertManager.Check(FiveHour(2, 0.0), settings);
+        Assert.Single(_notifications);
+
+        // The new window goes critical again → fires fresh.
+        _alertManager.Check(FiveHour(95, 0.4), settings);
+        Assert.Equal(2, _notifications.Count);
+        Assert.Equal("Almost Out", _notifications[1].Title);
+    }
+
+    [Fact]
+    public void Reset_ClearsPaceFlag_AllowingRefire()
     {
         var settings = ResetEnabledSettings();
 
-        // Fire a warning
-        _alertManager.Check(FiveHourUsage(65), settings);
+        // Pace warning fires.
+        _alertManager.Check(FiveHour(65, 0.4), settings);
         Assert.Single(_notifications);
-        Assert.Equal("Usage Warning", _notifications[0].Title);
+        Assert.Equal("On Track to Run Out", _notifications[0].Title);
 
-        // Usage drops to reset level
-        _alertManager.Check(FiveHourUsage(2), settings);
+        // Reset.
+        _alertManager.Check(FiveHour(2, 0.0), settings);
         Assert.Equal(2, _notifications.Count);
         Assert.Equal("Rate Limit Reset", _notifications[1].Title);
 
-        // Usage rises back to warning -- should fire again because reset cleared the flags
-        _alertManager.Check(FiveHourUsage(65), settings);
+        // Over pace again in the new window → fires fresh.
+        _alertManager.Check(FiveHour(65, 0.4), settings);
         Assert.Equal(3, _notifications.Count);
-        Assert.Equal("Usage Warning", _notifications[2].Title);
+        Assert.Equal("On Track to Run Out", _notifications[2].Title);
     }
 
     // ================================================================
-    // Edge cases and combined scenarios
+    // Null buckets / edge cases
     // ================================================================
 
     [Fact]
-    public void Check_NullFiveHourBucket_NoNotificationFired()
+    public void Check_NullFiveHour_FiresNoFiveHourAlert()
     {
-        var settings = DefaultSettings();
-        var usage = new UsageResponse(null, null);
-
-        _alertManager.Check(usage, settings);
-
+        _alertManager.Check(new UsageResponse(null, null), DefaultSettings());
         Assert.Empty(_notifications);
     }
 
     [Fact]
-    public void Check_NullSevenDayBucket_NoSevenDayNotification()
+    public void Check_NullSevenDay_FiresNoWeeklyAlert()
     {
-        var settings = DefaultSettings();
-        var usage = FiveHourUsage(30); // no seven-day bucket, below warning threshold
-
-        _alertManager.Check(usage, settings);
-
+        _alertManager.Check(FiveHour(10, 0.4), DefaultSettings()); // below floor, no pace alert
         Assert.Empty(_notifications);
     }
 
     [Fact]
-    public void Check_BothBucketsAboveThreshold_FiresBothNotifications()
+    public void Check_ZeroUsage_FiresNothing()
     {
-        var settings = DefaultSettings();
-        var usage = BothUsage(65, 55);
-
-        _alertManager.Check(usage, settings);
-
-        Assert.Equal(2, _notifications.Count);
-        Assert.Contains(_notifications, n => n.Title == "Usage Warning");
-        Assert.Contains(_notifications, n => n.Title == "Weekly Usage Warning");
-    }
-
-    [Fact]
-    public void Check_CustomThresholds_UsesProvidedValues()
-    {
-        var settings = new AppSettings
-        {
-            AlertThresholds = new AlertThresholds
-            {
-                FiveHourWarning = 50,
-                FiveHourCritical = 75,
-                SevenDayWarning = 40,
-            },
-        };
-
-        // 55% is above the custom warning threshold of 50
-        _alertManager.Check(FiveHourUsage(55), settings);
-
-        Assert.Single(_notifications);
-        Assert.Equal("Usage Warning", _notifications[0].Title);
-    }
-
-    [Fact]
-    public void Check_CustomCriticalThreshold_FiresCriticalAtCustomLevel()
-    {
-        var settings = new AppSettings
-        {
-            AlertThresholds = new AlertThresholds
-            {
-                FiveHourWarning = 50,
-                FiveHourCritical = 75,
-            },
-        };
-
-        _alertManager.Check(FiveHourUsage(76), settings);
-
-        Assert.Single(_notifications);
-        Assert.Equal("Usage Critical", _notifications[0].Title);
-    }
-
-    [Fact]
-    public void Check_FiveHourExactlyAtBoundary_UsageDropFromWarningToCriticalDrop_RefiresCorrectly()
-    {
-        var settings = DefaultSettings();
-
-        // Go to critical
-        _alertManager.Check(FiveHourUsage(85), settings);
-        Assert.Single(_notifications);
-        Assert.Equal("Usage Critical", _notifications[0].Title);
-
-        // Drop to warning range (clears critical flag but not warning)
-        _alertManager.Check(FiveHourUsage(65), settings);
-        Assert.Single(_notifications); // no new notification
-
-        // Rise back to critical
-        _alertManager.Check(FiveHourUsage(90), settings);
-        Assert.Equal(2, _notifications.Count);
-        Assert.Equal("Usage Critical", _notifications[1].Title);
-    }
-
-    [Fact]
-    public void Check_ZeroPercent_NoNotificationFired()
-    {
-        var settings = DefaultSettings();
-
-        _alertManager.Check(FiveHourUsage(0), settings);
-
+        _alertManager.Check(FiveHour(0, 0.4), DefaultSettings());
         Assert.Empty(_notifications);
-    }
-
-    [Fact]
-    public void Check_FiveHourDropsBelowWarning_ClearsBothFlags()
-    {
-        var settings = DefaultSettings();
-
-        // Fire critical
-        _alertManager.Check(FiveHourUsage(85), settings);
-        Assert.Single(_notifications);
-
-        // Drop below warning threshold entirely
-        _alertManager.Check(FiveHourUsage(30), settings);
-
-        // Both warning and critical should re-fire if crossed again
-        _alertManager.Check(FiveHourUsage(65), settings);
-        Assert.Equal(2, _notifications.Count);
-        Assert.Equal("Usage Warning", _notifications[1].Title);
-    }
-
-    // ================================================================
-    // Progressive mode: fires at each 10% step above start threshold
-    // ================================================================
-
-    [Fact]
-    public void Progressive_AtStartThreshold_FiresNotification()
-    {
-        var settings = ProgressiveSettings(70);
-
-        _alertManager.Check(FiveHourUsage(70), settings);
-
-        Assert.Single(_notifications);
-        Assert.Equal("Usage Warning", _notifications[0].Title);
-        Assert.Contains("70%", _notifications[0].Text);
-    }
-
-    [Fact]
-    public void Progressive_BelowStartThreshold_NoNotification()
-    {
-        var settings = ProgressiveSettings(70);
-
-        _alertManager.Check(FiveHourUsage(69), settings);
-
-        Assert.Empty(_notifications);
-    }
-
-    [Fact]
-    public void Progressive_RisesThrough_FiresAtEachStep()
-    {
-        var settings = ProgressiveSettings(70);
-
-        // Hits 70% step
-        _alertManager.Check(FiveHourUsage(72), settings);
-        Assert.Single(_notifications);
-
-        // Hits 80% step
-        _alertManager.Check(FiveHourUsage(82), settings);
-        Assert.Equal(2, _notifications.Count);
-
-        // Hits 90% step
-        _alertManager.Check(FiveHourUsage(92), settings);
-        Assert.Equal(3, _notifications.Count);
-    }
-
-    [Fact]
-    public void Progressive_JumpsToHigh_FiresAllCrossedSteps()
-    {
-        var settings = ProgressiveSettings(70);
-
-        // Jump straight to 95% -- should fire 70, 80, and 90 steps
-        _alertManager.Check(FiveHourUsage(95), settings);
-
-        Assert.Equal(3, _notifications.Count);
-    }
-
-    [Fact]
-    public void Progressive_SameStepTwice_FiresOnlyOnce()
-    {
-        var settings = ProgressiveSettings(70);
-
-        _alertManager.Check(FiveHourUsage(75), settings);
-        _alertManager.Check(FiveHourUsage(78), settings);
-
-        Assert.Single(_notifications);
-    }
-
-    [Fact]
-    public void Progressive_DropsAndRises_RefiresStep()
-    {
-        var settings = ProgressiveSettings(70);
-
-        // Fire 70% step
-        _alertManager.Check(FiveHourUsage(75), settings);
-        Assert.Single(_notifications);
-
-        // Drop below 70%
-        _alertManager.Check(FiveHourUsage(65), settings);
-
-        // Rise again -- should re-fire
-        _alertManager.Check(FiveHourUsage(75), settings);
-        Assert.Equal(2, _notifications.Count);
-    }
-
-    [Fact]
-    public void Progressive_At90Percent_UsesErrorIcon()
-    {
-        var settings = ProgressiveSettings(70);
-
-        // Get past 70 and 80 first
-        _alertManager.Check(FiveHourUsage(72), settings);
-        _alertManager.Check(FiveHourUsage(82), settings);
-
-        // 90% step should use Error icon
-        _alertManager.Check(FiveHourUsage(92), settings);
-
-        Assert.Equal(3, _notifications.Count);
-        Assert.Equal(ToolTipIcon.Warning, _notifications[0].Icon);
-        Assert.Equal(ToolTipIcon.Warning, _notifications[1].Icon);
-        Assert.Equal(ToolTipIcon.Error, _notifications[2].Icon);
-        Assert.Equal("Usage Critical", _notifications[2].Title);
-    }
-
-    [Fact]
-    public void Progressive_SevenDayStillWorks()
-    {
-        var settings = ProgressiveSettings(70);
-        var usage = BothUsage(75, 55);
-
-        _alertManager.Check(usage, settings);
-
-        Assert.Equal(2, _notifications.Count);
-        Assert.Contains(_notifications, n => n.Title == "Usage Warning");
-        Assert.Contains(_notifications, n => n.Title == "Weekly Usage Warning");
-    }
-
-    [Fact]
-    public void Progressive_CustomStartPct_UsesProvidedValue()
-    {
-        var settings = ProgressiveSettings(50);
-
-        // 55% is above the start of 50%
-        _alertManager.Check(FiveHourUsage(55), settings);
-        Assert.Single(_notifications);
-
-        // 62% is above 60% step
-        _alertManager.Check(FiveHourUsage(62), settings);
-        Assert.Equal(2, _notifications.Count);
-    }
-
-    [Fact]
-    public void Progressive_ResetClearsSteps()
-    {
-        var settings = new AppSettings
-        {
-            AlertThresholds = new AlertThresholds
-            {
-                Mode = AlertMode.Progressive,
-                ProgressiveStartPct = 70,
-            },
-            Notifications = new NotificationSettings { Enabled = true, NotifyOnReset = true },
-        };
-
-        // Fire 70% step
-        _alertManager.Check(FiveHourUsage(75), settings);
-        Assert.Single(_notifications);
-
-        // Reset
-        _alertManager.Check(FiveHourUsage(2), settings);
-        Assert.Equal(2, _notifications.Count);
-        Assert.Equal("Rate Limit Reset", _notifications[1].Title);
-
-        // Rise again -- should re-fire because reset cleared steps
-        _alertManager.Check(FiveHourUsage(75), settings);
-        Assert.Equal(3, _notifications.Count);
     }
 }

@@ -21,7 +21,10 @@ using Microsoft.Win32;
 public sealed class TaskbarOverlayManager : IDisposable
 {
     /// <summary>The latest reading to seed onto overlays created after a monitor connects.</summary>
-    private readonly record struct OverlayReading(bool SignInExpired, double Percentage, double? SevenDayPercentage);
+    private readonly record struct OverlayReading(bool SignInExpired, TaskbarReading Reading);
+
+    /// <summary>Raised when any overlay is clicked, carrying that readout's screen bounds.</summary>
+    public event EventHandler<System.Drawing.Rectangle>? OverlayClicked;
 
     // Keyed by monitor device name (e.g. \\.\DISPLAY1) — one overlay per taskbar.
     private readonly Dictionary<string, TaskbarOverlayWindow> _overlays = new();
@@ -30,6 +33,9 @@ public sealed class TaskbarOverlayManager : IDisposable
     // Presentation settings seeded onto every overlay (and any created later).
     private TaskbarTextColor _labelColor = TaskbarTextColor.White;
     private TaskbarTextColor _numberColor = TaskbarTextColor.Auto;
+    private TaskbarStyle _style = TaskbarStyle.Numbers;
+    private TaskbarBarWidth _barWidth = TaskbarBarWidth.Standard;
+    private UsageColorMode _colorMode = UsageColorMode.Pace;
     private bool _showSevenDay;
     private bool _allMonitors;
     private int _horizontalOffset;
@@ -54,6 +60,30 @@ public sealed class TaskbarOverlayManager : IDisposable
         _numberColor = numberColor;
         foreach (var overlay in _overlays.Values)
             overlay.SetColors(labelColor, numberColor);
+    }
+
+    /// <summary>Set the readout style (numbers vs bar) on every overlay (and ones created later).</summary>
+    public void SetStyle(TaskbarStyle style)
+    {
+        _style = style;
+        foreach (var overlay in _overlays.Values)
+            overlay.SetStyle(style);
+    }
+
+    /// <summary>Set the bar-style width on every overlay (and ones created later).</summary>
+    public void SetBarWidth(TaskbarBarWidth barWidth)
+    {
+        _barWidth = barWidth;
+        foreach (var overlay in _overlays.Values)
+            overlay.SetBarWidth(barWidth);
+    }
+
+    /// <summary>Set the usage colour mode (pace vs level) on every overlay (and ones created later).</summary>
+    public void SetColorMode(UsageColorMode colorMode)
+    {
+        _colorMode = colorMode;
+        foreach (var overlay in _overlays.Values)
+            overlay.SetColorMode(colorMode);
     }
 
     /// <summary>Toggle the dual "5hr / 7day" readout on every overlay.</summary>
@@ -101,20 +131,22 @@ public sealed class TaskbarOverlayManager : IDisposable
     }
 
     /// <summary>Push a fresh usage reading to every overlay.</summary>
-    public void UpdateUsage(double percentage, double? sevenDayPercentage)
+    public void UpdateUsage(TaskbarReading reading)
     {
-        _reading = new OverlayReading(SignInExpired: false, percentage, sevenDayPercentage);
+        _reading = new OverlayReading(SignInExpired: false, reading);
         foreach (var overlay in _overlays.Values)
-            overlay.UpdateUsage(percentage, sevenDayPercentage);
+            overlay.UpdateUsage(reading);
     }
 
     /// <summary>Switch every overlay to the neutral sign-in-expired marker.</summary>
     public void ShowSignInExpired()
     {
-        _reading = new OverlayReading(SignInExpired: true, Percentage: 0, SevenDayPercentage: null);
+        _reading = new OverlayReading(SignInExpired: true, default);
         foreach (var overlay in _overlays.Values)
             overlay.ShowSignInExpired();
     }
+
+    private void OnOverlayClicked(object? sender, System.Drawing.Rectangle bounds) => OverlayClicked?.Invoke(this, bounds);
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
     {
@@ -158,6 +190,7 @@ public sealed class TaskbarOverlayManager : IDisposable
             try
             {
                 overlay = new TaskbarOverlayWindow(taskbar.MonitorDevice, _logger);
+                overlay.Clicked += OnOverlayClicked;
                 Seed(overlay);
                 overlay.SetEnabled(true);
             }
@@ -184,6 +217,9 @@ public sealed class TaskbarOverlayManager : IDisposable
     private void Seed(TaskbarOverlayWindow overlay)
     {
         overlay.SetColors(_labelColor, _numberColor);
+        overlay.SetStyle(_style);
+        overlay.SetBarWidth(_barWidth);
+        overlay.SetColorMode(_colorMode);
         overlay.SetShowSevenDay(_showSevenDay);
         overlay.SetHorizontalOffset(_horizontalOffset);
 
@@ -192,7 +228,7 @@ public sealed class TaskbarOverlayManager : IDisposable
             if (reading.SignInExpired)
                 overlay.ShowSignInExpired();
             else
-                overlay.UpdateUsage(reading.Percentage, reading.SevenDayPercentage);
+                overlay.UpdateUsage(reading.Reading);
         }
     }
 

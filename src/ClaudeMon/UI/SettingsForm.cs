@@ -1,40 +1,94 @@
 namespace ClaudeMon.UI;
 
+using System.Drawing;
 using ClaudeMon.Configuration;
 using ClaudeMon.Models;
 
+/// <summary>
+/// The settings dialog: flat sections (a coral header over a hairline divider) with toggle
+/// switches for booleans and a single right-aligned control column. Sub-options <em>collapse</em>
+/// when their parent toggle is off — rows are tracked in <see cref="_rows"/> with a visibility
+/// predicate and <see cref="Relayout"/> repositions the visible ones and resizes the window. The
+/// app-wide dark mode (<c>Application.SetColorMode</c> in Program.cs) themes the standard controls;
+/// this form only adds the accents and the custom <see cref="ToggleSwitch"/>es.
+/// </summary>
 public sealed class SettingsForm : Form
 {
     private readonly ConfigManager _configManager;
 
-    // Invoked live as the secondary-monitor settings change so the overlays update while the
-    // dialog is open; the saved values are restored if the dialog is cancelled.
-    private readonly Action<int>? _onHorizontalOffsetPreview;
-    private readonly Action<bool>? _onAllMonitorsPreview;
-    private int _originalOffset;
-    private bool _originalAllMonitors;
+    // The live overlays, so the taskbar appearance previews on the real taskbar as the visual
+    // settings change. Null in contexts without overlays. Reverted from _originalTaskbar on cancel.
+    private readonly TaskbarOverlayManager? _overlayPreview;
+    private TaskbarDisplaySettings _originalTaskbar = new();
+
+    // True while the constructor + LoadSettings seed the controls, so their change events don't
+    // relayout or fire live previews until the saved values are in place.
+    private bool _loading = true;
 
     private readonly ComboBox _pollIntervalCombo;
-    private readonly RadioButton _thresholdRadio;
-    private readonly RadioButton _progressiveRadio;
-    private readonly Panel _thresholdPanel;
-    private readonly Panel _progressivePanel;
-    private readonly NumericUpDown _warningThreshold;
-    private readonly NumericUpDown _criticalThreshold;
-    private readonly NumericUpDown _progressiveStartThreshold;
-    private readonly NumericUpDown _sevenDayWarningThreshold;
-    private readonly CheckBox _notificationsCheckbox;
-    private readonly CheckBox _notifyOnResetCheckbox;
-    private readonly CheckBox _taskbarDisplayCheckbox;
-    private readonly CheckBox _allMonitorsCheckbox;
-    private readonly CheckBox _showSevenDayCheckbox;
+    private readonly ToggleSwitch _notificationsToggle;
+    private readonly ToggleSwitch _paceAlertsToggle;
+    private readonly ComboBox _paceSensitivityCombo;
+    private readonly NumericUpDown _nearCapNumeric;
+    private readonly NumericUpDown _sevenDayWarningNumeric;
+    private readonly ToggleSwitch _notifyOnResetToggle;
+    private readonly ToggleSwitch _taskbarToggle;
+    private readonly ComboBox _styleCombo;
+    private readonly ComboBox _barWidthCombo;
+    private readonly ToggleSwitch _showSevenDayToggle;
     private readonly ComboBox _labelColorCombo;
     private readonly ComboBox _numberColorCombo;
+    private readonly ToggleSwitch _allMonitorsToggle;
     private readonly NumericUpDown _horizontalOffsetNumeric;
-    private readonly CheckBox _runAtStartupCheckbox;
-    private readonly CheckBox _checkForUpdatesCheckbox;
+    private readonly ToggleSwitch _runAtStartupToggle;
+    private readonly ToggleSwitch _checkForUpdatesToggle;
+    private readonly Button _okButton;
+    private readonly Button _cancelButton;
 
-    // Dropdown options paired with the preset they map to.
+    // --- Layout metrics ---
+    private const int Pad = 24;          // horizontal + bottom margin
+    private const int TopMargin = 6;     // smaller top margin so the first section sits near the top
+    private const int ContentRight = 480 - Pad; // 456
+    private const int ControlLeft = 250;
+    private const int ComboWidth = ContentRight - ControlLeft; // 206
+    private const int NumericWidth = 64;
+    private const int ToggleWidth = 40;
+
+    // Light or dark accents/controls, matching the Windows app theme.
+    private readonly Theme _theme = Theme.Current;
+
+    // An ordered layout row: its controls (each with a vertical offset within the row), the row
+    // height, and an optional visibility predicate (null = always shown).
+    private sealed class RowDef
+    {
+        public required (Control Control, int OffsetY)[] Items;
+        public required int Height;
+        public Func<bool>? Visible;
+    }
+
+    private readonly List<RowDef> _rows = [];
+
+    private static readonly (string Text, PaceSensitivity Value)[] PaceSensitivityOptions =
+    [
+        ("Early — cautious", PaceSensitivity.Early),
+        ("Balanced", PaceSensitivity.Balanced),
+        ("Late — only when well over", PaceSensitivity.Late),
+    ];
+
+    private static readonly (string Text, TaskbarStyle Value)[] StyleOptions =
+    [
+        ("Numbers (5hr · 7day)", TaskbarStyle.Numbers),
+        ("Bar + time tick", TaskbarStyle.Bar),
+    ];
+
+    private static readonly (string Text, TaskbarBarWidth Value)[] BarWidthOptions =
+    [
+        ("Compact", TaskbarBarWidth.Compact),
+        ("Standard", TaskbarBarWidth.Standard),
+        ("Wide", TaskbarBarWidth.Wide),
+        ("Extra wide", TaskbarBarWidth.ExtraWide),
+    ];
+
     private static readonly (string Text, TaskbarTextColor Value)[] LabelColorOptions =
     [
         ("White", TaskbarTextColor.White),
@@ -52,433 +106,271 @@ public sealed class SettingsForm : Form
         ("Dark gray", TaskbarTextColor.DarkGray),
     ];
 
-    public SettingsForm(
-        ConfigManager configManager,
-        Action<int>? onHorizontalOffsetPreview = null,
-        Action<bool>? onAllMonitorsPreview = null)
+    public SettingsForm(ConfigManager configManager, TaskbarOverlayManager? overlayPreview = null)
     {
         _configManager = configManager;
-        _onHorizontalOffsetPreview = onHorizontalOffsetPreview;
-        _onAllMonitorsPreview = onAllMonitorsPreview;
+        _overlayPreview = overlayPreview;
 
         Text = "ClaudeMon Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        Font = new Font("Segoe UI", 9f);
-        ClientSize = new Size(700, 800);
+        Font = new Font("Segoe UI", 9.75f);
+        // Background + control colours come from the app-wide dark mode (Program.cs).
+        ClientSize = new Size(480, 600);
 
-        // --- Monitoring group ---
-        var monitoringGroup = new GroupBox
-        {
-            Text = "Monitoring",
-            Location = new Point(20, 20),
-            Size = new Size(660, 80),
-        };
-        Controls.Add(monitoringGroup);
+        // --- Monitoring ---
+        AddHeader("Monitoring");
+        _pollIntervalCombo = AddComboRow("Check usage every", ["1 minute", "3 minutes", "5 minutes", "10 minutes"]);
 
-        var pollLabel = new Label
-        {
-            Text = "Check usage every:",
-            Location = new Point(20, 36),
-            AutoSize = true,
-        };
-        monitoringGroup.Controls.Add(pollLabel);
+        // --- Alerts ---
+        AddHeader("Alerts");
+        _notificationsToggle = AddToggleRow("Enable desktop notifications");
+        bool AlertsOn() => _notificationsToggle.Checked;
+        _paceAlertsToggle = AddToggleRow("Warn when on track to run out", indent: true, visible: AlertsOn);
+        _paceSensitivityCombo = AddComboRow("Sensitivity", PaceSensitivityOptions.Select(o => o.Text),
+            indent: true, visible: () => AlertsOn() && _paceAlertsToggle.Checked);
+        _nearCapNumeric = AddNumericRow("Critical alert near the limit at", 50, 100, indent: true, visible: AlertsOn);
+        _sevenDayWarningNumeric = AddNumericRow("Weekly (7-day) warning at", 10, 100, indent: true, visible: AlertsOn);
+        _notifyOnResetToggle = AddToggleRow("Notify when the limit resets", indent: true, visible: AlertsOn);
 
-        _pollIntervalCombo = new ComboBox
-        {
-            Location = new Point(300, 33),
-            Width = 200,
-            DropDownStyle = ComboBoxStyle.DropDownList,
-        };
-        _pollIntervalCombo.Items.AddRange(["1 minute", "3 minutes", "5 minutes", "10 minutes"]);
-        monitoringGroup.Controls.Add(_pollIntervalCombo);
+        // --- Taskbar ---
+        AddHeader("Taskbar display");
+        _taskbarToggle = AddToggleRow("Show usage on the Windows taskbar");
+        bool TaskbarOn() => _taskbarToggle.Checked;
+        bool IsBar() => SelectedOption(_styleCombo, StyleOptions) == TaskbarStyle.Bar;
+        _styleCombo = AddComboRow("Style", StyleOptions.Select(o => o.Text), indent: true, visible: TaskbarOn);
+        _barWidthCombo = AddComboRow("Bar width", BarWidthOptions.Select(o => o.Text),
+            indent: true, visible: () => TaskbarOn() && IsBar());
+        _showSevenDayToggle = AddToggleRow("Also show 7-day usage (5hr · 7day)", indent: true, visible: TaskbarOn);
+        _labelColorCombo = AddComboRow("\"Claude\" label color", LabelColorOptions.Select(o => o.Text),
+            indent: true, visible: () => TaskbarOn() && !IsBar());
+        _numberColorCombo = AddComboRow("Percentage color", NumberColorOptions.Select(o => o.Text),
+            indent: true, visible: () => TaskbarOn() && !IsBar());
+        _allMonitorsToggle = AddToggleRow("Show on secondary monitors", indent: true, visible: TaskbarOn);
+        _horizontalOffsetNumeric = AddNumericRow("Position (− left / + right)", -300, 300,
+            indent: true, visible: () => TaskbarOn() && _allMonitorsToggle.Checked, suffix: null);
+        _horizontalOffsetNumeric.Increment = 2;
 
-        // --- Alert Thresholds group ---
-        var alertGroup = new GroupBox
-        {
-            Text = "Alert Thresholds",
-            Location = new Point(20, 116),
-            Size = new Size(660, 210),
-        };
-        Controls.Add(alertGroup);
-
-        // Mode radio buttons
-        _thresholdRadio = new RadioButton
-        {
-            Text = "Warning / Critical thresholds",
-            Location = new Point(20, 30),
-            AutoSize = true,
-        };
-        _thresholdRadio.CheckedChanged += OnAlertModeChanged;
-        alertGroup.Controls.Add(_thresholdRadio);
-
-        _progressiveRadio = new RadioButton
-        {
-            Text = "Progressive alerts (every 10%)",
-            Location = new Point(340, 30),
-            AutoSize = true,
-        };
-        alertGroup.Controls.Add(_progressiveRadio);
-
-        // Threshold panel (warning + critical)
-        _thresholdPanel = new Panel
-        {
-            Location = new Point(0, 58),
-            Size = new Size(660, 100),
-        };
-        alertGroup.Controls.Add(_thresholdPanel);
-
-        var warningLabel = new Label
-        {
-            Text = "Warning notification at:",
-            Location = new Point(20, 12),
-            AutoSize = true,
-        };
-        _thresholdPanel.Controls.Add(warningLabel);
-
-        _warningThreshold = new NumericUpDown
-        {
-            Location = new Point(300, 9),
-            Width = 100,
-            Minimum = 10,
-            Maximum = 100,
-        };
-        _thresholdPanel.Controls.Add(_warningThreshold);
-
-        var warningPctLabel = new Label
-        {
-            Text = "%",
-            Location = new Point(410, 12),
-            AutoSize = true,
-        };
-        _thresholdPanel.Controls.Add(warningPctLabel);
-
-        var criticalLabel = new Label
-        {
-            Text = "Critical notification at:",
-            Location = new Point(20, 52),
-            AutoSize = true,
-        };
-        _thresholdPanel.Controls.Add(criticalLabel);
-
-        _criticalThreshold = new NumericUpDown
-        {
-            Location = new Point(300, 49),
-            Width = 100,
-            Minimum = 10,
-            Maximum = 100,
-        };
-        _thresholdPanel.Controls.Add(_criticalThreshold);
-
-        var criticalPctLabel = new Label
-        {
-            Text = "%",
-            Location = new Point(410, 52),
-            AutoSize = true,
-        };
-        _thresholdPanel.Controls.Add(criticalPctLabel);
-
-        // Progressive panel (start percentage)
-        _progressivePanel = new Panel
-        {
-            Location = new Point(0, 58),
-            Size = new Size(660, 100),
-        };
-        alertGroup.Controls.Add(_progressivePanel);
-
-        var progressiveLabel = new Label
-        {
-            Text = "Start alerting at:",
-            Location = new Point(20, 12),
-            AutoSize = true,
-        };
-        _progressivePanel.Controls.Add(progressiveLabel);
-
-        _progressiveStartThreshold = new NumericUpDown
-        {
-            Location = new Point(300, 9),
-            Width = 100,
-            Minimum = 10,
-            Maximum = 90,
-            Increment = 10,
-        };
-        _progressivePanel.Controls.Add(_progressiveStartThreshold);
-
-        var progressivePctLabel = new Label
-        {
-            Text = "%",
-            Location = new Point(410, 12),
-            AutoSize = true,
-        };
-        _progressivePanel.Controls.Add(progressivePctLabel);
-
-        var progressiveHint = new Label
-        {
-            Text = "Sends a notification at each 10% step above this value.",
-            Location = new Point(20, 46),
-            AutoSize = true,
-            ForeColor = SystemColors.GrayText,
-        };
-        _progressivePanel.Controls.Add(progressiveHint);
-
-        // 7-day warning — always visible (AlertManager checks it independently of the
-        // 5-hour mode above), so it lives in the group rather than a mode panel.
-        var sevenDayLabel = new Label
-        {
-            Text = "7-day warning notification at:",
-            Location = new Point(20, 172),
-            AutoSize = true,
-        };
-        alertGroup.Controls.Add(sevenDayLabel);
-
-        _sevenDayWarningThreshold = new NumericUpDown
-        {
-            Location = new Point(300, 169),
-            Width = 100,
-            Minimum = 10,
-            Maximum = 100,
-        };
-        alertGroup.Controls.Add(_sevenDayWarningThreshold);
-
-        var sevenDayPctLabel = new Label
-        {
-            Text = "%",
-            Location = new Point(410, 172),
-            AutoSize = true,
-        };
-        alertGroup.Controls.Add(sevenDayPctLabel);
-
-        // --- Taskbar Display group ---
-        var taskbarGroup = new GroupBox
-        {
-            Text = "Taskbar Display",
-            Location = new Point(20, 342),
-            Size = new Size(660, 224),
-        };
-        Controls.Add(taskbarGroup);
-
-        _taskbarDisplayCheckbox = new CheckBox
-        {
-            Text = "Show usage on the Windows taskbar",
-            Location = new Point(20, 30),
-            AutoSize = true,
-        };
-        _taskbarDisplayCheckbox.CheckedChanged += OnTaskbarDisplayToggled;
-        taskbarGroup.Controls.Add(_taskbarDisplayCheckbox);
-
-        _showSevenDayCheckbox = new CheckBox
-        {
-            Text = "Also show 7-day usage (5hr / 7day)",
-            Location = new Point(40, 58),
-            AutoSize = true,
-        };
-        taskbarGroup.Controls.Add(_showSevenDayCheckbox);
-
-        var labelColorLabel = new Label
-        {
-            Text = "\"Claude\" label color:",
-            Location = new Point(40, 90),
-            AutoSize = true,
-        };
-        taskbarGroup.Controls.Add(labelColorLabel);
-
-        _labelColorCombo = new ComboBox
-        {
-            Location = new Point(300, 87),
-            Width = 200,
-            DropDownStyle = ComboBoxStyle.DropDownList,
-        };
-        _labelColorCombo.Items.AddRange(LabelColorOptions.Select(o => (object)o.Text).ToArray());
-        taskbarGroup.Controls.Add(_labelColorCombo);
-
-        var numberColorLabel = new Label
-        {
-            Text = "Percentage color:",
-            Location = new Point(40, 122),
-            AutoSize = true,
-        };
-        taskbarGroup.Controls.Add(numberColorLabel);
-
-        _numberColorCombo = new ComboBox
-        {
-            Location = new Point(300, 119),
-            Width = 200,
-            DropDownStyle = ComboBoxStyle.DropDownList,
-        };
-        _numberColorCombo.Items.AddRange(NumberColorOptions.Select(o => (object)o.Text).ToArray());
-        taskbarGroup.Controls.Add(_numberColorCombo);
-
-        // The multi-monitor options sit last (lowest priority) and together: enable the
-        // secondary-monitor readout, then fine-tune its position relative to the clock.
-        _allMonitorsCheckbox = new CheckBox
-        {
-            Text = "Show on secondary monitors",
-            Location = new Point(40, 154),
-            AutoSize = true,
-        };
-        // Gates the position nudge below, and live-previews the secondary overlays appearing.
-        _allMonitorsCheckbox.CheckedChanged += OnTaskbarDisplayToggled;
-        _allMonitorsCheckbox.CheckedChanged += OnAllMonitorsChanged;
-        taskbarGroup.Controls.Add(_allMonitorsCheckbox);
-
-        var offsetLabel = new Label
-        {
-            Text = "Position:",
-            Location = new Point(40, 186),
-            AutoSize = true,
-        };
-        taskbarGroup.Controls.Add(offsetLabel);
-
-        _horizontalOffsetNumeric = new NumericUpDown
-        {
-            Location = new Point(300, 183),
-            Width = 100,
-            Minimum = -300,
-            Maximum = 300,
-            Increment = 2,
-        };
-        _horizontalOffsetNumeric.ValueChanged += OnHorizontalOffsetChanged;
-        taskbarGroup.Controls.Add(_horizontalOffsetNumeric);
-
-        var offsetHint = new Label
-        {
-            Text = "− left  /  + right",
-            Location = new Point(410, 186),
-            AutoSize = true,
-            ForeColor = SystemColors.GrayText,
-        };
-        taskbarGroup.Controls.Add(offsetHint);
-
-        // --- General group ---
-        var generalGroup = new GroupBox
-        {
-            Text = "General",
-            Location = new Point(20, 582),
-            Size = new Size(660, 156),
-        };
-        Controls.Add(generalGroup);
-
-        _notificationsCheckbox = new CheckBox
-        {
-            Text = "Enable desktop notifications",
-            Location = new Point(20, 30),
-            AutoSize = true,
-        };
-        _notificationsCheckbox.CheckedChanged += OnNotificationsToggled;
-        generalGroup.Controls.Add(_notificationsCheckbox);
-
-        _notifyOnResetCheckbox = new CheckBox
-        {
-            Text = "Notify when the rate limit resets",
-            Location = new Point(40, 60),
-            AutoSize = true,
-        };
-        generalGroup.Controls.Add(_notifyOnResetCheckbox);
-
-        _runAtStartupCheckbox = new CheckBox
-        {
-            Text = "Start ClaudeMon when Windows starts",
-            Location = new Point(20, 90),
-            AutoSize = true,
-        };
-        generalGroup.Controls.Add(_runAtStartupCheckbox);
-
-        _checkForUpdatesCheckbox = new CheckBox
-        {
-            Text = "Check for updates automatically",
-            Location = new Point(20, 120),
-            AutoSize = true,
-        };
-        generalGroup.Controls.Add(_checkForUpdatesCheckbox);
+        // --- General ---
+        AddHeader("General");
+        _runAtStartupToggle = AddToggleRow("Start ClaudeMon when Windows starts");
+        _checkForUpdatesToggle = AddToggleRow("Check for updates automatically");
 
         // --- Buttons ---
-        var okButton = new Button
-        {
-            Text = "OK",
-            DialogResult = DialogResult.OK,
-            Location = new Point(500, 752),
-            Size = new Size(80, 32),
-        };
-        okButton.Click += OnOkClicked;
-        Controls.Add(okButton);
+        _okButton = MakeButton("OK", DialogResult.OK);
+        _okButton.Left = ContentRight - 174;
+        _okButton.Click += OnOkClicked;
+        Controls.Add(_okButton);
 
-        var cancelButton = new Button
-        {
-            Text = "Cancel",
-            DialogResult = DialogResult.Cancel,
-            Location = new Point(594, 752),
-            Size = new Size(80, 32),
-        };
-        Controls.Add(cancelButton);
+        _cancelButton = MakeButton("Cancel", DialogResult.Cancel);
+        _cancelButton.Left = ContentRight - 84;
+        Controls.Add(_cancelButton);
 
-        AcceptButton = okButton;
-        CancelButton = cancelButton;
+        AcceptButton = _okButton;
+        CancelButton = _cancelButton;
 
+        WireEvents();
         LoadSettings();
     }
 
-    private void OnAlertModeChanged(object? sender, EventArgs e)
+    protected override void OnHandleCreated(EventArgs e)
     {
-        _thresholdPanel.Visible = _thresholdRadio.Checked;
-        _progressivePanel.Visible = _progressiveRadio.Checked;
+        base.OnHandleCreated(e);
+        // Match the title bar to the body (the app-wide colour mode usually handles this; this
+        // makes it certain on Win10 20H1+/Win11).
+        SystemTheme.ApplyTitleBar(Handle, _theme.IsDark);
     }
 
-    private void OnNotificationsToggled(object? sender, EventArgs e)
+    // --- Layout helpers (controls are positioned by Relayout, not here) ---
+
+    private void AddHeader(string title)
     {
-        // Notify-on-reset only matters when notifications are enabled.
-        _notifyOnResetCheckbox.Enabled = _notificationsCheckbox.Checked;
+        var header = new Label
+        {
+            Text = title.ToUpperInvariant(),
+            AutoSize = true,
+            Left = Pad,
+            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            ForeColor = _theme.HeaderAccent,
+        };
+        var divider = new Panel { BackColor = _theme.Divider, Width = ContentRight - Pad, Height = 1, Left = Pad };
+        Controls.Add(header);
+        Controls.Add(divider);
+        _rows.Add(new RowDef { Items = [(header, 16), (divider, 38)], Height = 44 });
     }
 
-    private void OnTaskbarDisplayToggled(object? sender, EventArgs e)
+    private ToggleSwitch AddToggleRow(string text, bool indent = false, Func<bool>? visible = null)
     {
-        // The sub-options only matter when the taskbar display is on.
-        var on = _taskbarDisplayCheckbox.Checked;
-        _allMonitorsCheckbox.Enabled = on;
-        _showSevenDayCheckbox.Enabled = on;
-        _labelColorCombo.Enabled = on;
-        _numberColorCombo.Enabled = on;
-        // The position nudge only affects secondary monitors, so it's only meaningful when
-        // the display is on AND showing on all monitors.
-        _horizontalOffsetNumeric.Enabled = on && _allMonitorsCheckbox.Checked;
+        var label = new Label { Text = text, AutoSize = true, Left = indent ? Pad + 16 : Pad };
+        var toggle = new ToggleSwitch { Left = ContentRight - ToggleWidth };
+        Controls.Add(label);
+        Controls.Add(toggle);
+        _rows.Add(new RowDef { Items = [(label, 8), (toggle, 7)], Height = 34, Visible = visible });
+        return toggle;
     }
 
-    private void OnHorizontalOffsetChanged(object? sender, EventArgs e)
+    private ComboBox AddComboRow(string label, IEnumerable<string> items, bool indent = false, Func<bool>? visible = null)
     {
-        // Live-preview the nudge so the user can see the readout move while choosing.
-        _onHorizontalOffsetPreview?.Invoke((int)_horizontalOffsetNumeric.Value);
+        var lbl = new Label { Text = label, AutoSize = true, Left = indent ? Pad + 16 : Pad };
+        var combo = new ComboBox { Left = ControlLeft, Width = ComboWidth, DropDownStyle = ComboBoxStyle.DropDownList };
+        combo.Items.AddRange(items.Select(i => (object)i).ToArray());
+        Controls.Add(lbl);
+        Controls.Add(combo);
+        _rows.Add(new RowDef { Items = [(lbl, 6), (combo, 3)], Height = 34, Visible = visible });
+        return combo;
     }
 
-    private void OnAllMonitorsChanged(object? sender, EventArgs e)
+    private NumericUpDown AddNumericRow(
+        string label, int min, int max, bool indent = false, Func<bool>? visible = null, string? suffix = "%")
     {
-        // Live-preview the secondary overlays appearing/disappearing, so the position preview
-        // below has something to move when the user is enabling this in the same session.
-        _onAllMonitorsPreview?.Invoke(_allMonitorsCheckbox.Checked);
+        var lbl = new Label { Text = label, AutoSize = true, Left = indent ? Pad + 16 : Pad };
+        var numeric = new ThemedNumericUpDown { Left = ControlLeft, Width = NumericWidth, Minimum = min, Maximum = max };
+        Controls.Add(lbl);
+        Controls.Add(numeric);
+
+        var items = new List<(Control, int)> { (lbl, 6), (numeric, 3) };
+        if (suffix is not null)
+        {
+            var sfx = new Label
+            {
+                Text = suffix,
+                AutoSize = true,
+                ForeColor = _theme.HintText,
+                Left = ControlLeft + NumericWidth + 6,
+            };
+            Controls.Add(sfx);
+            items.Add((sfx, 6));
+        }
+
+        _rows.Add(new RowDef { Items = items.ToArray(), Height = 34, Visible = visible });
+        return numeric;
     }
+
+    private Button MakeButton(string text, DialogResult result)
+    {
+        var button = new Button
+        {
+            Text = text,
+            DialogResult = result,
+            Size = new Size(82, 30),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = _theme.ButtonBack,
+            ForeColor = _theme.ButtonText,
+        };
+        button.FlatAppearance.BorderColor = _theme.ButtonBorder;
+        return button;
+    }
+
+    // Walks the rows top to bottom, hides collapsed ones, positions the visible ones, then places
+    // the buttons and sizes the window to fit (so collapsing a section shrinks the dialog).
+    private void Relayout()
+    {
+        var y = TopMargin;
+        foreach (var row in _rows)
+        {
+            var visible = row.Visible?.Invoke() ?? true;
+            foreach (var (control, offsetY) in row.Items)
+            {
+                control.Visible = visible;
+                if (visible)
+                    control.Top = y + offsetY;
+            }
+
+            if (visible)
+                y += row.Height;
+        }
+
+        y += 14;
+        _okButton.Top = y;
+        _cancelButton.Top = y;
+        ClientSize = new Size(480, y + _okButton.Height + Pad);
+    }
+
+    // --- Events ---
+
+    private void WireEvents()
+    {
+        // Collapse/expand on the gating toggles; some also live-preview the taskbar appearance.
+        _notificationsToggle.CheckedChanged += (_, _) => RelayoutLive();
+        _paceAlertsToggle.CheckedChanged += (_, _) => RelayoutLive();
+        _taskbarToggle.CheckedChanged += (_, _) =>
+        {
+            RelayoutLive();
+            Preview(() => _overlayPreview!.SetEnabled(_taskbarToggle.Checked));
+        };
+        _styleCombo.SelectedIndexChanged += (_, _) =>
+        {
+            RelayoutLive();
+            Preview(() => _overlayPreview!.SetStyle(SelectedOption(_styleCombo, StyleOptions)));
+        };
+        _allMonitorsToggle.CheckedChanged += (_, _) =>
+        {
+            RelayoutLive();
+            Preview(() => _overlayPreview!.SetAllMonitors(_allMonitorsToggle.Checked));
+        };
+
+        // Live-preview only (no layout impact).
+        _barWidthCombo.SelectedIndexChanged += (_, _) =>
+            Preview(() => _overlayPreview!.SetBarWidth(SelectedOption(_barWidthCombo, BarWidthOptions)));
+        _showSevenDayToggle.CheckedChanged += (_, _) =>
+            Preview(() => _overlayPreview!.SetShowSevenDay(_showSevenDayToggle.Checked));
+        _labelColorCombo.SelectedIndexChanged += (_, _) => PreviewColors();
+        _numberColorCombo.SelectedIndexChanged += (_, _) => PreviewColors();
+        _horizontalOffsetNumeric.ValueChanged += (_, _) =>
+            Preview(() => _overlayPreview!.SetHorizontalOffset((int)_horizontalOffsetNumeric.Value));
+    }
+
+    private void RelayoutLive()
+    {
+        if (!_loading)
+            Relayout();
+    }
+
+    private void Preview(Action apply)
+    {
+        if (_loading || _overlayPreview is null)
+            return;
+
+        apply();
+    }
+
+    private void PreviewColors() => Preview(() => _overlayPreview!.SetColors(
+        SelectedOption(_labelColorCombo, LabelColorOptions),
+        SelectedOption(_numberColorCombo, NumberColorOptions)));
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        // Undo any live previews if the dialog wasn't accepted. Restore the all-monitors
-        // state first (it rebuilds the overlay set), then the offset on what remains.
-        if (DialogResult != DialogResult.OK)
+        // Undo every live preview if the dialog wasn't accepted, restoring the saved appearance.
+        if (DialogResult != DialogResult.OK && _overlayPreview is not null)
         {
-            _onAllMonitorsPreview?.Invoke(_originalAllMonitors);
-            _onHorizontalOffsetPreview?.Invoke(_originalOffset);
+            var t = _originalTaskbar;
+            _overlayPreview.SetStyle(t.Style);
+            _overlayPreview.SetBarWidth(t.BarWidth);
+            _overlayPreview.SetShowSevenDay(t.ShowSevenDay);
+            _overlayPreview.SetColors(t.LabelColor, t.NumberColor);
+            _overlayPreview.SetAllMonitors(t.AllMonitors);
+            _overlayPreview.SetHorizontalOffset(t.HorizontalOffset);
+            _overlayPreview.SetEnabled(t.Enabled);
         }
 
         base.OnFormClosing(e);
     }
 
-    private static void SelectColor(
-        ComboBox combo, (string Text, TaskbarTextColor Value)[] options, TaskbarTextColor value)
+    // Coerce a persisted value into the control's range, so an out-of-range config never throws.
+    private static decimal ClampToRange(NumericUpDown numeric, int value) =>
+        Math.Clamp(value, (int)numeric.Minimum, (int)numeric.Maximum);
+
+    // Select the dropdown row whose paired enum value matches, falling back to the first.
+    private static void SelectOption<T>(ComboBox combo, (string Text, T Value)[] options, T value)
     {
-        var index = Array.FindIndex(options, o => o.Value == value);
+        var index = Array.FindIndex(options, o => EqualityComparer<T>.Default.Equals(o.Value, value));
         combo.SelectedIndex = index >= 0 ? index : 0;
     }
 
-    private static TaskbarTextColor SelectedColor(
-        ComboBox combo, (string Text, TaskbarTextColor Value)[] options)
+    // The enum value paired with the currently-selected dropdown row (first option if none).
+    private static T SelectedOption<T>(ComboBox combo, (string Text, T Value)[] options)
     {
         var index = combo.SelectedIndex;
         return index >= 0 && index < options.Length ? options[index].Value : options[0].Value;
@@ -487,6 +379,9 @@ public sealed class SettingsForm : Form
     private void LoadSettings()
     {
         var settings = _configManager.Settings;
+
+        // Snapshot the saved taskbar appearance so a cancelled dialog can revert the live preview.
+        _originalTaskbar = settings.TaskbarDisplay;
 
         _pollIntervalCombo.SelectedIndex = settings.PollIntervalMinutes switch
         {
@@ -497,42 +392,29 @@ public sealed class SettingsForm : Form
             _ => 2,
         };
 
-        _warningThreshold.Value = settings.AlertThresholds.FiveHourWarning;
-        _criticalThreshold.Value = settings.AlertThresholds.FiveHourCritical;
-        _progressiveStartThreshold.Value = settings.AlertThresholds.ProgressiveStartPct;
-        _sevenDayWarningThreshold.Value = settings.AlertThresholds.SevenDayWarning;
+        _notificationsToggle.Checked = settings.Notifications.Enabled;
+        _paceAlertsToggle.Checked = settings.AlertThresholds.PaceAlertsEnabled;
+        SelectOption(_paceSensitivityCombo, PaceSensitivityOptions, settings.AlertThresholds.PaceSensitivity);
+        _nearCapNumeric.Value = ClampToRange(_nearCapNumeric, settings.AlertThresholds.NearCapWarning);
+        _sevenDayWarningNumeric.Value = ClampToRange(_sevenDayWarningNumeric, settings.AlertThresholds.SevenDayWarning);
+        _notifyOnResetToggle.Checked = settings.Notifications.NotifyOnReset;
 
-        if (settings.AlertThresholds.Mode == AlertMode.Progressive)
-            _progressiveRadio.Checked = true;
-        else
-            _thresholdRadio.Checked = true;
+        _taskbarToggle.Checked = settings.TaskbarDisplay.Enabled;
+        SelectOption(_styleCombo, StyleOptions, settings.TaskbarDisplay.Style);
+        SelectOption(_barWidthCombo, BarWidthOptions, settings.TaskbarDisplay.BarWidth);
+        _showSevenDayToggle.Checked = settings.TaskbarDisplay.ShowSevenDay;
+        SelectOption(_labelColorCombo, LabelColorOptions, settings.TaskbarDisplay.LabelColor);
+        SelectOption(_numberColorCombo, NumberColorOptions, settings.TaskbarDisplay.NumberColor);
+        _allMonitorsToggle.Checked = settings.TaskbarDisplay.AllMonitors;
+        _horizontalOffsetNumeric.Value = ClampToRange(_horizontalOffsetNumeric, settings.TaskbarDisplay.HorizontalOffset);
 
-        _thresholdPanel.Visible = _thresholdRadio.Checked;
-        _progressivePanel.Visible = _progressiveRadio.Checked;
+        _runAtStartupToggle.Checked = ConfigManager.IsRunAtStartupEnabled();
+        _checkForUpdatesToggle.Checked = settings.CheckForUpdates;
 
-        _notificationsCheckbox.Checked = settings.Notifications.Enabled;
-        _notifyOnResetCheckbox.Checked = settings.Notifications.NotifyOnReset;
-        OnNotificationsToggled(null, EventArgs.Empty);
-        _taskbarDisplayCheckbox.Checked = settings.TaskbarDisplay.Enabled;
-
-        // Baseline before assigning the control, so cancel-revert restores the saved value
-        // (assigning Checked fires CheckedChanged → the live preview).
-        _originalAllMonitors = settings.TaskbarDisplay.AllMonitors;
-        _allMonitorsCheckbox.Checked = settings.TaskbarDisplay.AllMonitors;
-
-        _showSevenDayCheckbox.Checked = settings.TaskbarDisplay.ShowSevenDay;
-        SelectColor(_labelColorCombo, LabelColorOptions, settings.TaskbarDisplay.LabelColor);
-        SelectColor(_numberColorCombo, NumberColorOptions, settings.TaskbarDisplay.NumberColor);
-
-        // Set the baseline before assigning the control, so the cancel-revert restores the
-        // saved value (assigning Value fires ValueChanged → the live preview).
-        _originalOffset = settings.TaskbarDisplay.HorizontalOffset;
-        _horizontalOffsetNumeric.Value = Math.Clamp(
-            _originalOffset, (int)_horizontalOffsetNumeric.Minimum, (int)_horizontalOffsetNumeric.Maximum);
-
-        OnTaskbarDisplayToggled(null, EventArgs.Empty);
-        _runAtStartupCheckbox.Checked = ConfigManager.IsRunAtStartupEnabled();
-        _checkForUpdatesCheckbox.Checked = settings.CheckForUpdates;
+        // Controls now hold the saved values, so start honouring relayout + live previews and do
+        // the initial layout pass.
+        _loading = false;
+        Relayout();
     }
 
     private void OnOkClicked(object? sender, EventArgs e)
@@ -551,30 +433,31 @@ public sealed class SettingsForm : Form
             PollIntervalMinutes = pollMinutes,
             AlertThresholds = new AlertThresholds
             {
-                Mode = _progressiveRadio.Checked ? AlertMode.Progressive : AlertMode.Threshold,
-                FiveHourWarning = (int)_warningThreshold.Value,
-                FiveHourCritical = (int)_criticalThreshold.Value,
-                SevenDayWarning = (int)_sevenDayWarningThreshold.Value,
-                ProgressiveStartPct = (int)_progressiveStartThreshold.Value,
+                PaceAlertsEnabled = _paceAlertsToggle.Checked,
+                PaceSensitivity = SelectedOption(_paceSensitivityCombo, PaceSensitivityOptions),
+                NearCapWarning = (int)_nearCapNumeric.Value,
+                SevenDayWarning = (int)_sevenDayWarningNumeric.Value,
             },
             Notifications = new NotificationSettings
             {
-                Enabled = _notificationsCheckbox.Checked,
-                NotifyOnReset = _notifyOnResetCheckbox.Checked,
+                Enabled = _notificationsToggle.Checked,
+                NotifyOnReset = _notifyOnResetToggle.Checked,
             },
             TaskbarDisplay = new TaskbarDisplaySettings
             {
-                Enabled = _taskbarDisplayCheckbox.Checked,
-                ShowSevenDay = _showSevenDayCheckbox.Checked,
-                LabelColor = SelectedColor(_labelColorCombo, LabelColorOptions),
-                NumberColor = SelectedColor(_numberColorCombo, NumberColorOptions),
-                AllMonitors = _allMonitorsCheckbox.Checked,
+                Enabled = _taskbarToggle.Checked,
+                Style = SelectedOption(_styleCombo, StyleOptions),
+                BarWidth = SelectedOption(_barWidthCombo, BarWidthOptions),
+                ShowSevenDay = _showSevenDayToggle.Checked,
+                LabelColor = SelectedOption(_labelColorCombo, LabelColorOptions),
+                NumberColor = SelectedOption(_numberColorCombo, NumberColorOptions),
+                AllMonitors = _allMonitorsToggle.Checked,
                 HorizontalOffset = (int)_horizontalOffsetNumeric.Value,
             },
-            CheckForUpdates = _checkForUpdatesCheckbox.Checked,
+            CheckForUpdates = _checkForUpdatesToggle.Checked,
         };
 
         _configManager.Update(newSettings);
-        ConfigManager.SetRunAtStartup(_runAtStartupCheckbox.Checked);
+        ConfigManager.SetRunAtStartup(_runAtStartupToggle.Checked);
     }
 }

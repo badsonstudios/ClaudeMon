@@ -7,10 +7,11 @@ using ClaudeMon.Models;
 using ClaudeMon.Services;
 
 /// <summary>
-/// A borderless, click-through, always-on-top window that paints the current Claude
-/// usage percentage directly over the right end of one Windows taskbar, just left of
-/// that taskbar's system tray / clock. One instance is created per taskbar (the primary
-/// and each secondary-monitor taskbar) by <see cref="TaskbarOverlayManager"/>.
+/// A borderless, always-on-top window that paints the current Claude usage percentage
+/// directly over the right end of one Windows taskbar, just left of that taskbar's system
+/// tray / clock. One instance is created per taskbar (the primary and each
+/// secondary-monitor taskbar) by <see cref="TaskbarOverlayManager"/>. A left-click raises
+/// <see cref="Clicked"/> (wired to open the detail flyout) without ever taking focus.
 /// </summary>
 /// <remarks>
 /// This is the lightweight alternative to a deskband COM shell extension: it needs no
@@ -18,7 +19,9 @@ using ClaudeMon.Services;
 /// content is drawn with per-pixel alpha via <c>UpdateLayeredWindow</c> so anti-aliased
 /// text shows cleanly over the taskbar (a colour-keyed <c>TransparencyKey</c> can't —
 /// it fringes anti-aliased glyphs). A low-frequency timer re-asserts the topmost
-/// z-order and position so the overlay survives taskbar clicks and layout changes.
+/// z-order and position so the overlay survives taskbar clicks and layout changes, and
+/// the window is marked <c>NonRudeHWND</c> so Win11's Rude Window Manager doesn't bury it
+/// behind the primary taskbar (see <see cref="Reposition"/>).
 /// The instance re-finds its taskbar each tick by monitor device name, so it follows
 /// Explorer restarts (which recreate the taskbar windows) and hides itself while its
 /// taskbar is absent. Positioning is best-effort for a horizontal taskbar.
@@ -42,11 +45,16 @@ public sealed class TaskbarOverlayWindow : Form
     private int _horizontalOffset;
 
     private double? _percentage;
+    private double? _fiveHourFraction;
     private double? _sevenDayPercentage;
+    private double? _sevenDayFraction;
     private bool _showSevenDay;
     private bool _signInExpired;
     private TaskbarTextColor _labelColor = TaskbarTextColor.White;
     private TaskbarTextColor _numberColor = TaskbarTextColor.Auto;
+    private TaskbarStyle _style = TaskbarStyle.Numbers;
+    private TaskbarBarWidth _barWidth = TaskbarBarWidth.Standard;
+    private UsageColorMode _colorMode = UsageColorMode.Pace;
     private int _x;
     private int _y;
     private int _width = IconRenderer.MinTaskbarWidth;
@@ -58,6 +66,8 @@ public sealed class TaskbarOverlayWindow : Form
     private double? _widthSeven;
     private int _widthHeight;
     private bool _widthSignInExpired;
+    private TaskbarStyle _widthStyle = TaskbarStyle.Numbers;
+    private TaskbarBarWidth _widthBarWidth = TaskbarBarWidth.Standard;
 
     // Cached clock reserve for secondary taskbars (whose clock has no queryable window),
     // re-measured only when the taskbar height changes — see IconRenderer.MeasureTaskbarClockReserve.
@@ -73,6 +83,7 @@ public sealed class TaskbarOverlayWindow : Form
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
         Size = new Size(_width, _height);
+        Cursor = Cursors.Hand; // signal the readout is clickable
 
         // Re-glue to the taskbar and re-assert topmost ordering periodically. Clicking
         // the taskbar can push us below it; this brings us back promptly. Guarded by
@@ -96,6 +107,12 @@ public sealed class TaskbarOverlayWindow : Form
         };
     }
 
+    /// <summary>
+    /// Raised on a left-click of the readout, carrying its screen bounds so the flyout can be
+    /// anchored just above it. Used to open the detail flyout.
+    /// </summary>
+    public event EventHandler<Rectangle>? Clicked;
+
     // Don't steal focus from the taskbar / foreground app when shown.
     protected override bool ShowWithoutActivation => true;
 
@@ -104,10 +121,38 @@ public sealed class TaskbarOverlayWindow : Form
         get
         {
             var cp = base.CreateParams;
-            // Layered (per-pixel alpha), click-through, and out of alt-tab / focus.
-            cp.ExStyle |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+            // Layered (per-pixel alpha), out of alt-tab / focus. NOT click-through: the
+            // readout is a click target (WM_LBUTTONUP → Clicked); WM_MOUSEACTIVATE is
+            // answered with MA_NOACTIVATE so clicking it never steals focus.
+            cp.ExStyle |= WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
             return cp;
         }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        switch (m.Msg)
+        {
+            case WM_MOUSEACTIVATE:
+                // Stay a passive readout: don't activate/steal focus when clicked. This also
+                // keeps the flyout focused (so it doesn't auto-hide) so the click can toggle it.
+                m.Result = MA_NOACTIVATE;
+                return;
+            case WM_LBUTTONUP:
+                // Release the implicit mouse capture taken on the button-press before opening the
+                // flyout. This passive overlay otherwise retains capture, so the cursor (its hand
+                // shape) and every subsequent click stay routed to the overlay instead of the
+                // flyout — leaving the flyout visibly active but mouse-dead (its gear never sees a
+                // click, and the readout's hand cursor sticks across the whole flyout).
+                ReleaseCapture();
+                // Raise asynchronously so the flyout is shown/activated on a clean message-loop
+                // turn, after this WS_EX_NOACTIVATE window finishes its own input processing.
+                if (IsHandleCreated)
+                    BeginInvoke(() => Clicked?.Invoke(this, new Rectangle(_x, _y, _width, _height)));
+                return;
+        }
+
+        base.WndProc(ref m);
     }
 
     /// <summary>Show or hide the overlay live, without restarting the app.</summary>
@@ -128,17 +173,20 @@ public sealed class TaskbarOverlayWindow : Form
     }
 
     /// <summary>
-    /// Update the displayed values and repaint. <paramref name="sevenDayPercentage"/> is
-    /// only shown when the "also show 7-day" option is on (see <see cref="SetShowSevenDay"/>);
-    /// pass null when the API didn't return a 7-day window.
+    /// Update the displayed values and repaint. The 7-day fields are only shown when the "also
+    /// show 7-day" option is on (see <see cref="SetShowSevenDay"/>); the window-elapsed fractions
+    /// drive the bar style's time tick and pace colouring and may be null when the reset time is
+    /// unknown.
     /// </summary>
-    public void UpdateUsage(double percentage, double? sevenDayPercentage)
+    public void UpdateUsage(TaskbarReading reading)
     {
         // A fresh reading clears any sign-in-expired marker, so normal display returns
         // automatically once credentials are refreshed.
         _signInExpired = false;
-        _percentage = percentage;
-        _sevenDayPercentage = sevenDayPercentage;
+        _percentage = reading.FiveHourPct;
+        _fiveHourFraction = reading.FiveHourFraction;
+        _sevenDayPercentage = reading.SevenDayPct;
+        _sevenDayFraction = reading.SevenDayFraction;
         if (Visible) Reposition();
     }
 
@@ -160,6 +208,33 @@ public sealed class TaskbarOverlayWindow : Form
     {
         _labelColor = labelColor;
         _numberColor = numberColor;
+        if (Visible) Redraw();
+    }
+
+    /// <summary>
+    /// Switch the readout between the number and bar styles. Re-measures the overlay width (the
+    /// styles size differently) and repaints live.
+    /// </summary>
+    public void SetStyle(TaskbarStyle style)
+    {
+        _style = style;
+        if (Visible) Reposition();
+    }
+
+    /// <summary>Set the bar-style width and re-measure/reposition live (no-op visually for numbers).</summary>
+    public void SetBarWidth(TaskbarBarWidth barWidth)
+    {
+        _barWidth = barWidth;
+        if (Visible) Reposition();
+    }
+
+    /// <summary>
+    /// Set the usage colour mode (pace vs absolute level). Only the bar style's fill honours it;
+    /// the number style uses its own colour presets. Colour-only, so it just repaints.
+    /// </summary>
+    public void SetColorMode(UsageColorMode colorMode)
+    {
+        _colorMode = colorMode;
         if (Visible) Redraw();
     }
 
@@ -205,13 +280,21 @@ public sealed class TaskbarOverlayWindow : Form
 
         var pct = _percentage ?? 0;
         var seven = SevenDayForDisplay;
-        if (!_widthSignInExpired && _widthPct.Equals(pct) && _widthSeven.Equals(seven) && _widthHeight == _height)
+        if (!_widthSignInExpired
+            && _widthStyle == _style && _widthBarWidth == _barWidth
+            && _widthPct.Equals(pct) && _widthSeven.Equals(seven) && _widthHeight == _height)
             return;
 
-        _width = IconRenderer.MeasureTaskbarUsageWidth(pct, seven, _height);
+        // The bar's width is fixed by the height + width setting (the value doesn't widen it);
+        // the number's width grows with the digits shown.
+        _width = _style == TaskbarStyle.Bar
+            ? IconRenderer.MeasureTaskbarBarWidth(_height, _barWidth)
+            : IconRenderer.MeasureTaskbarUsageWidth(pct, seven, _height);
         _widthPct = pct;
         _widthSeven = seven;
         _widthHeight = _height;
+        _widthStyle = _style;
+        _widthBarWidth = _barWidth;
         _widthSignInExpired = false;
     }
 
@@ -273,6 +356,17 @@ public sealed class TaskbarOverlayWindow : Form
             new TaskbarRect(rect.Left, rect.Top, rect.Right), notifyLeft, _width, rightReserve, offset);
 
         if (!Visible) Show();
+
+        // Win11's "Rude Window Manager" (in Explorer) re-asserts the PRIMARY taskbar's
+        // topmost z-order over any normal, hit-testable topmost window sitting on it — which
+        // would bury this readout behind the taskbar. Secondary taskbars use a lighter path
+        // and don't, which is exactly why only the primary's readout went missing once the
+        // overlay became clickable (dropping WS_EX_TRANSPARENT). Marking the window
+        // NonRudeHWND removes it from that full-screen/"rude" consideration, so Explorer
+        // stops re-stacking the taskbar over it. The property is cleared whenever the window
+        // is hidden, so it's re-set here on every reposition (after any Show).
+        SetProp(Handle, "NonRudeHWND", new IntPtr(1));
+
         SetWindowPos(
             Handle, HWND_TOPMOST, _x, _y, _width, _height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -289,7 +383,11 @@ public sealed class TaskbarOverlayWindow : Form
         using var bitmap = new Bitmap(_width, _height, PixelFormat.Format32bppArgb);
         using (var graphics = Graphics.FromImage(bitmap))
         {
-            graphics.Clear(Color.Transparent);
+            // Fill with alpha 1 (not 0) so the WHOLE rectangle is a hit target: a layered
+            // window hit-tests per-pixel by alpha, and fully-transparent pixels pass clicks
+            // through. At 1/255 the fill is visually imperceptible but makes the readout
+            // behave like a button — a click (or the hand cursor) anywhere in its bounds counts.
+            graphics.Clear(Color.FromArgb(1, 0, 0, 0));
             var bounds = new Rectangle(0, 0, _width, _height);
 
             if (_signInExpired)
@@ -301,21 +399,32 @@ public sealed class TaskbarOverlayWindow : Form
             else
             {
                 var pct = _percentage!.Value;
-                var labelColor = IconRenderer.GetTextColor(_labelColor, pct);
                 var sevenDay = SevenDayForDisplay;
 
-                if (sevenDay is null)
+                if (_style == TaskbarStyle.Bar)
                 {
-                    var numberColor = IconRenderer.GetTextColor(_numberColor, pct);
-                    IconRenderer.DrawTaskbarUsage(graphics, pct, bounds, labelColor, numberColor);
+                    IconRenderer.DrawTaskbarBar(
+                        graphics, bounds,
+                        pct, _fiveHourFraction,
+                        sevenDay, sevenDay is null ? null : _sevenDayFraction,
+                        _colorMode, SystemTheme.IsLightWindowsMode());
                 }
                 else
                 {
-                    // Each number is coloured for its own usage level (under the Auto preset).
-                    var fiveColor = IconRenderer.GetTextColor(_numberColor, pct);
-                    var sevenColor = IconRenderer.GetTextColor(_numberColor, sevenDay.Value);
-                    IconRenderer.DrawTaskbarUsage(
-                        graphics, pct, sevenDay.Value, bounds, labelColor, fiveColor, sevenColor);
+                    var labelColor = IconRenderer.GetTextColor(_labelColor, pct);
+                    if (sevenDay is null)
+                    {
+                        var numberColor = IconRenderer.GetTextColor(_numberColor, pct);
+                        IconRenderer.DrawTaskbarUsage(graphics, pct, bounds, labelColor, numberColor);
+                    }
+                    else
+                    {
+                        // Each number is coloured for its own usage level (under the Auto preset).
+                        var fiveColor = IconRenderer.GetTextColor(_numberColor, pct);
+                        var sevenColor = IconRenderer.GetTextColor(_numberColor, sevenDay.Value);
+                        IconRenderer.DrawTaskbarUsage(
+                            graphics, pct, sevenDay.Value, bounds, labelColor, fiveColor, sevenColor);
+                    }
                 }
             }
         }
@@ -367,9 +476,12 @@ public sealed class TaskbarOverlayWindow : Form
     // --- Win32 interop ---
 
     private const int WS_EX_LAYERED = 0x00080000;
-    private const int WS_EX_TRANSPARENT = 0x00000020;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_NOACTIVATE = 0x08000000;
+
+    private const int WM_MOUSEACTIVATE = 0x0021;
+    private const int MA_NOACTIVATE = 0x0003;
+    private const int WM_LBUTTONUP = 0x0202;
 
     private static readonly IntPtr HWND_TOPMOST = new(-1);
     private const uint SWP_NOACTIVATE = 0x0010;
@@ -414,6 +526,14 @@ public sealed class TaskbarOverlayWindow : Form
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern IntPtr FindWindowEx(
         IntPtr hwndParent, IntPtr hwndChildAfter, string? lpszClass, string? lpszWindow);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetProp(IntPtr hWnd, string lpString, IntPtr hData);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ReleaseCapture();
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

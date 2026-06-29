@@ -170,4 +170,110 @@ public class IconRendererTests
             IconRenderer.MeasureTaskbarClockReserve(48) >= IconRenderer.MeasureTaskbarClockReserve(30),
             "a taller taskbar should not reserve less clock space than a shorter one");
     }
+
+    [Theory]
+    [InlineData(30, TaskbarBarWidth.Compact)]
+    [InlineData(40, TaskbarBarWidth.Standard)]
+    [InlineData(40, TaskbarBarWidth.Wide)]
+    [InlineData(72, TaskbarBarWidth.ExtraWide)]
+    public void MeasureTaskbarBarWidth_IsAtLeastMinimum(int height, TaskbarBarWidth width)
+    {
+        var w = IconRenderer.MeasureTaskbarBarWidth(height, width);
+        Assert.True(w >= IconRenderer.MinTaskbarWidth, $"expected >= {IconRenderer.MinTaskbarWidth}, got {w}");
+    }
+
+    [Fact]
+    public void MeasureTaskbarBarWidth_GrowsWithWiderSetting()
+    {
+        // Each step up the width setting must give at least as much room (strictly more once past
+        // the MinTaskbarWidth floor) so "Wide"/"Extra wide" actually widen the bar.
+        var compact = IconRenderer.MeasureTaskbarBarWidth(40, TaskbarBarWidth.Compact);
+        var standard = IconRenderer.MeasureTaskbarBarWidth(40, TaskbarBarWidth.Standard);
+        var wide = IconRenderer.MeasureTaskbarBarWidth(40, TaskbarBarWidth.Wide);
+        var extra = IconRenderer.MeasureTaskbarBarWidth(40, TaskbarBarWidth.ExtraWide);
+
+        Assert.True(standard >= compact);
+        Assert.True(wide > standard, $"wide {wide} should exceed standard {standard}");
+        Assert.True(extra > wide, $"extra-wide {extra} should exceed wide {wide}");
+    }
+
+    [Theory]
+    [InlineData(false)]  // single 5-hour bar
+    [InlineData(true)]   // stacked 5-hour + 7-day bars
+    public void DrawTaskbarBar_RendersVisiblePixels(bool dual)
+    {
+        var width = IconRenderer.MeasureTaskbarBarWidth(40, TaskbarBarWidth.Standard);
+        using var bitmap = new Bitmap(width, 40, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.Transparent);
+            IconRenderer.DrawTaskbarBar(
+                graphics, new Rectangle(0, 0, width, 40),
+                fiveHourPct: 62, fiveHourFraction: 0.4,
+                sevenDayPct: dual ? 30 : null, sevenDayFraction: dual ? 0.5 : null,
+                UsageColorMode.Pace);
+        }
+
+        var painted = false;
+        for (var x = 0; x < bitmap.Width && !painted; x++)
+            for (var y = 0; y < bitmap.Height; y++)
+                if (bitmap.GetPixel(x, y).A > 0) { painted = true; break; }
+
+        Assert.True(painted, "expected the bar to render visible pixels");
+    }
+
+    [Fact]
+    public void DrawTaskbarBar_LightTaskbar_ChangesTickRendering()
+    {
+        // The time tick's halo flips colour by taskbar theme (dark core on dark taskbars, dark
+        // core/light halo on light ones) so it reads on both — so the two renders must differ.
+        Bitmap Render(bool lightTaskbar)
+        {
+            var width = IconRenderer.MeasureTaskbarBarWidth(40, TaskbarBarWidth.Standard);
+            var bmp = new Bitmap(width, 40, PixelFormat.Format32bppArgb);
+            using var g = Graphics.FromImage(bmp);
+            g.Clear(Color.Transparent);
+            IconRenderer.DrawTaskbarBar(
+                g, new Rectangle(0, 0, width, 40),
+                fiveHourPct: 62, fiveHourFraction: 0.4,
+                sevenDayPct: null, sevenDayFraction: null,
+                UsageColorMode.Pace, lightTaskbar);
+            return bmp;
+        }
+
+        using var dark = Render(false);
+        using var light = Render(true);
+
+        var differs = false;
+        for (var x = 0; x < dark.Width && !differs; x++)
+            for (var y = 0; y < dark.Height; y++)
+                if (dark.GetPixel(x, y) != light.GetPixel(x, y)) { differs = true; break; }
+
+        Assert.True(differs, "expected the tick to render differently on a light taskbar");
+    }
+
+    [Fact]
+    public void DrawTaskbarBar_RendersAtZeroUsageWithUnknownWindow()
+    {
+        // The empty track must still draw (a visible container) even with no usage and no reset
+        // time — the bar should never vanish to nothing.
+        var width = IconRenderer.MeasureTaskbarBarWidth(40, TaskbarBarWidth.Standard);
+        using var bitmap = new Bitmap(width, 40, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.Transparent);
+            IconRenderer.DrawTaskbarBar(
+                graphics, new Rectangle(0, 0, width, 40),
+                fiveHourPct: 0, fiveHourFraction: null,
+                sevenDayPct: null, sevenDayFraction: null,
+                UsageColorMode.Pace);
+        }
+
+        var painted = false;
+        for (var x = 0; x < bitmap.Width && !painted; x++)
+            for (var y = 0; y < bitmap.Height; y++)
+                if (bitmap.GetPixel(x, y).A > 0) { painted = true; break; }
+
+        Assert.True(painted, "expected the empty bar track to still render");
+    }
 }

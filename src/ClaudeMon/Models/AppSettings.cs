@@ -2,11 +2,17 @@ namespace ClaudeMon.Models;
 
 using System.Text.Json.Serialization;
 
+/// <summary>
+/// How aggressively the pace early-warning fires, as a pace-ratio trigger (usage ÷ the fraction
+/// of the reset window already elapsed). <see cref="Early"/> warns on a small overshoot,
+/// <see cref="Late"/> waits until you're well over pace. See <see cref="AlertThresholds.PaceRatioTrigger"/>.
+/// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum AlertMode
+public enum PaceSensitivity
 {
-    Threshold,
-    Progressive,
+    Early,
+    Balanced,
+    Late,
 }
 
 /// <summary>
@@ -24,6 +30,46 @@ public enum TaskbarTextColor
     DarkGray,
 }
 
+/// <summary>
+/// How usage is coloured everywhere it appears (tray icon, taskbar number, flyout).
+/// <see cref="Pace"/> colours by usage relative to how far through the reset window you are
+/// (so 38% used at 5% elapsed reads red); <see cref="Level"/> colours by the absolute
+/// percentage (the original behaviour).
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum UsageColorMode
+{
+    Pace,
+    Level,
+}
+
+/// <summary>
+/// The selectable visual style of the taskbar usage readout. <see cref="Numbers"/> is the
+/// stacked label + percentage text (the original look); <see cref="Bar"/> draws a compact
+/// horizontal usage bar with hour/day dividers and a time-in-window tick (mirrors the flyout
+/// bars), pace-coloured so "am I ahead of the clock?" reads at a glance.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum TaskbarStyle
+{
+    Numbers,
+    Bar,
+}
+
+/// <summary>
+/// The width of the <see cref="TaskbarStyle.Bar"/> readout. Wider bars give the hour/day
+/// dividers and time tick more room, so pace reads more precisely; narrower bars take less of
+/// the taskbar. Only applies to the bar style.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum TaskbarBarWidth
+{
+    Compact,
+    Standard,
+    Wide,
+    ExtraWide,
+}
+
 public record AppSettings
 {
     [JsonPropertyName("pollIntervalMinutes")]
@@ -37,6 +83,10 @@ public record AppSettings
 
     [JsonPropertyName("taskbarDisplay")]
     public TaskbarDisplaySettings TaskbarDisplay { get; init; } = new();
+
+    /// <summary>How usage is coloured (tray icon, taskbar, flyout). Defaults to pace-aware.</summary>
+    [JsonPropertyName("colorMode")]
+    public UsageColorMode ColorMode { get; init; } = UsageColorMode.Pace;
 
     /// <summary>Whether ClaudeMon checks GitHub for newer releases (daily + on demand).</summary>
     [JsonPropertyName("checkForUpdates")]
@@ -60,6 +110,21 @@ public record TaskbarDisplaySettings
 {
     [JsonPropertyName("enabled")]
     public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// The visual style of the readout. Defaults to <see cref="TaskbarStyle.Numbers"/> (the
+    /// original stacked label + percentage), so existing installs look unchanged until the
+    /// user opts into the <see cref="TaskbarStyle.Bar"/> style.
+    /// </summary>
+    [JsonPropertyName("style")]
+    public TaskbarStyle Style { get; init; } = TaskbarStyle.Numbers;
+
+    /// <summary>
+    /// Width of the bar-style readout (only applies when <see cref="Style"/> is
+    /// <see cref="TaskbarStyle.Bar"/>). Defaults to <see cref="TaskbarBarWidth.Standard"/>.
+    /// </summary>
+    [JsonPropertyName("barWidth")]
+    public TaskbarBarWidth BarWidth { get; init; } = TaskbarBarWidth.Standard;
 
     [JsonPropertyName("labelColor")]
     public TaskbarTextColor LabelColor { get; init; } = TaskbarTextColor.White;
@@ -93,20 +158,41 @@ public record TaskbarDisplaySettings
 
 public record AlertThresholds
 {
-    [JsonPropertyName("mode")]
-    public AlertMode Mode { get; init; } = AlertMode.Threshold;
+    /// <summary>
+    /// Whether the pace early-warning fires — a heads-up when your usage relative to how far
+    /// through the 5-hour window you are means you're on track to run out before it resets.
+    /// On by default.
+    /// </summary>
+    [JsonPropertyName("paceAlertsEnabled")]
+    public bool PaceAlertsEnabled { get; init; } = true;
 
-    [JsonPropertyName("fiveHourWarning")]
-    public int FiveHourWarning { get; init; } = 50;
+    /// <summary>How aggressively the pace early-warning fires. Defaults to <see cref="PaceSensitivity.Balanced"/>.</summary>
+    [JsonPropertyName("paceSensitivity")]
+    public PaceSensitivity PaceSensitivity { get; init; } = PaceSensitivity.Balanced;
 
-    [JsonPropertyName("fiveHourCritical")]
-    public int FiveHourCritical { get; init; } = 80;
+    /// <summary>
+    /// Absolute near-cap backstop: a critical "almost out" alert fires once 5-hour usage reaches
+    /// this percentage, regardless of pace — the safety net for "you're nearly out". Default 90.
+    /// </summary>
+    [JsonPropertyName("nearCapWarning")]
+    public int NearCapWarning { get; init; } = 90;
 
+    /// <summary>7-day (weekly) warning percentage — fires once weekly usage crosses it. Default 50.</summary>
     [JsonPropertyName("sevenDayWarning")]
     public int SevenDayWarning { get; init; } = 50;
 
-    [JsonPropertyName("progressiveStartPct")]
-    public int ProgressiveStartPct { get; init; } = 70;
+    /// <summary>
+    /// The pace ratio (usage ÷ window-elapsed fraction) that triggers the early-warning at the
+    /// configured <see cref="PaceSensitivity"/>. A ratio of 1 is exactly on pace; higher means
+    /// burning faster than the clock. Not persisted — derived from the sensitivity.
+    /// </summary>
+    [JsonIgnore]
+    public double PaceRatioTrigger => PaceSensitivity switch
+    {
+        PaceSensitivity.Early => 1.25,
+        PaceSensitivity.Late => 2.0,
+        _ => 1.5,
+    };
 }
 
 public record NotificationSettings

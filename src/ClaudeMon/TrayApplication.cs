@@ -3,6 +3,7 @@ namespace ClaudeMon;
 using System.Diagnostics;
 using System.Drawing;
 using ClaudeMon.Configuration;
+using ClaudeMon.Models;
 using ClaudeMon.Monitoring;
 using ClaudeMon.Services;
 using ClaudeMon.UI;
@@ -59,16 +60,31 @@ public sealed class TrayApplication : IDisposable
             _tokenRefresher, _logger, _history);
         _monitor.UsageUpdated += OnUsageUpdated;
 
-        _flyout = new FlyoutPanel();
+        _flyout = new FlyoutPanel(_logger);
+        // The flyout's gear button opens Settings (the flyout hides itself when it loses focus).
+        _flyout.SettingsRequested += (_, _) =>
+        {
+            _flyout.Hide();
+            ShowSettings();
+        };
 
         _taskbarOverlay = new TaskbarOverlayManager(_logger);
         _taskbarOverlay.SetColors(
             _configManager.Settings.TaskbarDisplay.LabelColor,
             _configManager.Settings.TaskbarDisplay.NumberColor);
+        _taskbarOverlay.SetStyle(_configManager.Settings.TaskbarDisplay.Style);
+        _taskbarOverlay.SetBarWidth(_configManager.Settings.TaskbarDisplay.BarWidth);
+        _taskbarOverlay.SetColorMode(_configManager.Settings.ColorMode);
         _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
         _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
         _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
         _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
+        // Clicking any monitor's readout opens the detail flyout on the PRIMARY monitor.
+        // The flyout is an ordinary WinForms window and the app is System-DPI-aware, so on a
+        // monitor whose scale differs from the primary's it would be bitmap-virtualized and its
+        // child controls (the gear) would stop receiving clicks. Anchoring it to the primary's
+        // tray corner keeps it in the app's native-DPI context, where it's fully interactive.
+        _taskbarOverlay.OverlayClicked += (_, _) => ToggleFlyout(PrimaryTrayAnchor());
 
         _contextMenu = CreateContextMenu();
         _notifyIcon = new NotifyIcon
@@ -125,11 +141,21 @@ public sealed class TrayApplication : IDisposable
 
                 if (fiveHour is not null)
                 {
+                    // Colour the tray icon by the selected mode (pace-aware by default).
+                    var iconColor = IconRenderer.GetUsageColor(
+                        fiveHour.UtilizationPct,
+                        fiveHour.ElapsedFraction(UsageWindows.FiveHour),
+                        _configManager.Settings.ColorMode);
+
                     var oldIcon = _notifyIcon.Icon;
-                    _notifyIcon.Icon = IconRenderer.RenderUsageIcon(fiveHour.UtilizationPct);
+                    _notifyIcon.Icon = IconRenderer.RenderUsageIcon(fiveHour.UtilizationPct, iconColor);
                     oldIcon?.Dispose();
 
-                    _taskbarOverlay.UpdateUsage(fiveHour.UtilizationPct, sevenDay?.UtilizationPct);
+                    _taskbarOverlay.UpdateUsage(new TaskbarReading(
+                        fiveHour.UtilizationPct,
+                        fiveHour.ElapsedFraction(UsageWindows.FiveHour),
+                        sevenDay?.UtilizationPct,
+                        sevenDay?.ElapsedFraction(UsageWindows.SevenDay)));
                 }
 
                 var lines = new List<string> { "ClaudeMon" };
@@ -160,38 +186,58 @@ public sealed class TrayApplication : IDisposable
     private void OnTrayMouseClick(object? sender, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
+        ToggleFlyout(Cursor.Position);
+    }
 
+    /// <summary>
+    /// Anchor at the primary monitor's notification-area corner, where the detail flyout opens.
+    /// A click on any taskbar readout opens the flyout here (rather than over the clicked readout)
+    /// so it always lands in the app's native-DPI context — see the OverlayClicked wiring for why.
+    /// </summary>
+    private static Point PrimaryTrayAnchor()
+    {
+        var workingArea = (Screen.PrimaryScreen ?? Screen.AllScreens[0]).WorkingArea;
+        return new Point(workingArea.Right - 40, workingArea.Bottom);
+    }
+
+    /// <summary>
+    /// Opens the detail flyout anchored above <paramref name="anchor"/> (or hides it if already
+    /// open). Shared by the tray-icon left-click (anchored at the cursor) and a click on a
+    /// taskbar readout (anchored at the primary tray corner), so both behave identically.
+    /// </summary>
+    private void ToggleFlyout(Point anchor)
+    {
         if (_flyout.Visible)
         {
             _flyout.Hide();
+            return;
         }
-        else
+
+        var fiveHourTrend = _history.Recent(TimeSpan.FromHours(5))
+            .Select(s => s.FiveHourPct)
+            .ToList();
+
+        // Project time-to-limit from the recent burn rate (last 30 min of samples).
+        // The latest history sample is recorded from the same poll that set
+        // LastUsage, so this current pct and the slope's newest point agree.
+        // Pass a null reset when ResetAt is unknown (TimeUntilReset returns Zero
+        // for both "unknown" and "already resetting" — only the latter should
+        // suppress the estimate).
+        TimeSpan? timeToLimit = null;
+        var fiveHour = _monitor.LastUsage?.FiveHour;
+        if (fiveHour is not null)
         {
-            var fiveHourTrend = _history.Recent(TimeSpan.FromHours(5))
-                .Select(s => s.FiveHourPct)
-                .ToList();
-
-            // Project time-to-limit from the recent burn rate (last 30 min of samples).
-            // The latest history sample is recorded from the same poll that set
-            // LastUsage, so this current pct and the slope's newest point agree.
-            // Pass a null reset when ResetAt is unknown (TimeUntilReset returns Zero
-            // for both "unknown" and "already resetting" — only the latter should
-            // suppress the estimate).
-            TimeSpan? timeToLimit = null;
-            var fiveHour = _monitor.LastUsage?.FiveHour;
-            if (fiveHour is not null)
-            {
-                TimeSpan? timeUntilReset = fiveHour.ResetAt is null ? null : fiveHour.TimeUntilReset;
-                timeToLimit = BurnRate.EstimateTimeToLimit(
-                    _history.Recent(BurnRateWindow),
-                    fiveHour.UtilizationPct,
-                    timeUntilReset);
-            }
-
-            _flyout.UpdateData(
-                _monitor.LastUsage, _monitor.Status, _monitor.LastUpdated, fiveHourTrend, timeToLimit);
-            _flyout.ShowNear(Cursor.Position);
+            TimeSpan? timeUntilReset = fiveHour.ResetAt is null ? null : fiveHour.TimeUntilReset;
+            timeToLimit = BurnRate.EstimateTimeToLimit(
+                _history.Recent(BurnRateWindow),
+                fiveHour.UtilizationPct,
+                timeUntilReset);
         }
+
+        _flyout.UpdateData(
+            _monitor.LastUsage, _monitor.Status, _monitor.LastUpdated, fiveHourTrend, timeToLimit,
+            _configManager.Settings.ColorMode);
+        _flyout.ShowNear(anchor);
     }
 
     private static string Truncate(string text, int maxLength) =>
@@ -322,16 +368,18 @@ public sealed class TrayApplication : IDisposable
 
     private void ShowSettings()
     {
-        // Live-preview the secondary-monitor toggle and position nudge as the user changes
-        // them; the form reverts to the saved values if the dialog is cancelled.
-        using var form = new SettingsForm(
-            _configManager, _taskbarOverlay.SetHorizontalOffset, _taskbarOverlay.SetAllMonitors);
+        // Pass the live overlays so the taskbar appearance previews on the real taskbar as the
+        // visual settings change; the form reverts to the saved values if the dialog is cancelled.
+        using var form = new SettingsForm(_configManager, _taskbarOverlay);
         if (form.ShowDialog() == DialogResult.OK)
         {
             _monitor.UpdateInterval(_configManager.Settings.PollInterval);
             _taskbarOverlay.SetColors(
                 _configManager.Settings.TaskbarDisplay.LabelColor,
                 _configManager.Settings.TaskbarDisplay.NumberColor);
+            _taskbarOverlay.SetStyle(_configManager.Settings.TaskbarDisplay.Style);
+            _taskbarOverlay.SetBarWidth(_configManager.Settings.TaskbarDisplay.BarWidth);
+            _taskbarOverlay.SetColorMode(_configManager.Settings.ColorMode);
             _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
             _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
             _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);

@@ -51,8 +51,14 @@ public sealed class ConfigManager
         if (dir is not null && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
+        // Write atomically (temp file then rename) so a crash mid-write can't truncate config.json
+        // and leave Load() silently falling back to defaults — which would lose every setting. Same
+        // pattern as CredentialReader.WriteBack. The temp sits in the same directory (same volume),
+        // so File.Move is a rename.
         var json = JsonSerializer.Serialize(Settings, JsonOptions);
-        File.WriteAllText(_configPath, json);
+        var tempPath = _configPath + ".tmp";
+        File.WriteAllText(tempPath, json);
+        File.Move(tempPath, _configPath, overwrite: true);
     }
 
     public void Update(AppSettings newSettings)

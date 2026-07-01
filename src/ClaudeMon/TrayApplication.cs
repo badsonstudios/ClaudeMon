@@ -34,6 +34,7 @@ public sealed class TrayApplication : IDisposable
     private readonly ToolStripMenuItem _downloadUpdateItem =
         new("Download update...") { Visible = false };
     private string? _updateUrl;
+    private bool _settingsOpen;
     private volatile bool _disposed;
 
     private static Version CurrentVersion =>
@@ -368,37 +369,53 @@ public sealed class TrayApplication : IDisposable
 
     private void ShowSettings()
     {
-        // Pass the live overlays so the taskbar appearance previews on the real taskbar as the
-        // visual settings change; the form reverts to the saved values if the dialog is cancelled.
-        using var form = new SettingsForm(_configManager, _taskbarOverlay);
-        if (form.ShowDialog() == DialogResult.OK)
-        {
-            _monitor.UpdateInterval(_configManager.Settings.PollInterval);
-            _taskbarOverlay.SetColors(
-                _configManager.Settings.TaskbarDisplay.LabelColor,
-                _configManager.Settings.TaskbarDisplay.NumberColor);
-            _taskbarOverlay.SetStyle(_configManager.Settings.TaskbarDisplay.Style);
-            _taskbarOverlay.SetBarWidth(_configManager.Settings.TaskbarDisplay.BarWidth);
-            _taskbarOverlay.SetColorMode(_configManager.Settings.ColorMode);
-            _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
-            _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
-            _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
-            _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
+        // ShowDialog() is modal only to same-thread windows it disables — not the tray context
+        // menu or the taskbar readouts. Without this guard the user could open Settings again
+        // (tray menu, or a readout → flyout → gear) on top of the open dialog, stacking two modal
+        // SettingsForms that share one config + one overlay preview and revert against each other.
+        // All entry points run on the UI thread, so a plain bool is enough.
+        if (_settingsOpen)
+            return;
 
-            // Start/stop update checks live to match the toggle; check immediately when
-            // newly enabled so the user doesn't wait up to a day for the first result.
-            if (_configManager.Settings.CheckForUpdates)
+        _settingsOpen = true;
+        try
+        {
+            // Pass the live overlays so the taskbar appearance previews on the real taskbar as the
+            // visual settings change; the form reverts to the saved values if the dialog is cancelled.
+            using var form = new SettingsForm(_configManager, _taskbarOverlay);
+            if (form.ShowDialog() == DialogResult.OK)
             {
-                if (!_updateTimer.Enabled)
+                _monitor.UpdateInterval(_configManager.Settings.PollInterval);
+                _taskbarOverlay.SetColors(
+                    _configManager.Settings.TaskbarDisplay.LabelColor,
+                    _configManager.Settings.TaskbarDisplay.NumberColor);
+                _taskbarOverlay.SetStyle(_configManager.Settings.TaskbarDisplay.Style);
+                _taskbarOverlay.SetBarWidth(_configManager.Settings.TaskbarDisplay.BarWidth);
+                _taskbarOverlay.SetColorMode(_configManager.Settings.ColorMode);
+                _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
+                _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
+                _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
+                _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
+
+                // Start/stop update checks live to match the toggle; check immediately when
+                // newly enabled so the user doesn't wait up to a day for the first result.
+                if (_configManager.Settings.CheckForUpdates)
                 {
-                    _updateTimer.Start();
-                    _ = CheckForUpdatesAsync(manual: false);
+                    if (!_updateTimer.Enabled)
+                    {
+                        _updateTimer.Start();
+                        _ = CheckForUpdatesAsync(manual: false);
+                    }
+                }
+                else
+                {
+                    _updateTimer.Stop();
                 }
             }
-            else
-            {
-                _updateTimer.Stop();
-            }
+        }
+        finally
+        {
+            _settingsOpen = false;
         }
     }
 

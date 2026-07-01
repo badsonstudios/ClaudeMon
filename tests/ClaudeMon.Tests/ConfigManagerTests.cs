@@ -203,6 +203,39 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void Save_IsAtomic_LeavesNoTempFileAndPreservesConfigOnRewrite()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+
+        manager.Update(new AppSettings { PollIntervalMinutes = 7 });
+        manager.Update(new AppSettings { PollIntervalMinutes = 9 }); // overwrite an existing file
+
+        // The temp file used for the atomic write must be renamed away, not left behind.
+        Assert.Empty(Directory.GetFiles(_tempDir, "*.tmp"));
+
+        var reloaded = new ConfigManager(path);
+        reloaded.Load();
+        Assert.Equal(9, reloaded.Settings.PollIntervalMinutes);
+    }
+
+    [Fact]
+    public void Save_OverwritesStaleTempFile()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        // A leftover temp from a previously interrupted write must not break the next save.
+        File.WriteAllText(path + ".tmp", "stale garbage");
+
+        var manager = new ConfigManager(path);
+        manager.Update(new AppSettings { PollIntervalMinutes = 4 });
+
+        Assert.Empty(Directory.GetFiles(_tempDir, "*.tmp"));
+        var reloaded = new ConfigManager(path);
+        reloaded.Load();
+        Assert.Equal(4, reloaded.Settings.PollIntervalMinutes);
+    }
+
+    [Fact]
     public void PollInterval_ReturnsCorrectTimeSpan()
     {
         var settings = new AppSettings { PollIntervalMinutes = 3 };

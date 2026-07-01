@@ -40,7 +40,20 @@ public sealed class UsageMonitor : IDisposable
         _logger = logger;
         _history = history;
         _timer = new System.Timers.Timer(pollInterval.TotalMilliseconds);
-        _timer.Elapsed += async (_, _) => await PollAsync();
+        // The handler is async, so it runs as async void on a timer thread-pool thread: any
+        // exception PollAsync doesn't swallow would otherwise escape unobserved and tear the
+        // whole app down. Guard it here (mirrors TrayApplication.CheckForUpdatesAsync).
+        _timer.Elapsed += async (_, _) =>
+        {
+            try
+            {
+                await PollAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger?.Error($"Usage poll failed: {ex.Message}");
+            }
+        };
         _timer.AutoReset = true;
     }
 

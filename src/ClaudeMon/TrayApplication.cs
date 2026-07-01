@@ -80,11 +80,10 @@ public sealed class TrayApplication : IDisposable
         _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
         _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
         _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
-        // Clicking any monitor's readout opens the detail flyout on the PRIMARY monitor.
-        // The flyout is an ordinary WinForms window and the app is System-DPI-aware, so on a
-        // monitor whose scale differs from the primary's it would be bitmap-virtualized and its
-        // child controls (the gear) would stop receiving clicks. Anchoring it to the primary's
-        // tray corner keeps it in the app's native-DPI context, where it's fully interactive.
+        // Clicking any monitor's readout opens the detail flyout at the PRIMARY monitor's tray
+        // corner (a deliberate, consistent anchor). Under Per-Monitor-V2 the flyout is crisp and
+        // interactive on any monitor, so opening it over the clicked readout is a possible future
+        // refinement; for now every readout opens the flyout in the same place.
         _taskbarOverlay.OverlayClicked += (_, _) => ToggleFlyout(PrimaryTrayAnchor());
 
         _contextMenu = CreateContextMenu();
@@ -193,7 +192,7 @@ public sealed class TrayApplication : IDisposable
     /// <summary>
     /// Anchor at the primary monitor's notification-area corner, where the detail flyout opens.
     /// A click on any taskbar readout opens the flyout here (rather than over the clicked readout)
-    /// so it always lands in the app's native-DPI context — see the OverlayClicked wiring for why.
+    /// so it always lands in a single, predictable spot — see the OverlayClicked wiring.
     /// </summary>
     private static Point PrimaryTrayAnchor()
     {

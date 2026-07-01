@@ -57,8 +57,16 @@ public sealed class TaskbarOverlayWindow : Form
     private UsageColorMode _colorMode = UsageColorMode.Pace;
     private int _x;
     private int _y;
+    // Physical (device-pixel) size of the overlay window, pushed to SetWindowPos/UpdateLayeredWindow.
     private int _width = IconRenderer.MinTaskbarWidth;
     private int _height = 40;
+
+    // The readout is laid out in logical (96-DPI) units — the hand-tuned sizes IconRenderer expects
+    // — then scaled to physical pixels by the target monitor's DPI so it looks the same apparent
+    // size on every monitor. _scale = monitorDpi / 96.
+    private float _scale = 1f;
+    private int _logicalWidth = IconRenderer.MinTaskbarWidth;
+    private int _logicalHeight = 40;
 
     // Inputs the cached _width was last measured for, so the 500 ms keep-alive tick
     // doesn't re-measure (allocating fonts + a bitmap) when nothing changed.
@@ -82,6 +90,9 @@ public sealed class TaskbarOverlayWindow : Form
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
+        // We drive size/position ourselves via SetWindowPos + UpdateLayeredWindow and scale the
+        // content by the target monitor's DPI, so WinForms must not also auto-scale this window.
+        AutoScaleMode = AutoScaleMode.None;
         Size = new Size(_width, _height);
         Cursor = Cursors.Hand; // signal the readout is clickable
 
@@ -268,46 +279,59 @@ public sealed class TaskbarOverlayWindow : Form
     /// </summary>
     private void UpdateMeasuredWidth()
     {
+        // Measure in logical units (IconRenderer works at 96 DPI), cache on the logical height, and
+        // derive the physical window width from the current DPI scale. _width is always refreshed
+        // from _logicalWidth because the scale can change (a move to another monitor) even when the
+        // logical measurement is unchanged.
         if (_signInExpired)
         {
-            if (_widthSignInExpired && _widthHeight == _height) return;
+            if (!(_widthSignInExpired && _widthHeight == _logicalHeight))
+            {
+                _logicalWidth = IconRenderer.MeasureTaskbarSignInExpiredWidth(_logicalHeight);
+                _widthSignInExpired = true;
+                _widthHeight = _logicalHeight;
+            }
 
-            _width = IconRenderer.MeasureTaskbarSignInExpiredWidth(_height);
-            _widthSignInExpired = true;
-            _widthHeight = _height;
+            _width = Scale(_logicalWidth);
             return;
         }
 
         var pct = _percentage ?? 0;
         var seven = SevenDayForDisplay;
-        if (!_widthSignInExpired
-            && _widthStyle == _style && _widthBarWidth == _barWidth
-            && _widthPct.Equals(pct) && _widthSeven.Equals(seven) && _widthHeight == _height)
-            return;
+        if (_widthSignInExpired
+            || _widthStyle != _style || _widthBarWidth != _barWidth
+            || !_widthPct.Equals(pct) || !_widthSeven.Equals(seven) || _widthHeight != _logicalHeight)
+        {
+            // The bar's width is fixed by the height + width setting (the value doesn't widen it);
+            // the number's width grows with the digits shown.
+            _logicalWidth = _style == TaskbarStyle.Bar
+                ? IconRenderer.MeasureTaskbarBarWidth(_logicalHeight, _barWidth)
+                : IconRenderer.MeasureTaskbarUsageWidth(pct, seven, _logicalHeight);
+            _widthPct = pct;
+            _widthSeven = seven;
+            _widthHeight = _logicalHeight;
+            _widthStyle = _style;
+            _widthBarWidth = _barWidth;
+            _widthSignInExpired = false;
+        }
 
-        // The bar's width is fixed by the height + width setting (the value doesn't widen it);
-        // the number's width grows with the digits shown.
-        _width = _style == TaskbarStyle.Bar
-            ? IconRenderer.MeasureTaskbarBarWidth(_height, _barWidth)
-            : IconRenderer.MeasureTaskbarUsageWidth(pct, seven, _height);
-        _widthPct = pct;
-        _widthSeven = seven;
-        _widthHeight = _height;
-        _widthStyle = _style;
-        _widthBarWidth = _barWidth;
-        _widthSignInExpired = false;
+        _width = Scale(_logicalWidth);
     }
 
+    /// <summary>Logical → physical pixels for the current monitor's DPI scale.</summary>
+    private int Scale(int logical) => (int)Math.Round(logical * _scale);
+
     /// <summary>
-    /// Clock-reserve width for a secondary taskbar, cached per taskbar height so the keep-alive
-    /// tick doesn't re-measure (allocating fonts + a bitmap) when the height hasn't changed.
+    /// Clock-reserve width (logical pixels) for a secondary taskbar, cached per logical taskbar
+    /// height so the keep-alive tick doesn't re-measure (allocating fonts + a bitmap) when it
+    /// hasn't changed. The caller scales the result to physical pixels.
     /// </summary>
     private int ClockReserve()
     {
-        if (_clockReserveHeight != _height)
+        if (_clockReserveHeight != _logicalHeight)
         {
-            _clockReserve = IconRenderer.MeasureTaskbarClockReserve(_height);
-            _clockReserveHeight = _height;
+            _clockReserve = IconRenderer.MeasureTaskbarClockReserve(_logicalHeight);
+            _clockReserveHeight = _logicalHeight;
         }
 
         return _clockReserve;
@@ -339,14 +363,23 @@ public sealed class TaskbarOverlayWindow : Form
         if (notifyHwnd != IntPtr.Zero && GetWindowRect(notifyHwnd, out var notify))
             notifyLeft = notify.Left;
 
-        var taskbarHeight = rect.Bottom - rect.Top;
-        _height = taskbarHeight > 0 ? taskbarHeight : _height;
+        // Per-monitor DPI of the target taskbar. Under Per-Monitor-V2 every coordinate here is in
+        // real (physical) pixels; we lay the readout out in logical (96-DPI) units and scale to
+        // physical by this factor, so a 150%/200% monitor gets a proportionally larger, crisp
+        // readout instead of a bitmap-stretched one.
+        var dpi = GetDpiForWindow(taskbar.Value.Handle);
+        _scale = dpi > 0 ? dpi / 96f : 1f;
 
-        var rightReserve = notifyLeft is null ? ClockReserve() : 0;
+        var taskbarHeight = rect.Bottom - rect.Top; // physical pixels
+        _height = taskbarHeight > 0 ? taskbarHeight : _height;
+        _logicalHeight = Math.Max(1, (int)Math.Round(_height / _scale));
+
+        // Reserve and offset are physical (they live in the taskbar's physical coordinate space).
+        var rightReserve = notifyLeft is null ? Scale(ClockReserve()) : 0;
 
         // The horizontal nudge only tunes secondary taskbars, where the clock width is
         // estimated. The primary is anchored exactly to its tray, so it ignores the offset.
-        var offset = taskbar.Value.IsPrimary ? 0 : _horizontalOffset;
+        var offset = taskbar.Value.IsPrimary ? 0 : Scale(_horizontalOffset);
 
         // Size the overlay to its content so the dual "5hr / 7day" readout never clips.
         // The window is right-anchored, so a wider overlay extends leftward and the
@@ -383,12 +416,19 @@ public sealed class TaskbarOverlayWindow : Form
         using var bitmap = new Bitmap(_width, _height, PixelFormat.Format32bppArgb);
         using (var graphics = Graphics.FromImage(bitmap))
         {
+            // Draw the readout in logical (96-DPI) coordinates and let the transform scale it up to
+            // the physical bitmap for the monitor's DPI. The point-sized fonts render crisply at the
+            // scaled size (vector glyphs), so a 150%/200% monitor gets a larger, sharp readout.
+            if (_scale != 1f)
+                graphics.ScaleTransform(_scale, _scale);
+
             // Fill with alpha 1 (not 0) so the WHOLE rectangle is a hit target: a layered
             // window hit-tests per-pixel by alpha, and fully-transparent pixels pass clicks
             // through. At 1/255 the fill is visually imperceptible but makes the readout
             // behave like a button — a click (or the hand cursor) anywhere in its bounds counts.
+            // Clear ignores the world transform and fills the entire physical bitmap.
             graphics.Clear(Color.FromArgb(1, 0, 0, 0));
-            var bounds = new Rectangle(0, 0, _width, _height);
+            var bounds = new Rectangle(0, 0, _logicalWidth, _logicalHeight);
 
             if (_signInExpired)
             {
@@ -530,6 +570,11 @@ public sealed class TaskbarOverlayWindow : Form
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetProp(IntPtr hWnd, string lpString, IntPtr hData);
+
+    // Per-monitor DPI of the monitor a window is on (Windows 10 1607+). Returns 0 on failure,
+    // in which case we fall back to a 1.0 scale.
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

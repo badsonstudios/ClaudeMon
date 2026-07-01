@@ -123,9 +123,9 @@ public sealed class FlyoutPanel : Form
         _contentPanel.Invalidate();
     }
 
-    // The app currently runs SystemAware, where DeviceDpi is fixed for the process
-    // lifetime and this never fires. It's wired up so the flyout re-fits for free
-    // if/when the app opts into PerMonitorV2 (tracked separately).
+    // The app runs Per-Monitor-V2 (see ClaudeMon.csproj), so DeviceDpi tracks the monitor the
+    // flyout is shown on and this fires when it moves to a differently-scaled display — re-fitting
+    // the hand-drawn layout for the new DPI.
     protected override void OnDpiChanged(DpiChangedEventArgs e)
     {
         base.OnDpiChanged(e);

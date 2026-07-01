@@ -57,6 +57,12 @@ public sealed class SettingsForm : Form
     // Light or dark accents/controls, matching the Windows app theme.
     private readonly Theme _theme = Theme.Current;
 
+    // Fonts this form owns. WinForms does NOT dispose a Font you assign to a control, so without
+    // this they'd leak a handle per dialog open; disposed in Dispose. One header font is shared
+    // across all section headers rather than allocating one each.
+    private readonly Font _baseFont = new("Segoe UI", 9.75f);
+    private readonly Font _headerFont = new("Segoe UI Semibold", 9f, FontStyle.Bold);
+
     // An ordered layout row: its controls (each with a vertical offset within the row), the row
     // height, and an optional visibility predicate (null = always shown).
     private sealed class RowDef
@@ -129,7 +135,7 @@ public sealed class SettingsForm : Form
         // scale every metric by the monitor DPI ourselves (see Sc/Relayout). Point-sized fonts still
         // scale with DeviceDpi on their own.
         AutoScaleMode = AutoScaleMode.None;
-        Font = new Font("Segoe UI", 9.75f);
+        Font = _baseFont;
         // Background + control colours come from the app-wide dark mode (Program.cs).
         ClientSize = new Size(480, 600);
 
@@ -205,7 +211,7 @@ public sealed class SettingsForm : Form
         {
             Text = title.ToUpperInvariant(),
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            Font = _headerFont,
             ForeColor = _theme.HeaderAccent,
         };
         // Position/size (Left, Width) are applied — DPI-scaled — by Relayout from _hspec below.
@@ -335,6 +341,18 @@ public sealed class SettingsForm : Form
         base.OnDpiChanged(e);
         // Re-fit if the dialog is dragged to a monitor with a different scale.
         Relayout();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        // Dispose child controls first, then the fonts they were using (a control never disposes an
+        // assigned Font itself).
+        base.Dispose(disposing);
+        if (disposing)
+        {
+            _baseFont.Dispose();
+            _headerFont.Dispose();
+        }
     }
 
     // --- Events ---

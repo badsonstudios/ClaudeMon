@@ -129,7 +129,12 @@ public sealed class FlyoutPanel : Form
     protected override void OnDpiChanged(DpiChangedEventArgs e)
     {
         base.OnDpiChanged(e);
+        // Re-fit the hand-drawn layout for the new DPI. If the popup is open, dismiss it too: it's
+        // positioned once at open time (ShowNear), so a live DPI change would leave it sized for the
+        // new DPI but anchored at the old-DPI coordinates — the next open re-fits and re-anchors.
         Relayout();
+        if (Visible)
+            Hide();
     }
 
     public void ShowNear(Point anchor)

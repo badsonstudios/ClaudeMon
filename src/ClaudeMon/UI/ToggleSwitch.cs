@@ -30,22 +30,29 @@ public sealed class ToggleSwitch : CheckBox
         // The parent (the themed form) supplies the backdrop the rounded track sits on.
         g.Clear(Parent?.BackColor ?? (theme.IsDark ? Color.FromArgb(32, 32, 32) : Color.White));
 
-        var track = new Rectangle(0, 1, Width - 1, Height - 3);
+        // Scale every inset from the 40x20 design size so the switch keeps its proportions at any
+        // DPI — the parent sizes this control per-monitor, but the paint geometry was fixed pixels
+        // (so the knob crept larger relative to the track as DPI rose). At Height 20, P() is a no-op.
+        var s = Height / 20f;
+        int P(int designPx) => Math.Max(1, (int)Math.Round(designPx * s));
+
+        var track = new Rectangle(0, P(1), Width - P(1), Height - P(3));
         var trackColor = !Enabled ? theme.ToggleTrackDisabled
             : Checked ? theme.ToggleTrackOn : theme.ToggleTrackOff;
         using (var b = new SolidBrush(trackColor))
         using (var path = Rounded(track, track.Height / 2))
             g.FillPath(b, path);
 
-        var d = track.Height - 4;
-        var knobX = Checked ? track.Right - d - 2 : track.Left + 2;
+        var d = track.Height - P(4);
+        var knobX = Checked ? track.Right - d - P(2) : track.Left + P(2);
+        var knobY = track.Top + P(2);
         var knobColor = Enabled ? theme.ToggleKnob : theme.ToggleKnobDisabled;
         using (var knob = new SolidBrush(knobColor))
-            g.FillEllipse(knob, knobX, track.Top + 2, d, d);
+            g.FillEllipse(knob, knobX, knobY, d, d);
 
         // A faint ring keeps the knob defined (a white knob on a light off-track, especially).
         using var ring = new Pen(Color.FromArgb(40, 0, 0, 0));
-        g.DrawEllipse(ring, knobX, track.Top + 2, d, d);
+        g.DrawEllipse(ring, knobX, knobY, d, d);
     }
 
     protected override void OnCheckedChanged(EventArgs e)

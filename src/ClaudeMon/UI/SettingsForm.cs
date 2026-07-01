@@ -74,8 +74,7 @@ public sealed class SettingsForm : Form
     // layout for us. The layout constants above are all logical (96-DPI) values.
     private readonly List<(Control Control, int Left, int Width, int Height)> _hspec = [];
 
-    private float DpiScale => DeviceDpi / 96f;
-    private int Sc(int value) => (int)Math.Round(value * DpiScale);
+    private int Sc(int value) => DpiScale.Scale(value, DeviceDpi / 96f);
 
     private static readonly (string Text, PaceSensitivity Value)[] PaceSensitivityOptions =
     [
@@ -173,14 +172,13 @@ public sealed class SettingsForm : Form
         _checkForUpdatesToggle = AddToggleRow("Check for updates automatically");
 
         // --- Buttons ---
+        // Position/size are applied — DPI-scaled — by Relayout from _hspec.
         _okButton = MakeButton("OK", DialogResult.OK);
-        _okButton.Left = ContentRight - 174;
         _okButton.Click += OnOkClicked;
         Controls.Add(_okButton);
         _hspec.Add((_okButton, ContentRight - 174, 82, 30)); // buttons are 82x30 logical
 
         _cancelButton = MakeButton("Cancel", DialogResult.Cancel);
-        _cancelButton.Left = ContentRight - 84;
         Controls.Add(_cancelButton);
         _hspec.Add((_cancelButton, ContentRight - 84, 82, 30));
 
@@ -207,11 +205,11 @@ public sealed class SettingsForm : Form
         {
             Text = title.ToUpperInvariant(),
             AutoSize = true,
-            Left = Pad,
             Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
             ForeColor = _theme.HeaderAccent,
         };
-        var divider = new Panel { BackColor = _theme.Divider, Width = ContentRight - Pad, Height = 1, Left = Pad };
+        // Position/size (Left, Width) are applied — DPI-scaled — by Relayout from _hspec below.
+        var divider = new Panel { BackColor = _theme.Divider, Height = 1 };
         Controls.Add(header);
         Controls.Add(divider);
         _rows.Add(new RowDef { Items = [(header, 16), (divider, 38)], Height = 44 });
@@ -221,8 +219,8 @@ public sealed class SettingsForm : Form
 
     private ToggleSwitch AddToggleRow(string text, bool indent = false, Func<bool>? visible = null)
     {
-        var label = new Label { Text = text, AutoSize = true, Left = indent ? Pad + 16 : Pad };
-        var toggle = new ToggleSwitch { Left = ContentRight - ToggleWidth };
+        var label = new Label { Text = text, AutoSize = true };
+        var toggle = new ToggleSwitch();
         Controls.Add(label);
         Controls.Add(toggle);
         _rows.Add(new RowDef { Items = [(label, 8), (toggle, 7)], Height = 34, Visible = visible });
@@ -233,8 +231,8 @@ public sealed class SettingsForm : Form
 
     private ComboBox AddComboRow(string label, IEnumerable<string> items, bool indent = false, Func<bool>? visible = null)
     {
-        var lbl = new Label { Text = label, AutoSize = true, Left = indent ? Pad + 16 : Pad };
-        var combo = new ComboBox { Left = ControlLeft, Width = ComboWidth, DropDownStyle = ComboBoxStyle.DropDownList };
+        var lbl = new Label { Text = label, AutoSize = true };
+        var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
         combo.Items.AddRange(items.Select(i => (object)i).ToArray());
         Controls.Add(lbl);
         Controls.Add(combo);
@@ -247,8 +245,8 @@ public sealed class SettingsForm : Form
     private NumericUpDown AddNumericRow(
         string label, int min, int max, bool indent = false, Func<bool>? visible = null, string? suffix = "%")
     {
-        var lbl = new Label { Text = label, AutoSize = true, Left = indent ? Pad + 16 : Pad };
-        var numeric = new ThemedNumericUpDown { Left = ControlLeft, Width = NumericWidth, Minimum = min, Maximum = max };
+        var lbl = new Label { Text = label, AutoSize = true };
+        var numeric = new ThemedNumericUpDown { Minimum = min, Maximum = max };
         Controls.Add(lbl);
         Controls.Add(numeric);
         _hspec.Add((lbl, indent ? Pad + 16 : Pad, 0, 0));
@@ -262,7 +260,6 @@ public sealed class SettingsForm : Form
                 Text = suffix,
                 AutoSize = true,
                 ForeColor = _theme.HintText,
-                Left = ControlLeft + NumericWidth + 6,
             };
             Controls.Add(sfx);
             items.Add((sfx, 6));

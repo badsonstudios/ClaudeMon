@@ -111,8 +111,8 @@ public sealed class FlyoutPanel : Form
         // so it reads as part of that row. The point-size glyph scales with DPI on its own; only
         // the pixel box/margin need scaling.
         var scale = DeviceDpi / 96f;
-        var btn = (int)Math.Round(28 * scale);
-        var margin = (int)Math.Round(8 * scale);
+        var btn = DpiScale.Scale(28, scale);
+        var margin = DpiScale.Scale(8, scale);
         var statusCentre = Size.Height - metrics.BottomPadding - metrics.StatusLineHeight / 2;
         _settingsButton.Size = new Size(btn, btn);
         _settingsButton.Location = new Point(

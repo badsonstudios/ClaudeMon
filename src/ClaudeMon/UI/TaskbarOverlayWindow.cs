@@ -82,6 +82,16 @@ public sealed class TaskbarOverlayWindow : Form
     private int _clockReserve;
     private int _clockReserveHeight = -1;
 
+    // Dirty-tracking for the 500 ms keep-alive: skip the (now DPI-sized — up to ~4x the pixels at
+    // 200%) bitmap rebuild + UpdateLayeredWindow when neither the geometry, DPI scale, taskbar
+    // light/dark theme, nor the readout content changed since the last paint. Topmost z-order and
+    // NonRudeHWND are still re-asserted every tick (that's the keep-alive's job). Starts dirty so
+    // the first paint always happens; content setters mark it dirty.
+    private bool _contentDirty = true;
+    private int _paintedX, _paintedY, _paintedWidth, _paintedHeight;
+    private float _paintedScale = float.NaN;
+    private bool _paintedLight;
+
     public TaskbarOverlayWindow(string targetMonitorDevice, Logger? logger = null)
     {
         _targetMonitorDevice = targetMonitorDevice;
@@ -198,6 +208,7 @@ public sealed class TaskbarOverlayWindow : Form
         _fiveHourFraction = reading.FiveHourFraction;
         _sevenDayPercentage = reading.SevenDayPct;
         _sevenDayFraction = reading.SevenDayFraction;
+        _contentDirty = true;
         if (Visible) Reposition();
     }
 
@@ -211,6 +222,7 @@ public sealed class TaskbarOverlayWindow : Form
     public void ShowSignInExpired()
     {
         _signInExpired = true;
+        _contentDirty = true;
         if (Visible) Reposition();
     }
 
@@ -219,6 +231,7 @@ public sealed class TaskbarOverlayWindow : Form
     {
         _labelColor = labelColor;
         _numberColor = numberColor;
+        _contentDirty = true;
         if (Visible) Redraw();
     }
 
@@ -229,6 +242,7 @@ public sealed class TaskbarOverlayWindow : Form
     public void SetStyle(TaskbarStyle style)
     {
         _style = style;
+        _contentDirty = true;
         if (Visible) Reposition();
     }
 
@@ -236,6 +250,7 @@ public sealed class TaskbarOverlayWindow : Form
     public void SetBarWidth(TaskbarBarWidth barWidth)
     {
         _barWidth = barWidth;
+        _contentDirty = true;
         if (Visible) Reposition();
     }
 
@@ -246,6 +261,7 @@ public sealed class TaskbarOverlayWindow : Form
     public void SetColorMode(UsageColorMode colorMode)
     {
         _colorMode = colorMode;
+        _contentDirty = true;
         if (Visible) Redraw();
     }
 
@@ -256,6 +272,7 @@ public sealed class TaskbarOverlayWindow : Form
     public void SetShowSevenDay(bool showSevenDay)
     {
         _showSevenDay = showSevenDay;
+        _contentDirty = true;
         if (Visible) Reposition();
     }
 
@@ -319,7 +336,7 @@ public sealed class TaskbarOverlayWindow : Form
     }
 
     /// <summary>Logical → physical pixels for the current monitor's DPI scale.</summary>
-    private int Scale(int logical) => (int)Math.Round(logical * _scale);
+    private int Scale(int logical) => DpiScale.Scale(logical, _scale);
 
     /// <summary>
     /// Clock-reserve width (logical pixels) for a secondary taskbar, cached per logical taskbar
@@ -368,7 +385,7 @@ public sealed class TaskbarOverlayWindow : Form
         // physical by this factor, so a 150%/200% monitor gets a proportionally larger, crisp
         // readout instead of a bitmap-stretched one.
         var dpi = GetDpiForWindow(taskbar.Value.Handle);
-        _scale = dpi > 0 ? dpi / 96f : 1f;
+        _scale = DpiScale.FactorForDpi((int)dpi);
 
         var taskbarHeight = rect.Bottom - rect.Top; // physical pixels
         _height = taskbarHeight > 0 ? taskbarHeight : _height;
@@ -404,7 +421,16 @@ public sealed class TaskbarOverlayWindow : Form
             Handle, HWND_TOPMOST, _x, _y, _width, _height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
-        Redraw();
+        // Repaint only when something visible changed. The z-order re-assert above is cheap and must
+        // run every tick; the bitmap rebuild + UpdateLayeredWindow below is the expensive part (and
+        // is now ~4x the pixels at 200% DPI), so skip it when geometry, scale, theme, and content
+        // all match the last paint.
+        if (_contentDirty
+            || _x != _paintedX || _y != _paintedY || _width != _paintedWidth || _height != _paintedHeight
+            || _scale != _paintedScale || SystemTheme.IsLightWindowsMode() != _paintedLight)
+        {
+            Redraw();
+        }
     }
 
     /// <summary>Renders the readout to a 32bpp ARGB bitmap and pushes it via UpdateLayeredWindow.</summary>
@@ -412,6 +438,10 @@ public sealed class TaskbarOverlayWindow : Form
     {
         // Sign-in-expired draws without a percentage; otherwise there's nothing to paint yet.
         if (!IsHandleCreated || (!_signInExpired && _percentage is null)) return;
+
+        // Read the taskbar theme once (cached in SystemTheme): it feeds the bar tick contrast and
+        // the keep-alive's repaint dirty-check.
+        var light = SystemTheme.IsLightWindowsMode();
 
         using var bitmap = new Bitmap(_width, _height, PixelFormat.Format32bppArgb);
         using (var graphics = Graphics.FromImage(bitmap))
@@ -447,7 +477,7 @@ public sealed class TaskbarOverlayWindow : Form
                         graphics, bounds,
                         pct, _fiveHourFraction,
                         sevenDay, sevenDay is null ? null : _sevenDayFraction,
-                        _colorMode, SystemTheme.IsLightWindowsMode());
+                        _colorMode, light);
                 }
                 else
                 {
@@ -502,6 +532,16 @@ public sealed class TaskbarOverlayWindow : Form
             }
             DeleteDC(memDc);
         }
+
+        // Record what we just painted so the keep-alive tick can skip a redundant repaint until
+        // the geometry, DPI scale, taskbar theme, or content changes again.
+        _paintedX = _x;
+        _paintedY = _y;
+        _paintedWidth = _width;
+        _paintedHeight = _height;
+        _paintedScale = _scale;
+        _paintedLight = light;
+        _contentDirty = false;
     }
 
     protected override void Dispose(bool disposing)

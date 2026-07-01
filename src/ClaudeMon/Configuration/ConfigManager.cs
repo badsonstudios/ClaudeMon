@@ -51,14 +51,40 @@ public sealed class ConfigManager
         if (dir is not null && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        // Write atomically (temp file then rename) so a crash mid-write can't truncate config.json
-        // and leave Load() silently falling back to defaults — which would lose every setting. Same
-        // pattern as CredentialReader.WriteBack. The temp sits in the same directory (same volume),
-        // so File.Move is a rename.
+        // Write atomically and best-effort: serialize to a temp file in the same directory, then
+        // swap it into place so a crash mid-write can't truncate config.json and make Load()
+        // silently reset to defaults. File.Replace is a true atomic, ACL-preserving swap (used once
+        // the config exists); on first run there's nothing to replace, so move it into place. A
+        // transient lock (AV scanner, another reader) must not crash the app or orphan the temp —
+        // the in-memory Settings still serve this session and the next Save retries. Mirrors
+        // CredentialReader.WriteBack (which is where the credentials file gets the same treatment).
         var json = JsonSerializer.Serialize(Settings, JsonOptions);
         var tempPath = _configPath + ".tmp";
-        File.WriteAllText(tempPath, json);
-        File.Move(tempPath, _configPath, overwrite: true);
+        try
+        {
+            File.WriteAllText(tempPath, json);
+            if (File.Exists(_configPath))
+                File.Replace(tempPath, _configPath, destinationBackupFileName: null);
+            else
+                File.Move(tempPath, _configPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            TryDeleteTemp(tempPath);
+        }
+    }
+
+    private static void TryDeleteTemp(string tempPath)
+    {
+        try
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort cleanup; leaving a temp file is not worth surfacing.
+        }
     }
 
     public void Update(AppSettings newSettings)

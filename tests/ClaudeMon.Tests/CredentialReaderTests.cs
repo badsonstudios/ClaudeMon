@@ -180,8 +180,7 @@ public class CredentialReaderTests : IDisposable
             SubscriptionType: null,
             RateLimitTier: null);
 
-        var ok = reader.WriteBack(refreshed);
-        Assert.True(ok);
+        Assert.Equal(WriteBackOutcome.Written, reader.WriteBack(refreshed));
 
         // Re-read and confirm the three fields changed while everything else stayed.
         var result = reader.Read();
@@ -200,18 +199,18 @@ public class CredentialReaderTests : IDisposable
     }
 
     [Fact]
-    public void WriteBack_MissingFile_ReturnsFalse()
+    public void WriteBack_MissingFile_ReturnsFailed()
     {
         var reader = new CredentialReader(Path.Combine(_tempDir, "nonexistent.json"));
 
         var refreshed = new ClaudeMon.Models.OAuthCredential(
             "a", "b", 9999999999999, null, null, null);
 
-        Assert.False(reader.WriteBack(refreshed));
+        Assert.Equal(WriteBackOutcome.Failed, reader.WriteBack(refreshed));
     }
 
     [Fact]
-    public void WriteBack_MissingOAuthSection_ReturnsFalseAndLeavesFileIntact()
+    public void WriteBack_MissingOAuthSection_ReturnsFailedAndLeavesFileIntact()
     {
         var path = WriteTempFile("""
         {
@@ -223,10 +222,94 @@ public class CredentialReaderTests : IDisposable
         var refreshed = new ClaudeMon.Models.OAuthCredential(
             "a", "b", 9999999999999, null, null, null);
 
-        Assert.False(reader.WriteBack(refreshed));
+        Assert.Equal(WriteBackOutcome.Failed, reader.WriteBack(refreshed));
         // File untouched; no temp litter left next to it.
         Assert.Contains("only-this", File.ReadAllText(path));
         Assert.Empty(Directory.GetFiles(_tempDir, "*.tmp"));
+    }
+
+    [Fact]
+    public void WriteBack_ExpectedTokenMatchesOnDisk_Writes()
+    {
+        var path = WriteTempFile("""
+        {
+            "claudeAiOauth": {
+                "accessToken": "old-access",
+                "refreshToken": "old-refresh",
+                "expiresAt": 1000000000000
+            }
+        }
+        """);
+        var reader = new CredentialReader(path);
+
+        var refreshed = new ClaudeMon.Models.OAuthCredential(
+            "new-access", "new-refresh", 9999999999999, null, null, null);
+
+        // We refreshed from "old-refresh" and the file still holds it → safe to write.
+        Assert.Equal(WriteBackOutcome.Written, reader.WriteBack(refreshed, expectedPreviousRefreshToken: "old-refresh"));
+
+        var result = reader.Read();
+        Assert.Equal("new-refresh", result.Credential!.RefreshToken);
+        Assert.Equal("new-access", result.Credential.AccessToken);
+    }
+
+    [Fact]
+    public void WriteBack_AnotherClientRotatedToken_SkipsAndLeavesFileIntact()
+    {
+        // The CLI/extension rotated the on-disk refresh token after we read it, so the file no
+        // longer holds the token we refreshed from. Our tokens are from a superseded lineage —
+        // overwriting would clobber the newer one, so WriteBack must leave the file untouched.
+        var path = WriteTempFile("""
+        {
+            "claudeAiOauth": {
+                "accessToken": "cli-access",
+                "refreshToken": "cli-rotated-refresh",
+                "expiresAt": 1000000000000
+            }
+        }
+        """);
+        var reader = new CredentialReader(path);
+
+        var refreshed = new ClaudeMon.Models.OAuthCredential(
+            "our-access", "our-new-refresh", 9999999999999, null, null, null);
+
+        Assert.Equal(
+            WriteBackOutcome.SupersededByAnotherClient,
+            reader.WriteBack(refreshed, expectedPreviousRefreshToken: "old-refresh"));
+
+        // The CLI's newer token survives untouched, and no temp file is left behind.
+        var result = reader.Read();
+        Assert.Equal("cli-rotated-refresh", result.Credential!.RefreshToken);
+        Assert.Equal("cli-access", result.Credential.AccessToken);
+        Assert.Empty(Directory.GetFiles(_tempDir, "*.tmp"));
+    }
+
+    [Fact]
+    public void WriteBack_OnDiskAlreadyHasOurNewToken_StillWrites()
+    {
+        // The on-disk token already equals our new token (e.g. a retry after a prior write). That's
+        // not another client's rotation, so the write proceeds and refreshes the access token/expiry.
+        var path = WriteTempFile("""
+        {
+            "claudeAiOauth": {
+                "accessToken": "stale-access",
+                "refreshToken": "our-new-refresh",
+                "expiresAt": 1000000000000
+            }
+        }
+        """);
+        var reader = new CredentialReader(path);
+
+        var refreshed = new ClaudeMon.Models.OAuthCredential(
+            "our-access", "our-new-refresh", 9999999999999, null, null, null);
+
+        Assert.Equal(
+            WriteBackOutcome.Written,
+            reader.WriteBack(refreshed, expectedPreviousRefreshToken: "old-refresh"));
+
+        var result = reader.Read();
+        Assert.Equal("our-access", result.Credential!.AccessToken);
+        Assert.Equal(9999999999999, result.Credential.ExpiresAt);
     }
 
     [Fact]

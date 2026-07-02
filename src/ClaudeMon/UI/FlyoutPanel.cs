@@ -111,8 +111,8 @@ public sealed class FlyoutPanel : Form
         // so it reads as part of that row. The point-size glyph scales with DPI on its own; only
         // the pixel box/margin need scaling.
         var scale = DeviceDpi / 96f;
-        var btn = (int)Math.Round(28 * scale);
-        var margin = (int)Math.Round(8 * scale);
+        var btn = DpiScale.Scale(28, scale);
+        var margin = DpiScale.Scale(8, scale);
         var statusCentre = Size.Height - metrics.BottomPadding - metrics.StatusLineHeight / 2;
         _settingsButton.Size = new Size(btn, btn);
         _settingsButton.Location = new Point(
@@ -123,13 +123,18 @@ public sealed class FlyoutPanel : Form
         _contentPanel.Invalidate();
     }
 
-    // The app currently runs SystemAware, where DeviceDpi is fixed for the process
-    // lifetime and this never fires. It's wired up so the flyout re-fits for free
-    // if/when the app opts into PerMonitorV2 (tracked separately).
+    // The app runs Per-Monitor-V2 (see ClaudeMon.csproj), so DeviceDpi tracks the monitor the
+    // flyout is shown on and this fires when it moves to a differently-scaled display — re-fitting
+    // the hand-drawn layout for the new DPI.
     protected override void OnDpiChanged(DpiChangedEventArgs e)
     {
         base.OnDpiChanged(e);
+        // Re-fit the hand-drawn layout for the new DPI. If the popup is open, dismiss it too: it's
+        // positioned once at open time (ShowNear), so a live DPI change would leave it sized for the
+        // new DPI but anchored at the old-DPI coordinates — the next open re-fits and re-anchors.
         Relayout();
+        if (Visible)
+            Hide();
     }
 
     public void ShowNear(Point anchor)

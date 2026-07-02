@@ -19,9 +19,20 @@ public record UsageBucket(
     [property: JsonPropertyName("resets_at")] DateTimeOffset? ResetAt
 )
 {
-    public TimeSpan TimeUntilReset => ResetAt is not null && ResetAt > DateTimeOffset.UtcNow
-        ? ResetAt.Value - DateTimeOffset.UtcNow
-        : TimeSpan.Zero;
+    public TimeSpan TimeUntilReset
+    {
+        get
+        {
+            if (ResetAt is null)
+                return TimeSpan.Zero;
+
+            // Sample the clock once: reading UtcNow for both the guard and the subtraction can
+            // return a tiny negative span right at the reset boundary, which would flow into the
+            // burn-rate estimate as a non-positive reset and wrongly suppress the time-to-limit.
+            var remaining = ResetAt.Value - DateTimeOffset.UtcNow;
+            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
+    }
 
     /// <summary>
     /// How far through a fixed reset window of length <paramref name="window"/> this bucket is:

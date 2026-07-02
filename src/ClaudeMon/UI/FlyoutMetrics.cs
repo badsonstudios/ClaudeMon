@@ -55,7 +55,7 @@ public sealed class FlyoutMetrics
     private FlyoutMetrics(int dpi)
     {
         var scale = dpi / 96f;
-        int S(int baseValue) => (int)Math.Round(baseValue * scale, MidpointRounding.AwayFromZero);
+        int S(int baseValue) => DpiScale.Scale(baseValue, scale);
 
         LeftInset = S(BaseLeftInset);
         TopPadding = S(BaseTopPadding);

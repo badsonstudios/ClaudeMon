@@ -9,6 +9,13 @@
     <Version>0.10.0</Version>
     <AssemblyTitle>ClaudeMon</AssemblyTitle>
     <Description>Windows system tray monitor for Claude AI usage</Description>
+    <!-- Per-Monitor-V2 DPI awareness: coordinates are real (physical) pixels on every monitor
+         (so the taskbar overlay positions correctly on mixed-DPI setups) and each window scales
+         crisply for the monitor it's on rather than being bitmap-stretched. Consumed by
+         ApplicationConfiguration.Initialize() in Program.cs. Each window handles its own scaling:
+         the flyout via FlyoutMetrics, the overlay via a DPI ScaleTransform, the Settings dialog
+         via DPI-scaled layout. -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
 
   <ItemGroup>

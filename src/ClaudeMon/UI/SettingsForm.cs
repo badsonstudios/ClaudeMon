@@ -57,6 +57,12 @@ public sealed class SettingsForm : Form
     // Light or dark accents/controls, matching the Windows app theme.
     private readonly Theme _theme = Theme.Current;
 
+    // Fonts this form owns. WinForms does NOT dispose a Font you assign to a control, so without
+    // this they'd leak a handle per dialog open; disposed in Dispose. One header font is shared
+    // across all section headers rather than allocating one each.
+    private readonly Font _baseFont = new("Segoe UI", 9.75f);
+    private readonly Font _headerFont = new("Segoe UI Semibold", 9f, FontStyle.Bold);
+
     // An ordered layout row: its controls (each with a vertical offset within the row), the row
     // height, and an optional visibility predicate (null = always shown).
     private sealed class RowDef
@@ -67,6 +73,14 @@ public sealed class SettingsForm : Form
     }
 
     private readonly List<RowDef> _rows = [];
+
+    // Logical (96-DPI) horizontal geometry per control: (control, left, width, height). Width/height
+    // 0 means "leave as-is" (labels/combos auto-size their height from the font). Applied scaled by
+    // the monitor DPI in Relayout, because AutoScaleMode.None means WinForms won't scale our manual
+    // layout for us. The layout constants above are all logical (96-DPI) values.
+    private readonly List<(Control Control, int Left, int Width, int Height)> _hspec = [];
+
+    private int Sc(int value) => DpiScale.Scale(value, DeviceDpi / 96f);
 
     private static readonly (string Text, PaceSensitivity Value)[] PaceSensitivityOptions =
     [
@@ -116,7 +130,12 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        Font = new Font("Segoe UI", 9.75f);
+        // This form is laid out manually (a vertical cursor + collapsing rows), so WinForms' own
+        // auto-scaling can't help — it would fight our repeated Relayout(). We take full control and
+        // scale every metric by the monitor DPI ourselves (see Sc/Relayout). Point-sized fonts still
+        // scale with DeviceDpi on their own.
+        AutoScaleMode = AutoScaleMode.None;
+        Font = _baseFont;
         // Background + control colours come from the app-wide dark mode (Program.cs).
         ClientSize = new Size(480, 600);
 
@@ -159,14 +178,15 @@ public sealed class SettingsForm : Form
         _checkForUpdatesToggle = AddToggleRow("Check for updates automatically");
 
         // --- Buttons ---
+        // Position/size are applied — DPI-scaled — by Relayout from _hspec.
         _okButton = MakeButton("OK", DialogResult.OK);
-        _okButton.Left = ContentRight - 174;
         _okButton.Click += OnOkClicked;
         Controls.Add(_okButton);
+        _hspec.Add((_okButton, ContentRight - 174, 82, 30)); // buttons are 82x30 logical
 
         _cancelButton = MakeButton("Cancel", DialogResult.Cancel);
-        _cancelButton.Left = ContentRight - 84;
         Controls.Add(_cancelButton);
+        _hspec.Add((_cancelButton, ContentRight - 84, 82, 30));
 
         AcceptButton = _okButton;
         CancelButton = _cancelButton;
@@ -191,44 +211,52 @@ public sealed class SettingsForm : Form
         {
             Text = title.ToUpperInvariant(),
             AutoSize = true,
-            Left = Pad,
-            Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
+            Font = _headerFont,
             ForeColor = _theme.HeaderAccent,
         };
-        var divider = new Panel { BackColor = _theme.Divider, Width = ContentRight - Pad, Height = 1, Left = Pad };
+        // Position/size (Left, Width) are applied — DPI-scaled — by Relayout from _hspec below.
+        var divider = new Panel { BackColor = _theme.Divider, Height = 1 };
         Controls.Add(header);
         Controls.Add(divider);
         _rows.Add(new RowDef { Items = [(header, 16), (divider, 38)], Height = 44 });
+        _hspec.Add((header, Pad, 0, 0));
+        _hspec.Add((divider, Pad, ContentRight - Pad, 0)); // 1px hairline height stays unscaled
     }
 
     private ToggleSwitch AddToggleRow(string text, bool indent = false, Func<bool>? visible = null)
     {
-        var label = new Label { Text = text, AutoSize = true, Left = indent ? Pad + 16 : Pad };
-        var toggle = new ToggleSwitch { Left = ContentRight - ToggleWidth };
+        var label = new Label { Text = text, AutoSize = true };
+        var toggle = new ToggleSwitch();
         Controls.Add(label);
         Controls.Add(toggle);
         _rows.Add(new RowDef { Items = [(label, 8), (toggle, 7)], Height = 34, Visible = visible });
+        _hspec.Add((label, indent ? Pad + 16 : Pad, 0, 0));
+        _hspec.Add((toggle, ContentRight - ToggleWidth, ToggleWidth, 20)); // ToggleSwitch is 40x20 logical
         return toggle;
     }
 
     private ComboBox AddComboRow(string label, IEnumerable<string> items, bool indent = false, Func<bool>? visible = null)
     {
-        var lbl = new Label { Text = label, AutoSize = true, Left = indent ? Pad + 16 : Pad };
-        var combo = new ComboBox { Left = ControlLeft, Width = ComboWidth, DropDownStyle = ComboBoxStyle.DropDownList };
+        var lbl = new Label { Text = label, AutoSize = true };
+        var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
         combo.Items.AddRange(items.Select(i => (object)i).ToArray());
         Controls.Add(lbl);
         Controls.Add(combo);
         _rows.Add(new RowDef { Items = [(lbl, 6), (combo, 3)], Height = 34, Visible = visible });
+        _hspec.Add((lbl, indent ? Pad + 16 : Pad, 0, 0));
+        _hspec.Add((combo, ControlLeft, ComboWidth, 0));
         return combo;
     }
 
     private NumericUpDown AddNumericRow(
         string label, int min, int max, bool indent = false, Func<bool>? visible = null, string? suffix = "%")
     {
-        var lbl = new Label { Text = label, AutoSize = true, Left = indent ? Pad + 16 : Pad };
-        var numeric = new ThemedNumericUpDown { Left = ControlLeft, Width = NumericWidth, Minimum = min, Maximum = max };
+        var lbl = new Label { Text = label, AutoSize = true };
+        var numeric = new ThemedNumericUpDown { Minimum = min, Maximum = max };
         Controls.Add(lbl);
         Controls.Add(numeric);
+        _hspec.Add((lbl, indent ? Pad + 16 : Pad, 0, 0));
+        _hspec.Add((numeric, ControlLeft, NumericWidth, 0));
 
         var items = new List<(Control, int)> { (lbl, 6), (numeric, 3) };
         if (suffix is not null)
@@ -238,10 +266,10 @@ public sealed class SettingsForm : Form
                 Text = suffix,
                 AutoSize = true,
                 ForeColor = _theme.HintText,
-                Left = ControlLeft + NumericWidth + 6,
             };
             Controls.Add(sfx);
             items.Add((sfx, 6));
+            _hspec.Add((sfx, ControlLeft + NumericWidth + 6, 0, 0));
         }
 
         _rows.Add(new RowDef { Items = items.ToArray(), Height = 34, Visible = visible });
@@ -264,10 +292,22 @@ public sealed class SettingsForm : Form
     }
 
     // Walks the rows top to bottom, hides collapsed ones, positions the visible ones, then places
-    // the buttons and sizes the window to fit (so collapsing a section shrinks the dialog).
+    // the buttons and sizes the window to fit (so collapsing a section shrinks the dialog). Every
+    // metric is scaled from its logical (96-DPI) value by the current monitor DPI (Sc), since
+    // AutoScaleMode.None means we own all scaling.
     private void Relayout()
     {
-        var y = TopMargin;
+        // Horizontal placement + control sizes (scaled from the logical spec captured at build time).
+        foreach (var (control, left, width, height) in _hspec)
+        {
+            control.Left = Sc(left);
+            if (width > 0)
+                control.Width = Sc(width);
+            if (height > 0)
+                control.Height = Sc(height);
+        }
+
+        var y = Sc(TopMargin);
         foreach (var row in _rows)
         {
             var visible = row.Visible?.Invoke() ?? true;
@@ -275,17 +315,44 @@ public sealed class SettingsForm : Form
             {
                 control.Visible = visible;
                 if (visible)
-                    control.Top = y + offsetY;
+                    control.Top = y + Sc(offsetY);
             }
 
             if (visible)
-                y += row.Height;
+                y += Sc(row.Height);
         }
 
-        y += 14;
+        y += Sc(14);
         _okButton.Top = y;
         _cancelButton.Top = y;
-        ClientSize = new Size(480, y + _okButton.Height + Pad);
+        ClientSize = new Size(Sc(480), y + _okButton.Height + Sc(Pad));
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        // DeviceDpi is only reliable once the handle exists; the constructor's Relayout ran at the
+        // default DPI, so redo it here (before first paint) at the real monitor DPI.
+        Relayout();
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        // Re-fit if the dialog is dragged to a monitor with a different scale.
+        Relayout();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        // Dispose child controls first, then the fonts they were using (a control never disposes an
+        // assigned Font itself).
+        base.Dispose(disposing);
+        if (disposing)
+        {
+            _baseFont.Dispose();
+            _headerFont.Dispose();
+        }
     }
 
     // --- Events ---

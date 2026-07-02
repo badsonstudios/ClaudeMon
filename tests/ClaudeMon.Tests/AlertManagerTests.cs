@@ -374,6 +374,29 @@ public class AlertManagerTests : IDisposable
         Assert.Equal("On Track to Run Out", _notifications[2].Title);
     }
 
+    [Fact]
+    public void Reset_ObservedAboveFivePct_StillRearmsPace()
+    {
+        // Polling is minutes apart, so a reset is often first *observed* already above 5% (e.g.
+        // 65% → 12% of the new window). The old absolute "< 5%" floor missed this and left the
+        // pace warning latched; a drop-based reset detection re-arms it.
+        var settings = ResetEnabledSettings();
+
+        _alertManager.Check(FiveHour(65, 0.4), settings);
+        Assert.Single(_notifications);
+        Assert.Equal("On Track to Run Out", _notifications[0].Title);
+
+        // Reset observed at 12% (a 53-point drop) — in the dead zone the old code ignored.
+        _alertManager.Check(FiveHour(12, 0.05), settings);
+        Assert.Equal(2, _notifications.Count);
+        Assert.Equal("Rate Limit Reset", _notifications[1].Title);
+
+        // Over pace again in the new window → fires fresh (would stay silent if still latched).
+        _alertManager.Check(FiveHour(65, 0.4), settings);
+        Assert.Equal(3, _notifications.Count);
+        Assert.Equal("On Track to Run Out", _notifications[2].Title);
+    }
+
     // ================================================================
     // Null buckets / edge cases
     // ================================================================

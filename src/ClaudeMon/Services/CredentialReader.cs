@@ -66,11 +66,20 @@ public sealed class CredentialReader
     /// shared credentials file, updating only those three fields inside
     /// <c>claudeAiOauth</c> and preserving every other field. The write is atomic
     /// (temp file in the same directory, then replace) so a concurrent reader —
-    /// the CLI or VS Code extension — never sees a half-written file. Failures are
-    /// reported via the return value and otherwise swallowed: the refreshed token
-    /// still serves the current poll from memory even if the write-back fails.
+    /// the CLI or VS Code extension — never sees a half-written file. The refreshed
+    /// token still serves the current poll from memory regardless of the outcome.
+    /// <para>
+    /// Refresh tokens rotate on every refresh, so if another client rotated the
+    /// on-disk token between our <see cref="Read"/> and this write, our tokens are
+    /// derived from a superseded lineage and overwriting would clobber the newer
+    /// token. Pass the refresh token we refreshed <em>from</em> as
+    /// <paramref name="expectedPreviousRefreshToken"/>: the write is skipped
+    /// (<see cref="WriteBackOutcome.SupersededByAnotherClient"/>) when the on-disk
+    /// token no longer matches it, so the next poll re-reads and uses the current
+    /// token. Pass <c>null</c> to write unconditionally.
+    /// </para>
     /// </summary>
-    public bool WriteBack(OAuthCredential refreshed)
+    public WriteBackOutcome WriteBack(OAuthCredential refreshed, string? expectedPreviousRefreshToken = null)
     {
         // Unique temp name so a stale leftover can never be reused and concurrent
         // writers can't collide on it.
@@ -81,7 +90,19 @@ public sealed class CredentialReader
             var root = JsonNode.Parse(json)?.AsObject();
             if (root?["claudeAiOauth"] is not JsonObject oauth)
             {
-                return false;
+                return WriteBackOutcome.Failed;
+            }
+
+            // Lost-update guard: bail if another client rotated the refresh token since we read it,
+            // rather than clobbering the newer token with ours. Matching our own new token means it's
+            // already persisted (e.g. a retry), so that still writes.
+            if (expectedPreviousRefreshToken is not null)
+            {
+                var onDisk = oauth["refreshToken"] is JsonValue v && v.TryGetValue<string>(out var rt) ? rt : null;
+                if (onDisk != expectedPreviousRefreshToken && onDisk != refreshed.RefreshToken)
+                {
+                    return WriteBackOutcome.SupersededByAnotherClient;
+                }
             }
 
             oauth["accessToken"] = refreshed.AccessToken;
@@ -95,12 +116,12 @@ public sealed class CredentialReader
             // here — we just read a credential out of it — so there is no create path.
             File.Replace(tempPath, _credentialPath, destinationBackupFileName: null);
 
-            return true;
+            return WriteBackOutcome.Written;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
             TryDeleteTemp(tempPath);
-            return false;
+            return WriteBackOutcome.Failed;
         }
     }
 
@@ -116,6 +137,19 @@ public sealed class CredentialReader
             // Best-effort cleanup; leaving a temp file is not worth surfacing.
         }
     }
+}
+
+/// <summary>Outcome of <see cref="CredentialReader.WriteBack"/>.</summary>
+public enum WriteBackOutcome
+{
+    /// <summary>The refreshed tokens were written to the credentials file.</summary>
+    Written,
+
+    /// <summary>Another client rotated the on-disk refresh token first; the file was left untouched.</summary>
+    SupersededByAnotherClient,
+
+    /// <summary>The write failed (file missing/locked, malformed, or access denied); the file is unchanged.</summary>
+    Failed,
 }
 
 public record CredentialResult

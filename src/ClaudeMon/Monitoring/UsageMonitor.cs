@@ -40,7 +40,20 @@ public sealed class UsageMonitor : IDisposable
         _logger = logger;
         _history = history;
         _timer = new System.Timers.Timer(pollInterval.TotalMilliseconds);
-        _timer.Elapsed += async (_, _) => await PollAsync();
+        // The handler is async, so it runs as async void on a timer thread-pool thread: any
+        // exception PollAsync doesn't swallow would otherwise escape unobserved and tear the
+        // whole app down. Guard it here (mirrors TrayApplication.CheckForUpdatesAsync).
+        _timer.Elapsed += async (_, _) =>
+        {
+            try
+            {
+                await PollAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger?.Error($"Usage poll failed: {ex.Message}");
+            }
+        };
         _timer.AutoReset = true;
     }
 
@@ -205,8 +218,23 @@ public sealed class UsageMonitor : IDisposable
 
         if (result.IsSuccess)
         {
-            _credentialReader.WriteBack(result.Credential!);
-            _logger?.Info("Access token refreshed.");
+            // Pass the token we refreshed from so WriteBack can detect (and not clobber) a token the
+            // CLI/extension rotated in the meantime. The refreshed token still serves this poll from
+            // memory regardless of whether it persisted.
+            var outcome = _credentialReader.WriteBack(result.Credential!, credential.RefreshToken);
+            switch (outcome)
+            {
+                case WriteBackOutcome.Written:
+                    _logger?.Info("Access token refreshed.");
+                    break;
+                case WriteBackOutcome.SupersededByAnotherClient:
+                    _logger?.Info("Access token refreshed; another client already rotated the on-disk token, so left it in place.");
+                    break;
+                case WriteBackOutcome.Failed:
+                    _logger?.Warn("Access token refreshed but could not be written back to the credentials file.");
+                    break;
+            }
+
             return (result.Credential, RefreshOutcome.Refreshed);
         }
 

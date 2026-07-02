@@ -23,6 +23,12 @@ public sealed class AlertManager
     private const double NearCapClearMarginPct = 3.0;
     private const double PaceClearMargin = 0.15;
 
+    // A drop of at least this many points signals a window reset. Utilization only accumulates
+    // within a fixed window, so a meaningful decrease means the window rolled over. Detecting the
+    // drop (rather than an absolute "< 5%" floor) catches resets first observed above 5% — polling
+    // is minutes apart, so a reset is routinely seen already at 8-15% of the new window.
+    private const double ResetDropPct = 15.0;
+
     // 5-hour alert state.
     private bool _paceWarningFired;
     private bool _nearCapFired;
@@ -54,18 +60,17 @@ public sealed class AlertManager
         {
             var pct = fiveHour.UtilizationPct;
 
-            // A genuine window reset (usage dropped sharply from a meaningful level to near-zero)
-            // re-arms the 5-hour alerts so the next window fires fresh. This is independent of
-            // whether the reset *notice* is enabled — only the notification itself is gated on
-            // NotifyOnReset.
-            var isReset = _previousFiveHourPct >= 20 && pct < 5;
+            // A genuine window reset (usage dropped sharply from a meaningful level) re-arms the
+            // 5-hour alerts so the next window fires fresh. This is independent of whether the reset
+            // *notice* is enabled — only the notification itself is gated on NotifyOnReset.
+            var isReset = _previousFiveHourPct >= 20 && pct <= _previousFiveHourPct - ResetDropPct;
             if (isReset)
             {
                 if (settings.Notifications.NotifyOnReset && !_resetNotificationFired)
                 {
                     ShowNotification(
                         "Rate Limit Reset",
-                        "Your 5-hour rate limit has reset. Full capacity available.",
+                        "Your 5-hour rate limit has reset — a fresh window has started.",
                         ToolTipIcon.Info);
                     _resetNotificationFired = true;
                 }

@@ -13,6 +13,13 @@ GitHub release; the release notes are taken from these entries.
   100% it is pixel-identical to before. (#40, #41)
 
 ### Changed
+- **Settings dialog is now tabbed** — the single stacked scroll of sections is reorganized into
+  four tabs: **General** (start with Windows, poll interval), **Alerts** (notifications and
+  thresholds), **Taskbar** (the readout's style, colors, and placement), and **Updates** (automatic
+  update checks, moved out of General). Every setting works exactly as before — sub-options still
+  collapse with their parent toggle, taskbar changes still preview live and revert on Cancel — and
+  the window sizes itself to the active tab. The tab headers are drawn to match the app's dark/light
+  theme and scale with the display DPI. Groundwork for upcoming settings (#42, #39). (#43)
 - **Per-monitor DPI awareness** — the app is now Per-Monitor-V2 DPI aware (previously
   system-DPI-aware). Each window — the Settings dialog, the hover flyout, and the taskbar
   readout — scales crisply for the monitor it is on and re-scales live when moved between

@@ -3,6 +3,15 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [Unreleased]
+
+### Fixed
+- **Settings window cramped at high display scaling** — the Settings dialog laid its rows,
+  padding, and controls out in fixed pixels while its fonts scaled with the display DPI, so on
+  displays scaled above 100% the text crowded the fixed spacing. Every layout metric now scales
+  with the window's DPI (the same fix the hover flyout got in 0.8.0), so the dialog keeps its
+  proportions at 100/125/150/200% scaling; at 100% it is pixel-identical to before. (#40)
+
 ## [0.10.0] - 2026-06-29
 
 ### Added

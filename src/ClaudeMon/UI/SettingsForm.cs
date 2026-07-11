@@ -45,14 +45,9 @@ public sealed class SettingsForm : Form
     private readonly Button _okButton;
     private readonly Button _cancelButton;
 
-    // --- Layout metrics ---
-    private const int Pad = 24;          // horizontal + bottom margin
-    private const int TopMargin = 6;     // smaller top margin so the first section sits near the top
-    private const int ContentRight = 480 - Pad; // 456
-    private const int ControlLeft = 250;
-    private const int ComboWidth = ContentRight - ControlLeft; // 206
-    private const int NumericWidth = 64;
-    private const int ToggleWidth = 40;
+    // Layout metrics, scaled from the hand-tuned 96-DPI baseline to this window's DPI so the
+    // spacing keeps pace with the DPI-scaled fonts at 125/150/200% display scaling (issue #40).
+    private readonly SettingsMetrics _m;
 
     // Light or dark accents/controls, matching the Windows app theme.
     private readonly Theme _theme = Theme.Current;
@@ -110,15 +105,19 @@ public sealed class SettingsForm : Form
     {
         _configManager = configManager;
         _overlayPreview = overlayPreview;
+        _m = SettingsMetrics.ForDpi(DeviceDpi);
 
         Text = "ClaudeMon Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
+        // All scaling is ours via SettingsMetrics — keep WinForms autoscale out of it.
+        AutoScaleMode = AutoScaleMode.None;
         Font = new Font("Segoe UI", 9.75f);
         // Background + control colours come from the app-wide dark mode (Program.cs).
-        ClientSize = new Size(480, 600);
+        // Height is provisional — Relayout sizes the window to fit the visible rows.
+        ClientSize = new Size(_m.WindowWidth, 600);
 
         // --- Monitoring ---
         AddHeader("Monitoring");
@@ -160,12 +159,12 @@ public sealed class SettingsForm : Form
 
         // --- Buttons ---
         _okButton = MakeButton("OK", DialogResult.OK);
-        _okButton.Left = ContentRight - 174;
+        _okButton.Left = _m.ContentRight - _m.OkButtonRightOffset;
         _okButton.Click += OnOkClicked;
         Controls.Add(_okButton);
 
         _cancelButton = MakeButton("Cancel", DialogResult.Cancel);
-        _cancelButton.Left = ContentRight - 84;
+        _cancelButton.Left = _m.ContentRight - _m.CancelButtonRightOffset;
         Controls.Add(_cancelButton);
 
         AcceptButton = _okButton;
@@ -191,46 +190,76 @@ public sealed class SettingsForm : Form
         {
             Text = title.ToUpperInvariant(),
             AutoSize = true,
-            Left = Pad,
+            Left = _m.Pad,
             Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold),
             ForeColor = _theme.HeaderAccent,
         };
-        var divider = new Panel { BackColor = _theme.Divider, Width = ContentRight - Pad, Height = 1, Left = Pad };
+        var divider = new Panel
+        {
+            BackColor = _theme.Divider,
+            Width = _m.ContentRight - _m.Pad,
+            Height = _m.DividerHeight,
+            Left = _m.Pad,
+        };
         Controls.Add(header);
         Controls.Add(divider);
-        _rows.Add(new RowDef { Items = [(header, 16), (divider, 38)], Height = 44 });
+        _rows.Add(new RowDef
+        {
+            Items = [(header, _m.HeaderTextOffset), (divider, _m.HeaderDividerOffset)],
+            Height = _m.HeaderHeight,
+        });
     }
 
     private ToggleSwitch AddToggleRow(string text, bool indent = false, Func<bool>? visible = null)
     {
-        var label = new Label { Text = text, AutoSize = true, Left = indent ? Pad + 16 : Pad };
-        var toggle = new ToggleSwitch { Left = ContentRight - ToggleWidth };
+        var label = new Label { Text = text, AutoSize = true, Left = LabelLeft(indent) };
+        var toggle = new ToggleSwitch
+        {
+            Left = _m.ContentRight - _m.ToggleWidth,
+            Size = new Size(_m.ToggleWidth, _m.ToggleHeight),
+        };
         Controls.Add(label);
         Controls.Add(toggle);
-        _rows.Add(new RowDef { Items = [(label, 8), (toggle, 7)], Height = 34, Visible = visible });
+        _rows.Add(new RowDef
+        {
+            Items = [(label, _m.ToggleLabelOffset), (toggle, _m.ToggleOffset)],
+            Height = _m.RowHeight,
+            Visible = visible,
+        });
         return toggle;
     }
 
     private ComboBox AddComboRow(string label, IEnumerable<string> items, bool indent = false, Func<bool>? visible = null)
     {
-        var lbl = new Label { Text = label, AutoSize = true, Left = indent ? Pad + 16 : Pad };
-        var combo = new ComboBox { Left = ControlLeft, Width = ComboWidth, DropDownStyle = ComboBoxStyle.DropDownList };
+        var lbl = new Label { Text = label, AutoSize = true, Left = LabelLeft(indent) };
+        var combo = new ComboBox { Left = _m.ControlLeft, Width = _m.ComboWidth, DropDownStyle = ComboBoxStyle.DropDownList };
         combo.Items.AddRange(items.Select(i => (object)i).ToArray());
         Controls.Add(lbl);
         Controls.Add(combo);
-        _rows.Add(new RowDef { Items = [(lbl, 6), (combo, 3)], Height = 34, Visible = visible });
+        _rows.Add(new RowDef
+        {
+            Items = [(lbl, _m.ComboLabelOffset), (combo, _m.ComboOffset)],
+            Height = _m.RowHeight,
+            Visible = visible,
+        });
         return combo;
     }
 
     private NumericUpDown AddNumericRow(
         string label, int min, int max, bool indent = false, Func<bool>? visible = null, string? suffix = "%")
     {
-        var lbl = new Label { Text = label, AutoSize = true, Left = indent ? Pad + 16 : Pad };
-        var numeric = new ThemedNumericUpDown { Left = ControlLeft, Width = NumericWidth, Minimum = min, Maximum = max };
+        var lbl = new Label { Text = label, AutoSize = true, Left = LabelLeft(indent) };
+        var numeric = new ThemedNumericUpDown
+        {
+            Left = _m.ControlLeft,
+            Width = _m.NumericWidth,
+            Minimum = min,
+            Maximum = max,
+        };
         Controls.Add(lbl);
         Controls.Add(numeric);
 
-        var items = new List<(Control, int)> { (lbl, 6), (numeric, 3) };
+        var items = new List<(Control, int)> { (lbl, _m.ComboLabelOffset), (numeric, _m.ComboOffset) };
         if (suffix is not null)
         {
             var sfx = new Label
@@ -238,15 +267,17 @@ public sealed class SettingsForm : Form
                 Text = suffix,
                 AutoSize = true,
                 ForeColor = _theme.HintText,
-                Left = ControlLeft + NumericWidth + 6,
+                Left = _m.ControlLeft + _m.NumericWidth + _m.SuffixGap,
             };
             Controls.Add(sfx);
-            items.Add((sfx, 6));
+            items.Add((sfx, _m.ComboLabelOffset));
         }
 
-        _rows.Add(new RowDef { Items = items.ToArray(), Height = 34, Visible = visible });
+        _rows.Add(new RowDef { Items = items.ToArray(), Height = _m.RowHeight, Visible = visible });
         return numeric;
     }
+
+    private int LabelLeft(bool indent) => indent ? _m.Pad + _m.Indent : _m.Pad;
 
     private Button MakeButton(string text, DialogResult result)
     {
@@ -254,7 +285,7 @@ public sealed class SettingsForm : Form
         {
             Text = text,
             DialogResult = result,
-            Size = new Size(82, 30),
+            Size = new Size(_m.ButtonWidth, _m.ButtonHeight),
             FlatStyle = FlatStyle.Flat,
             BackColor = _theme.ButtonBack,
             ForeColor = _theme.ButtonText,
@@ -267,7 +298,7 @@ public sealed class SettingsForm : Form
     // the buttons and sizes the window to fit (so collapsing a section shrinks the dialog).
     private void Relayout()
     {
-        var y = TopMargin;
+        var y = _m.TopMargin;
         foreach (var row in _rows)
         {
             var visible = row.Visible?.Invoke() ?? true;
@@ -282,10 +313,10 @@ public sealed class SettingsForm : Form
                 y += row.Height;
         }
 
-        y += 14;
+        y += _m.ButtonTopGap;
         _okButton.Top = y;
         _cancelButton.Top = y;
-        ClientSize = new Size(480, y + _okButton.Height + Pad);
+        ClientSize = new Size(_m.WindowWidth, y + _okButton.Height + _m.Pad);
     }
 
     // --- Events ---

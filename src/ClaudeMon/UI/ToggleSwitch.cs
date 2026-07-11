@@ -17,6 +17,8 @@ public sealed class ToggleSwitch : CheckBox
             | ControlStyles.OptimizedDoubleBuffer | ControlStyles.SupportsTransparentBackColor,
             true);
         AutoSize = false;
+        // 96-DPI default only — callers on scaled displays set Size from their DPI-scaled
+        // metrics (see SettingsMetrics.ToggleWidth/ToggleHeight); the paint code is proportional.
         Size = new Size(40, 20);
         Cursor = Cursors.Hand;
         BackColor = Color.Transparent;

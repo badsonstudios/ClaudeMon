@@ -5,12 +5,14 @@ using ClaudeMon.Configuration;
 using ClaudeMon.Models;
 
 /// <summary>
-/// The settings dialog: flat sections (a coral header over a hairline divider) with toggle
-/// switches for booleans and a single right-aligned control column. Sub-options <em>collapse</em>
-/// when their parent toggle is off — rows are tracked in <see cref="_rows"/> with a visibility
-/// predicate and <see cref="Relayout"/> repositions the visible ones and resizes the window. The
-/// app-wide dark mode (<c>Application.SetColorMode</c> in Program.cs) themes the standard controls;
-/// this form only adds the accents and the custom <see cref="ToggleSwitch"/>es.
+/// The settings dialog: a <see cref="TabStrip"/> (General / Alerts / Taskbar / Updates) over a
+/// single right-aligned control column, with toggle switches for booleans and OK/Cancel shared
+/// below the tab content. Rows are tracked in <see cref="_rows"/> tagged with their tab and an
+/// optional visibility predicate — sub-options <em>collapse</em> when their parent toggle is off —
+/// and <see cref="Relayout"/> positions the active tab's visible rows and sizes the window to
+/// them (so the dialog height follows the current tab). The app-wide dark mode
+/// (<c>Application.SetColorMode</c> in Program.cs) themes the standard controls; this form only
+/// adds the accents and the custom <see cref="ToggleSwitch"/>/<see cref="TabStrip"/> controls.
 /// </summary>
 public sealed class SettingsForm : Form
 {
@@ -25,6 +27,7 @@ public sealed class SettingsForm : Form
     // relayout or fire live previews until the saved values are in place.
     private bool _loading = true;
 
+    private readonly TabStrip _tabStrip;
     private readonly ComboBox _pollIntervalCombo;
     private readonly ToggleSwitch _notificationsToggle;
     private readonly ToggleSwitch _paceAlertsToggle;
@@ -47,30 +50,35 @@ public sealed class SettingsForm : Form
 
     // --- Layout metrics ---
     private const int Pad = 24;          // horizontal + bottom margin
-    private const int TopMargin = 6;     // smaller top margin so the first section sits near the top
+    private const int TopMargin = 6;     // smaller top margin so the tab strip sits near the top
     private const int ContentRight = 480 - Pad; // 456
     private const int ControlLeft = 250;
     private const int ComboWidth = ContentRight - ControlLeft; // 206
     private const int NumericWidth = 64;
     private const int ToggleWidth = 40;
+    private const int TabStripHeight = 36;
+    private const int TabContentGap = 12; // between the tab strip's baseline and the first row
 
     // Light or dark accents/controls, matching the Windows app theme.
     private readonly Theme _theme = Theme.Current;
 
-    // Fonts this form owns. WinForms does NOT dispose a Font you assign to a control, so without
-    // this they'd leak a handle per dialog open; disposed in Dispose. One header font is shared
-    // across all section headers rather than allocating one each.
+    // The font this form owns. WinForms does NOT dispose a Font you assign to a control, so
+    // without this it'd leak a handle per dialog open; disposed in Dispose.
     private readonly Font _baseFont = new("Segoe UI", 9.75f);
-    private readonly Font _headerFont = new("Segoe UI Semibold", 9f, FontStyle.Bold);
 
     // An ordered layout row: its controls (each with a vertical offset within the row), the row
-    // height, and an optional visibility predicate (null = always shown).
+    // height, the tab it lives on, and an optional visibility predicate (null = always shown
+    // while its tab is active).
     private sealed class RowDef
     {
         public required (Control Control, int OffsetY)[] Items;
         public required int Height;
+        public required int Tab;
         public Func<bool>? Visible;
     }
+
+    // The tab the Add*Row helpers stamp onto new rows while the constructor builds each tab.
+    private int _currentTab;
 
     private readonly List<RowDef> _rows = [];
 
@@ -139,12 +147,21 @@ public sealed class SettingsForm : Form
         // Background + control colours come from the app-wide dark mode (Program.cs).
         ClientSize = new Size(480, 600);
 
-        // --- Monitoring ---
-        AddHeader("Monitoring");
+        // The tab headers; each row below is stamped with the tab it lives on via _currentTab.
+        _tabStrip = new TabStrip("General", "Alerts", "Taskbar", "Updates")
+        {
+            AccessibleName = "Settings sections",
+        };
+        Controls.Add(_tabStrip);
+        _hspec.Add((_tabStrip, Pad, ContentRight - Pad, TabStripHeight));
+
+        // --- General tab ---
+        _currentTab = 0;
+        _runAtStartupToggle = AddToggleRow("Start ClaudeMon when Windows starts");
         _pollIntervalCombo = AddComboRow("Check usage every", ["1 minute", "3 minutes", "5 minutes", "10 minutes"]);
 
-        // --- Alerts ---
-        AddHeader("Alerts");
+        // --- Alerts tab ---
+        _currentTab = 1;
         _notificationsToggle = AddToggleRow("Enable desktop notifications");
         bool AlertsOn() => _notificationsToggle.Checked;
         _paceAlertsToggle = AddToggleRow("Warn when on track to run out", indent: true, visible: AlertsOn);
@@ -154,8 +171,8 @@ public sealed class SettingsForm : Form
         _sevenDayWarningNumeric = AddNumericRow("Weekly (7-day) warning at", 10, 100, indent: true, visible: AlertsOn);
         _notifyOnResetToggle = AddToggleRow("Notify when the limit resets", indent: true, visible: AlertsOn);
 
-        // --- Taskbar ---
-        AddHeader("Taskbar display");
+        // --- Taskbar tab ---
+        _currentTab = 2;
         _taskbarToggle = AddToggleRow("Show usage on the Windows taskbar");
         bool TaskbarOn() => _taskbarToggle.Checked;
         bool IsBar() => SelectedOption(_styleCombo, StyleOptions) == TaskbarStyle.Bar;
@@ -172,9 +189,8 @@ public sealed class SettingsForm : Form
             indent: true, visible: () => TaskbarOn() && _allMonitorsToggle.Checked, suffix: null);
         _horizontalOffsetNumeric.Increment = 2;
 
-        // --- General ---
-        AddHeader("General");
-        _runAtStartupToggle = AddToggleRow("Start ClaudeMon when Windows starts");
+        // --- Updates tab ---
+        _currentTab = 3;
         _checkForUpdatesToggle = AddToggleRow("Check for updates automatically");
 
         // --- Buttons ---
@@ -205,31 +221,13 @@ public sealed class SettingsForm : Form
 
     // --- Layout helpers (controls are positioned by Relayout, not here) ---
 
-    private void AddHeader(string title)
-    {
-        var header = new Label
-        {
-            Text = title.ToUpperInvariant(),
-            AutoSize = true,
-            Font = _headerFont,
-            ForeColor = _theme.HeaderAccent,
-        };
-        // Position/size (Left, Width) are applied — DPI-scaled — by Relayout from _hspec below.
-        var divider = new Panel { BackColor = _theme.Divider, Height = 1 };
-        Controls.Add(header);
-        Controls.Add(divider);
-        _rows.Add(new RowDef { Items = [(header, 16), (divider, 38)], Height = 44 });
-        _hspec.Add((header, Pad, 0, 0));
-        _hspec.Add((divider, Pad, ContentRight - Pad, 0)); // 1px hairline height stays unscaled
-    }
-
     private ToggleSwitch AddToggleRow(string text, bool indent = false, Func<bool>? visible = null)
     {
         var label = new Label { Text = text, AutoSize = true };
         var toggle = new ToggleSwitch();
         Controls.Add(label);
         Controls.Add(toggle);
-        _rows.Add(new RowDef { Items = [(label, 8), (toggle, 7)], Height = 34, Visible = visible });
+        _rows.Add(new RowDef { Items = [(label, 8), (toggle, 7)], Height = 34, Tab = _currentTab, Visible = visible });
         _hspec.Add((label, indent ? Pad + 16 : Pad, 0, 0));
         _hspec.Add((toggle, ContentRight - ToggleWidth, ToggleWidth, 20)); // ToggleSwitch is 40x20 logical
         return toggle;
@@ -242,7 +240,7 @@ public sealed class SettingsForm : Form
         combo.Items.AddRange(items.Select(i => (object)i).ToArray());
         Controls.Add(lbl);
         Controls.Add(combo);
-        _rows.Add(new RowDef { Items = [(lbl, 6), (combo, 3)], Height = 34, Visible = visible });
+        _rows.Add(new RowDef { Items = [(lbl, 6), (combo, 3)], Height = 34, Tab = _currentTab, Visible = visible });
         _hspec.Add((lbl, indent ? Pad + 16 : Pad, 0, 0));
         _hspec.Add((combo, ControlLeft, ComboWidth, 0));
         return combo;
@@ -272,7 +270,7 @@ public sealed class SettingsForm : Form
             _hspec.Add((sfx, ControlLeft + NumericWidth + 6, 0, 0));
         }
 
-        _rows.Add(new RowDef { Items = items.ToArray(), Height = 34, Visible = visible });
+        _rows.Add(new RowDef { Items = items.ToArray(), Height = 34, Tab = _currentTab, Visible = visible });
         return numeric;
     }
 
@@ -291,10 +289,11 @@ public sealed class SettingsForm : Form
         return button;
     }
 
-    // Walks the rows top to bottom, hides collapsed ones, positions the visible ones, then places
-    // the buttons and sizes the window to fit (so collapsing a section shrinks the dialog). Every
-    // metric is scaled from its logical (96-DPI) value by the current monitor DPI (Sc), since
-    // AutoScaleMode.None means we own all scaling.
+    // Walks the rows top to bottom, hides the inactive tabs' rows and the collapsed ones,
+    // positions the visible ones below the tab strip, then places the buttons and sizes the
+    // window to fit (so both collapsing a sub-option and switching tabs resize the dialog).
+    // Every metric is scaled from its logical (96-DPI) value by the current monitor DPI (Sc),
+    // since AutoScaleMode.None means we own all scaling.
     private void Relayout()
     {
         // Horizontal placement + control sizes (scaled from the logical spec captured at build time).
@@ -307,10 +306,12 @@ public sealed class SettingsForm : Form
                 control.Height = Sc(height);
         }
 
-        var y = Sc(TopMargin);
+        _tabStrip.Top = Sc(TopMargin);
+
+        var y = _tabStrip.Top + _tabStrip.Height + Sc(TabContentGap);
         foreach (var row in _rows)
         {
-            var visible = row.Visible?.Invoke() ?? true;
+            var visible = row.Tab == _tabStrip.SelectedIndex && (row.Visible?.Invoke() ?? true);
             foreach (var (control, offsetY) in row.Items)
             {
                 control.Visible = visible;
@@ -349,16 +350,16 @@ public sealed class SettingsForm : Form
         // assigned Font itself).
         base.Dispose(disposing);
         if (disposing)
-        {
             _baseFont.Dispose();
-            _headerFont.Dispose();
-        }
     }
 
     // --- Events ---
 
     private void WireEvents()
     {
+        // Switching tabs swaps which rows are visible (and re-fits the window height).
+        _tabStrip.SelectedIndexChanged += (_, _) => RelayoutLive();
+
         // Collapse/expand on the gating toggles; some also live-preview the taskbar appearance.
         _notificationsToggle.CheckedChanged += (_, _) => RelayoutLive();
         _paceAlertsToggle.CheckedChanged += (_, _) => RelayoutLive();

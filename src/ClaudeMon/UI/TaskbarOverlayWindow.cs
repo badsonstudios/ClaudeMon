@@ -68,7 +68,7 @@ public sealed class TaskbarOverlayWindow : Form
     // resize (the secondary-taskbar clock reserve and the horizontal-offset nudge).
     private float _scale = 1f;
     private float _monitorScale = 1f;
-    private TaskbarSize _size = TaskbarSize.Standard;
+    private float _sizeFactor = 1f;
     private int _logicalWidth = IconRenderer.MinTaskbarWidth;
     private int _logicalHeight = 40;
 
@@ -259,13 +259,14 @@ public sealed class TaskbarOverlayWindow : Form
     }
 
     /// <summary>
-    /// Set the readout size multiplier and re-measure/reposition live. The factor folds into the
-    /// content scale on the next <see cref="Reposition"/>, so it applies to both styles and to
-    /// the layout width as well as the paint.
+    /// Set the readout size (percent, clamped to 25–150 so a hand-edited config can't produce a
+    /// degenerate scale) and re-measure/reposition live. The factor folds into the content scale
+    /// on the next <see cref="Reposition"/>, so it applies to both styles and to the layout
+    /// width as well as the paint.
     /// </summary>
-    public void SetSize(TaskbarSize size)
+    public void SetSize(int percent)
     {
-        _size = size;
+        _sizeFactor = Math.Clamp(percent, 25, 150) / 100f;
         _contentDirty = true;
         if (Visible) Reposition();
     }
@@ -406,7 +407,7 @@ public sealed class TaskbarOverlayWindow : Form
         // vertically centred and can never overflow the taskbar at any size.
         var dpi = GetDpiForWindow(taskbar.Value.Handle);
         _monitorScale = DpiScale.FactorForDpi((int)dpi);
-        _scale = _monitorScale * _size.Factor();
+        _scale = _monitorScale * _sizeFactor;
 
         var taskbarHeight = rect.Bottom - rect.Top; // physical pixels
         _height = taskbarHeight > 0 ? taskbarHeight : _height;

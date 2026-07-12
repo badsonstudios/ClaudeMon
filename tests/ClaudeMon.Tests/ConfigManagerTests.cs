@@ -166,42 +166,30 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
-    public void TaskbarDisplay_Size_DefaultsToStandard()
+    public void TaskbarDisplay_SizePercent_DefaultsTo100()
     {
-        // Load-bearing: Standard maps to a 1.0 factor, so an upgrade (config with no "size"
-        // key) must leave the taskbar rendering exactly as it was.
+        // Load-bearing: 100% is exactly the DPI-only scale, so an upgrade (config with no
+        // "sizePercent" key) must leave the taskbar rendering exactly as it was.
         var settings = new AppSettings();
-        Assert.Equal(TaskbarSize.Standard, settings.TaskbarDisplay.Size);
-        Assert.Equal(1f, settings.TaskbarDisplay.Size.Factor());
+        Assert.Equal(100, settings.TaskbarDisplay.SizePercent);
     }
 
     [Fact]
-    public void TaskbarDisplay_Size_RoundTrips()
+    public void TaskbarDisplay_SizePercent_RoundTrips()
     {
         var path = Path.Combine(_tempDir, "config.json");
         var manager = new ConfigManager(path);
 
+        // A value between the old dropdown's fixed steps — the whole point of the numeric field.
         manager.Update(new AppSettings
         {
-            TaskbarDisplay = new TaskbarDisplaySettings { Size = TaskbarSize.ExtraLarge },
+            TaskbarDisplay = new TaskbarDisplaySettings { SizePercent = 60 },
         });
 
         var manager2 = new ConfigManager(path);
         manager2.Load();
 
-        Assert.Equal(TaskbarSize.ExtraLarge, manager2.Settings.TaskbarDisplay.Size);
-    }
-
-    [Theory]
-    [InlineData(TaskbarSize.Tiny, 0.25f)]
-    [InlineData(TaskbarSize.ExtraSmall, 0.5f)]
-    [InlineData(TaskbarSize.Small, 0.75f)]
-    [InlineData(TaskbarSize.Standard, 1f)]
-    [InlineData(TaskbarSize.Large, 1.25f)]
-    [InlineData(TaskbarSize.ExtraLarge, 1.5f)]
-    public void TaskbarSize_Factor_MatchesAdvertisedPercentages(TaskbarSize size, float expected)
-    {
-        Assert.Equal(expected, size.Factor());
+        Assert.Equal(60, manager2.Settings.TaskbarDisplay.SizePercent);
     }
 
     [Fact]

@@ -75,7 +75,7 @@ public sealed class TrayApplication : IDisposable
             _configManager.Settings.TaskbarDisplay.NumberColor);
         _taskbarOverlay.SetStyle(_configManager.Settings.TaskbarDisplay.Style);
         _taskbarOverlay.SetBarWidth(_configManager.Settings.TaskbarDisplay.BarWidth);
-        _taskbarOverlay.SetSize(_configManager.Settings.TaskbarDisplay.Size);
+        _taskbarOverlay.SetSize(_configManager.Settings.TaskbarDisplay.SizePercent);
         _taskbarOverlay.SetColorMode(_configManager.Settings.ColorMode);
         _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
         _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
@@ -391,7 +391,7 @@ public sealed class TrayApplication : IDisposable
                     _configManager.Settings.TaskbarDisplay.NumberColor);
                 _taskbarOverlay.SetStyle(_configManager.Settings.TaskbarDisplay.Style);
                 _taskbarOverlay.SetBarWidth(_configManager.Settings.TaskbarDisplay.BarWidth);
-                _taskbarOverlay.SetSize(_configManager.Settings.TaskbarDisplay.Size);
+                _taskbarOverlay.SetSize(_configManager.Settings.TaskbarDisplay.SizePercent);
                 _taskbarOverlay.SetColorMode(_configManager.Settings.ColorMode);
                 _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
                 _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);

@@ -96,7 +96,7 @@ public class ConfigManagerTests : IDisposable
             TaskbarDisplay = new TaskbarDisplaySettings
             {
                 Enabled = true,
-                ShowSevenDay = true,
+                ShowWeeklyUsage = true,
                 LabelColor = TaskbarTextColor.Black,
                 NumberColor = TaskbarTextColor.DarkGray,
             },
@@ -106,7 +106,7 @@ public class ConfigManagerTests : IDisposable
         manager2.Load();
 
         Assert.True(manager2.Settings.TaskbarDisplay.Enabled);
-        Assert.True(manager2.Settings.TaskbarDisplay.ShowSevenDay);
+        Assert.True(manager2.Settings.TaskbarDisplay.ShowWeeklyUsage);
         Assert.Equal(TaskbarTextColor.Black, manager2.Settings.TaskbarDisplay.LabelColor);
         Assert.Equal(TaskbarTextColor.DarkGray, manager2.Settings.TaskbarDisplay.NumberColor);
     }
@@ -120,10 +120,87 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
-    public void TaskbarDisplay_ShowSevenDay_DefaultsToFalse()
+    public void TaskbarDisplay_DisplayToggles_DefaultToSessionOnly()
     {
+        // Load-bearing: session-on / weekly-off / countdown-off reproduces the original
+        // 5-hour-only readout, so fresh installs and upgrades look unchanged.
         var settings = new AppSettings();
-        Assert.False(settings.TaskbarDisplay.ShowSevenDay);
+        Assert.True(settings.TaskbarDisplay.ShowSessionUsage);
+        Assert.False(settings.TaskbarDisplay.ShowWeeklyUsage);
+        Assert.False(settings.TaskbarDisplay.ShowTimeToReset);
+    }
+
+    [Fact]
+    public void TaskbarDisplay_DisplayToggles_RoundTrip()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+
+        // Weekly + countdown with session off — a combination the old toggle couldn't express.
+        manager.Update(new AppSettings
+        {
+            TaskbarDisplay = new TaskbarDisplaySettings
+            {
+                ShowSessionUsage = false,
+                ShowWeeklyUsage = true,
+                ShowTimeToReset = true,
+            },
+        });
+
+        var manager2 = new ConfigManager(path);
+        manager2.Load();
+
+        Assert.False(manager2.Settings.TaskbarDisplay.ShowSessionUsage);
+        Assert.True(manager2.Settings.TaskbarDisplay.ShowWeeklyUsage);
+        Assert.True(manager2.Settings.TaskbarDisplay.ShowTimeToReset);
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public void Load_LegacyShowSevenDay_MigratesToWeeklyToggle(string legacyValue, bool expectedWeekly)
+    {
+        // A 0.10.x config (raw JSON, not our serializer) with the pre-toggles key.
+        var path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path, $$"""{ "taskbarDisplay": { "showSevenDay": {{legacyValue}} } }""");
+
+        var manager = new ConfigManager(path);
+        manager.Load();
+
+        Assert.Equal(expectedWeekly, manager.Settings.TaskbarDisplay.ShowWeeklyUsage);
+        Assert.True(manager.Settings.TaskbarDisplay.ShowSessionUsage); // unchanged default
+        Assert.Null(manager.Settings.TaskbarDisplay.LegacyShowSevenDay); // cleared by migration
+    }
+
+    [Fact]
+    public void Load_LegacyTrueWithExplicitWeeklyFalse_LegacyWins()
+    {
+        // Both keys present (e.g. a downgrade-then-upgrade wrote showWeeklyUsage:false while the
+        // old showSevenDay:true survived). Deliberate choice: the legacy opt-in wins, so a user
+        // who had the 7-day readout keeps it.
+        var path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path,
+            """{ "taskbarDisplay": { "showSevenDay": true, "showWeeklyUsage": false } }""");
+
+        var manager = new ConfigManager(path);
+        manager.Load();
+
+        Assert.True(manager.Settings.TaskbarDisplay.ShowWeeklyUsage);
+    }
+
+    [Fact]
+    public void Save_AfterLegacyMigration_DropsTheOldKey()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path, """{ "taskbarDisplay": { "showSevenDay": true } }""");
+
+        var manager = new ConfigManager(path);
+        manager.Load();
+        manager.Update(manager.Settings); // any save after migration
+
+        var written = File.ReadAllText(path);
+        Assert.DoesNotContain("showSevenDay", written);
+        Assert.Contains("showWeeklyUsage", written);
     }
 
     [Fact]

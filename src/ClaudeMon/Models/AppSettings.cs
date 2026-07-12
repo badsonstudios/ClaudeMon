@@ -144,11 +144,34 @@ public record TaskbarDisplaySettings
     public TaskbarTextColor NumberColor { get; init; } = TaskbarTextColor.Auto;
 
     /// <summary>
-    /// When true, the taskbar overlay also shows the 7-day usage next to the 5-hour
-    /// one, slash-separated (<c>5hr / 7day</c>). Off by default → 5-hour only.
+    /// Show the session (5-hour) usage percentage in the readout. On by default — with the
+    /// other two display toggles off this reproduces the original 5-hour-only readout.
+    /// </summary>
+    [JsonPropertyName("showSessionUsage")]
+    public bool ShowSessionUsage { get; init; } = true;
+
+    /// <summary>
+    /// Show the weekly (7-day) usage percentage in the readout, dot-separated from the other
+    /// enabled elements. Off by default.
+    /// </summary>
+    [JsonPropertyName("showWeeklyUsage")]
+    public bool ShowWeeklyUsage { get; init; }
+
+    /// <summary>
+    /// Show a compact countdown to the 5-hour reset (<c>1h 23m</c>) in the readout. Numbers
+    /// style only — the bar style already encodes time as its tick. Off by default.
+    /// </summary>
+    [JsonPropertyName("showTimeToReset")]
+    public bool ShowTimeToReset { get; init; }
+
+    /// <summary>
+    /// The pre-0.11 "Also show 7-day usage" toggle, kept only so configs written by 0.10.x can
+    /// be migrated: <c>true</c> maps to <see cref="ShowWeeklyUsage"/> in
+    /// <see cref="Configuration.ConfigManager.Load"/>, which then clears this so the next save
+    /// drops the key (nulls are omitted). Never read anywhere else.
     /// </summary>
     [JsonPropertyName("showSevenDay")]
-    public bool ShowSevenDay { get; init; }
+    public bool? LegacyShowSevenDay { get; init; }
 
     /// <summary>
     /// When true, the readout is shown on every monitor's taskbar (on setups where Windows

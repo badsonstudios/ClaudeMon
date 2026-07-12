@@ -37,7 +37,9 @@ public sealed class TaskbarOverlayManager : IDisposable
     private TaskbarBarWidth _barWidth = TaskbarBarWidth.Standard;
     private int _sizePercent = 100;
     private UsageColorMode _colorMode = UsageColorMode.Pace;
-    private bool _showSevenDay;
+    private bool _showSession = true;
+    private bool _showWeekly;
+    private bool _showTimeToReset;
     private bool _allMonitors;
     private int _horizontalOffset;
     private bool _enabled;
@@ -95,12 +97,14 @@ public sealed class TaskbarOverlayManager : IDisposable
             overlay.SetColorMode(colorMode);
     }
 
-    /// <summary>Toggle the dual "5hr / 7day" readout on every overlay.</summary>
-    public void SetShowSevenDay(bool showSevenDay)
+    /// <summary>Choose the readout elements (session/weekly/countdown) on every overlay.</summary>
+    public void SetDisplay(bool session, bool weekly, bool timeToReset)
     {
-        _showSevenDay = showSevenDay;
+        _showSession = session;
+        _showWeekly = weekly;
+        _showTimeToReset = timeToReset;
         foreach (var overlay in _overlays.Values)
-            overlay.SetShowSevenDay(showSevenDay);
+            overlay.SetDisplay(session, weekly, timeToReset);
     }
 
     /// <summary>
@@ -230,7 +234,7 @@ public sealed class TaskbarOverlayManager : IDisposable
         overlay.SetBarWidth(_barWidth);
         overlay.SetSize(_sizePercent);
         overlay.SetColorMode(_colorMode);
-        overlay.SetShowSevenDay(_showSevenDay);
+        overlay.SetDisplay(_showSession, _showWeekly, _showTimeToReset);
         overlay.SetHorizontalOffset(_horizontalOffset);
 
         if (_reading is { } reading)

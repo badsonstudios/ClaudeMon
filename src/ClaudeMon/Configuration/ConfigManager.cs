@@ -37,12 +37,34 @@ public sealed class ConfigManager
         try
         {
             var json = File.ReadAllText(_configPath);
-            Settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+            Settings = Migrate(JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings());
         }
         catch
         {
             Settings = new AppSettings();
         }
+    }
+
+    /// <summary>
+    /// Upgrades settings written by older versions. Currently: the 0.10.x "Also show 7-day
+    /// usage" toggle becomes the weekly display toggle (<c>true</c> → weekly on; <c>false</c> or
+    /// absent → unchanged defaults). The legacy field is cleared either way so the next save
+    /// drops the old key.
+    /// </summary>
+    private static AppSettings Migrate(AppSettings settings)
+    {
+        var taskbar = settings.TaskbarDisplay;
+        if (taskbar.LegacyShowSevenDay is null)
+            return settings;
+
+        return settings with
+        {
+            TaskbarDisplay = taskbar with
+            {
+                ShowWeeklyUsage = taskbar.ShowWeeklyUsage || taskbar.LegacyShowSevenDay == true,
+                LegacyShowSevenDay = null,
+            },
+        };
     }
 
     public void Save()

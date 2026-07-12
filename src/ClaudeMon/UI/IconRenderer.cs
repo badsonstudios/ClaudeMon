@@ -118,6 +118,12 @@ public static class IconRenderer
     /// </summary>
     private const string SignInExpiredMarker = "—";
 
+    /// <summary>
+    /// Countdown placeholder when the reset time is unknown. Same em dash as the sign-in
+    /// marker today, but a separate name so retuning one doesn't silently change the other.
+    /// </summary>
+    private const string UnknownCountdownMarker = "—";
+
     /// <summary>Minimum overlay width — keeps single-number mode pixel-identical to before.</summary>
     public const int MinTaskbarWidth = 52;
     private const int TaskbarWidthPadding = 6;
@@ -130,16 +136,57 @@ public static class IconRenderer
     private static (float Label, float Number) TaskbarFontSizes(int height) =>
         (Math.Clamp(height * 0.18f, 6f, 8f), Math.Clamp(height * 0.30f, 9f, 13f));
 
-    private static (string Text, Color Color)[] NumberSegments(
-        double fiveHourPct, double? sevenDayPct, Color fiveHourColor, Color sevenDayColor, Color separatorColor)
-        => sevenDayPct is null
-            ? new[] { (FormatPct(fiveHourPct), fiveHourColor) }
-            : new[]
-            {
-                (FormatPct(fiveHourPct), fiveHourColor),
-                (NumberSeparatorText, separatorColor),
-                (FormatPct(sevenDayPct.Value), sevenDayColor),
-            };
+    /// <summary>
+    /// A number-row element of the taskbar readout. <see cref="Separator"/> renders the tight
+    /// dot; everything else renders as text in the given colour. Callers compose the enabled
+    /// elements (session %, weekly %, countdown) and interleave separators.
+    /// </summary>
+    internal readonly record struct TaskbarSegment(string Text, Color Color)
+    {
+        public static TaskbarSegment Separator => new(NumberSeparatorText, default);
+
+        public static TaskbarSegment Percent(double pct, Color color) => new(FormatPct(pct), color);
+    }
+
+    /// <summary>
+    /// Interleaves the separator dot between the given elements — the "a · b · c" row shape.
+    /// </summary>
+    internal static TaskbarSegment[] JoinSegments(IReadOnlyList<TaskbarSegment> elements)
+    {
+        if (elements.Count <= 1)
+            return elements.ToArray();
+
+        var joined = new List<TaskbarSegment>(elements.Count * 2 - 1);
+        foreach (var element in elements)
+        {
+            if (joined.Count > 0)
+                joined.Add(TaskbarSegment.Separator);
+            joined.Add(element);
+        }
+
+        return joined.ToArray();
+    }
+
+    /// <summary>
+    /// Compact countdown for the time-left-to-reset element: <c>1h 23m</c>, <c>45m</c> under an
+    /// hour, <c>now</c> once the reset is due, and the neutral <c>—</c> when the reset time is
+    /// unknown (null). Minute-granular so the overlay repaints at most once a minute.
+    /// </summary>
+    internal static string FormatTaskbarCountdown(TimeSpan? remaining)
+    {
+        if (remaining is null)
+            return UnknownCountdownMarker;
+
+        var r = remaining.Value;
+        if (r <= TimeSpan.Zero)
+            return "now";
+
+        // Ceiling on minutes so the display doesn't read "0m"/"1h 0m" for most of a minute and
+        // agrees with intuition ("59m 30s left" reads as 1h).
+        var minutes = (int)Math.Ceiling(r.TotalMinutes);
+        var (h, m) = (minutes / 60, minutes % 60);
+        return h > 0 ? $"{h}h {m}m" : $"{m}m";
+    }
 
     // The separator is drawn as a tight manual dot, not a full monospace cell (which wastes
     // most of its width as whitespace). One source of truth for its size/spacing.
@@ -167,28 +214,17 @@ public static class IconRenderer
     /// </summary>
     public static void DrawTaskbarUsage(
         Graphics graphics, double percentage, Rectangle bounds, Color labelColor, Color numberColor)
-        => DrawTaskbarRows(graphics, bounds, labelColor,
-            NumberSegments(percentage, null, numberColor, numberColor, labelColor));
+        => DrawTaskbarSegments(graphics, bounds, labelColor,
+            new[] { TaskbarSegment.Percent(percentage, numberColor) });
 
     /// <summary>
-    /// Draws the dual taskbar readout — the 5-hour and 7-day numbers separated by a
-    /// slash (<c>5hr / 7day</c>). Each number gets its own resolved colour; the
-    /// separator uses the label colour as a neutral element.
+    /// Renders the "Claude" label row and a number row composed of the given segments
+    /// (see <see cref="JoinSegments"/> for the "a · b · c" composition), both horizontally
+    /// centred and vertically centred as a block within <paramref name="bounds"/>.
     /// </summary>
-    public static void DrawTaskbarUsage(
-        Graphics graphics, double fiveHourPct, double sevenDayPct, Rectangle bounds,
-        Color labelColor, Color fiveHourColor, Color sevenDayColor)
-        => DrawTaskbarRows(graphics, bounds, labelColor,
-            NumberSegments(fiveHourPct, sevenDayPct, fiveHourColor, sevenDayColor, labelColor));
-
-    /// <summary>
-    /// Renders the "Claude" label row and a number row composed of coloured segments,
-    /// both horizontally centred and vertically centred as a block within
-    /// <paramref name="bounds"/>.
-    /// </summary>
-    private static void DrawTaskbarRows(
+    internal static void DrawTaskbarSegments(
         Graphics graphics, Rectangle bounds, Color labelColor,
-        (string Text, Color Color)[] numberSegments)
+        TaskbarSegment[] numberSegments)
     {
         // Grayscale AA (not ClearType) so the glyph alpha is correct on a transparent
         // bitmap — ClearType needs a known opaque background and fringes otherwise.
@@ -237,22 +273,12 @@ public static class IconRenderer
     }
 
     /// <summary>
-    /// Measures the overlay width needed to show the readout (single or dual) at the
-    /// given taskbar height without clipping, never below <see cref="MinTaskbarWidth"/>.
-    /// Sums per-segment widths to match how <see cref="DrawTaskbarRows"/> lays them out.
+    /// Measures the overlay width needed to show the given number-row segments at the given
+    /// taskbar height without clipping: the wider of the "Claude" label and the summed
+    /// segments, padded, never below <see cref="MinTaskbarWidth"/>. Sums per-segment widths to
+    /// match how <see cref="DrawTaskbarSegments"/> lays them out; colours are irrelevant.
     /// </summary>
-    public static int MeasureTaskbarUsageWidth(double fiveHourPct, double? sevenDayPct, int height)
-    {
-        var dummy = Color.White;
-        return MeasureContentWidth(NumberSegments(fiveHourPct, sevenDayPct, dummy, dummy, dummy), height);
-    }
-
-    /// <summary>
-    /// Width-measuring core shared by the usage and sign-in-expired readouts: the wider of
-    /// the "Claude" label and the summed number-row segments, padded, never below
-    /// <see cref="MinTaskbarWidth"/>. Segment colours are irrelevant to width.
-    /// </summary>
-    private static int MeasureContentWidth((string Text, Color Color)[] numberSegments, int height)
+    internal static int MeasureTaskbarSegmentsWidth(TaskbarSegment[] numberSegments, int height)
     {
         using var bitmap = new Bitmap(1, 1);
         using var graphics = Graphics.FromImage(bitmap);
@@ -278,11 +304,12 @@ public static class IconRenderer
     /// number on the taskbar. The tray icon and tooltip carry the actionable detail.
     /// </summary>
     public static void DrawTaskbarSignInExpired(Graphics graphics, Rectangle bounds, Color labelColor)
-        => DrawTaskbarRows(graphics, bounds, labelColor, new[] { (SignInExpiredMarker, labelColor) });
+        => DrawTaskbarSegments(graphics, bounds, labelColor,
+            new[] { new TaskbarSegment(SignInExpiredMarker, labelColor) });
 
     /// <summary>Overlay width for the sign-in-expired marker at the given taskbar height.</summary>
     public static int MeasureTaskbarSignInExpiredWidth(int height)
-        => MeasureContentWidth(new[] { (SignInExpiredMarker, Color.White) }, height);
+        => MeasureTaskbarSegmentsWidth(new[] { new TaskbarSegment(SignInExpiredMarker, Color.White) }, height);
 
     // --- Bar style ---
 
@@ -332,18 +359,32 @@ public static class IconRenderer
         => Math.Max(MinTaskbarWidth, BarTrackWidth(height, width) + TaskbarWidthPadding);
 
     /// <summary>
-    /// Draws the bar-style readout: a compact horizontal usage bar with faint hour/day dividers
-    /// and a bright time-in-window tick, pace-coloured via <see cref="GetUsageColor"/>. When a
-    /// 7-day value is supplied the 5-hour bar sits on top and a thinner 7-day bar below; otherwise
-    /// a single, taller 5-hour bar is centred. No background is filled — the host window supplies
-    /// transparency.
+    /// One bar of the bar-style readout: its usage, window-elapsed fraction (drives the tick),
+    /// and division count (hours on the session bar, days on the weekly one).
     /// </summary>
-    public static void DrawTaskbarBar(
-        Graphics graphics, Rectangle bounds,
-        double fiveHourPct, double? fiveHourFraction,
-        double? sevenDayPct, double? sevenDayFraction,
+    internal readonly record struct TaskbarBarSpec(double Pct, double? Fraction, int Segments)
+    {
+        public static TaskbarBarSpec FiveHour(double pct, double? fraction) =>
+            new(pct, fraction, FiveHourSegments);
+
+        public static TaskbarBarSpec SevenDay(double pct, double? fraction) =>
+            new(pct, fraction, SevenDaySegments);
+    }
+
+    /// <summary>
+    /// Draws the bar-style readout: compact horizontal usage bars with faint hour/day dividers
+    /// and a bright time-in-window tick, pace-coloured via <see cref="GetUsageColor"/>. One bar
+    /// draws as a single, taller centred bar; two draw as thinner bars stacked as a
+    /// vertically-centred block (session over weekly). No background is filled — the host
+    /// window supplies transparency.
+    /// </summary>
+    internal static void DrawTaskbarBar(
+        Graphics graphics, Rectangle bounds, IReadOnlyList<TaskbarBarSpec> bars,
         UsageColorMode colorMode, bool lightTaskbar = false)
     {
+        if (bars.Count == 0)
+            return;
+
         // Rounded fill/track corners and a crisp tick need anti-aliasing.
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
@@ -351,25 +392,26 @@ public static class IconRenderer
         var trackWidth = Math.Max(1, bounds.Width - TaskbarWidthPadding);
         var x = bounds.X + inset;
 
-        if (sevenDayPct is null)
+        if (bars.Count == 1)
         {
             var barHeight = Math.Clamp((int)Math.Round(bounds.Height * 0.26f), 6, 14);
             var y = bounds.Y + (bounds.Height - barHeight) / 2;
             DrawSingleBar(graphics, x, y, trackWidth, barHeight,
-                fiveHourPct, fiveHourFraction, FiveHourSegments, colorMode, lightTaskbar);
+                bars[0].Pct, bars[0].Fraction, bars[0].Segments, colorMode, lightTaskbar);
             return;
         }
 
-        // Dual: two thinner bars stacked as a vertically-centred block (5-hour over 7-day).
+        // Stacked: thinner bars as a vertically-centred block.
         var thinHeight = Math.Clamp((int)Math.Round(bounds.Height * 0.18f), 4, 10);
         var gap = Math.Clamp((int)Math.Round(bounds.Height * 0.12f), 3, 8);
-        var blockHeight = thinHeight * 2 + gap;
+        var blockHeight = thinHeight * bars.Count + gap * (bars.Count - 1);
         var top = bounds.Y + (bounds.Height - blockHeight) / 2;
 
-        DrawSingleBar(graphics, x, top, trackWidth, thinHeight,
-            fiveHourPct, fiveHourFraction, FiveHourSegments, colorMode, lightTaskbar);
-        DrawSingleBar(graphics, x, top + thinHeight + gap, trackWidth, thinHeight,
-            sevenDayPct.Value, sevenDayFraction, SevenDaySegments, colorMode, lightTaskbar);
+        for (var i = 0; i < bars.Count; i++)
+        {
+            DrawSingleBar(graphics, x, top + i * (thinHeight + gap), trackWidth, thinHeight,
+                bars[i].Pct, bars[i].Fraction, bars[i].Segments, colorMode, lightTaskbar);
+        }
     }
 
     private static void DrawSingleBar(

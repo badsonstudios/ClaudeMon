@@ -39,7 +39,9 @@ public sealed class SettingsForm : Form
     private readonly ComboBox _styleCombo;
     private readonly ComboBox _barWidthCombo;
     private readonly NumericUpDown _sizeNumeric;
-    private readonly ToggleSwitch _showSevenDayToggle;
+    private readonly ToggleSwitch _showSessionToggle;
+    private readonly ToggleSwitch _showWeeklyToggle;
+    private readonly ToggleSwitch _showTimeToResetToggle;
     private readonly ComboBox _labelColorCombo;
     private readonly ComboBox _numberColorCombo;
     private readonly ToggleSwitch _allMonitorsToggle;
@@ -100,7 +102,8 @@ public sealed class SettingsForm : Form
 
     private static readonly (string Text, TaskbarStyle Value)[] StyleOptions =
     [
-        ("Numbers (5hr · 7day)", TaskbarStyle.Numbers),
+        // The composition (session/weekly/countdown) is described by the display toggles below.
+        ("Numbers", TaskbarStyle.Numbers),
         ("Bar + time tick", TaskbarStyle.Bar),
     ];
 
@@ -182,7 +185,12 @@ public sealed class SettingsForm : Form
             indent: true, visible: () => TaskbarOn() && IsBar());
         _sizeNumeric = AddNumericRow("Size", 25, 150, indent: true, visible: TaskbarOn);
         _sizeNumeric.Increment = 5;
-        _showSevenDayToggle = AddToggleRow("Also show 7-day usage (5hr · 7day)", indent: true, visible: TaskbarOn);
+        _showSessionToggle = AddToggleRow("Show session (5-hour) usage", indent: true, visible: TaskbarOn);
+        _showWeeklyToggle = AddToggleRow("Show weekly (7-day) usage", indent: true, visible: TaskbarOn);
+        // The countdown is a Numbers-style element; the bar has its own time tick, so the row
+        // hides in Bar mode rather than offering a toggle that does nothing there.
+        _showTimeToResetToggle = AddToggleRow("Show time left to reset", indent: true,
+            visible: () => TaskbarOn() && !IsBar());
         _labelColorCombo = AddComboRow("\"Claude\" label color", LabelColorOptions.Select(o => o.Text),
             indent: true, visible: () => TaskbarOn() && !IsBar());
         _numberColorCombo = AddComboRow("Percentage color", NumberColorOptions.Select(o => o.Text),
@@ -387,8 +395,9 @@ public sealed class SettingsForm : Form
             Preview(() => _overlayPreview!.SetBarWidth(SelectedOption(_barWidthCombo, BarWidthOptions)));
         _sizeNumeric.ValueChanged += (_, _) =>
             Preview(() => _overlayPreview!.SetSize((int)_sizeNumeric.Value));
-        _showSevenDayToggle.CheckedChanged += (_, _) =>
-            Preview(() => _overlayPreview!.SetShowSevenDay(_showSevenDayToggle.Checked));
+        _showSessionToggle.CheckedChanged += (_, _) => PreviewDisplay();
+        _showWeeklyToggle.CheckedChanged += (_, _) => PreviewDisplay();
+        _showTimeToResetToggle.CheckedChanged += (_, _) => PreviewDisplay();
         _labelColorCombo.SelectedIndexChanged += (_, _) => PreviewColors();
         _numberColorCombo.SelectedIndexChanged += (_, _) => PreviewColors();
         _horizontalOffsetNumeric.ValueChanged += (_, _) =>
@@ -413,6 +422,9 @@ public sealed class SettingsForm : Form
         SelectedOption(_labelColorCombo, LabelColorOptions),
         SelectedOption(_numberColorCombo, NumberColorOptions)));
 
+    private void PreviewDisplay() => Preview(() => _overlayPreview!.SetDisplay(
+        _showSessionToggle.Checked, _showWeeklyToggle.Checked, _showTimeToResetToggle.Checked));
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         // Undo every live preview if the dialog wasn't accepted, restoring the saved appearance.
@@ -422,7 +434,7 @@ public sealed class SettingsForm : Form
             _overlayPreview.SetStyle(t.Style);
             _overlayPreview.SetBarWidth(t.BarWidth);
             _overlayPreview.SetSize(t.SizePercent);
-            _overlayPreview.SetShowSevenDay(t.ShowSevenDay);
+            _overlayPreview.SetDisplay(t.ShowSessionUsage, t.ShowWeeklyUsage, t.ShowTimeToReset);
             _overlayPreview.SetColors(t.LabelColor, t.NumberColor);
             _overlayPreview.SetAllMonitors(t.AllMonitors);
             _overlayPreview.SetHorizontalOffset(t.HorizontalOffset);
@@ -477,7 +489,9 @@ public sealed class SettingsForm : Form
         SelectOption(_styleCombo, StyleOptions, settings.TaskbarDisplay.Style);
         SelectOption(_barWidthCombo, BarWidthOptions, settings.TaskbarDisplay.BarWidth);
         _sizeNumeric.Value = ClampToRange(_sizeNumeric, settings.TaskbarDisplay.SizePercent);
-        _showSevenDayToggle.Checked = settings.TaskbarDisplay.ShowSevenDay;
+        _showSessionToggle.Checked = settings.TaskbarDisplay.ShowSessionUsage;
+        _showWeeklyToggle.Checked = settings.TaskbarDisplay.ShowWeeklyUsage;
+        _showTimeToResetToggle.Checked = settings.TaskbarDisplay.ShowTimeToReset;
         SelectOption(_labelColorCombo, LabelColorOptions, settings.TaskbarDisplay.LabelColor);
         SelectOption(_numberColorCombo, NumberColorOptions, settings.TaskbarDisplay.NumberColor);
         _allMonitorsToggle.Checked = settings.TaskbarDisplay.AllMonitors;
@@ -524,7 +538,9 @@ public sealed class SettingsForm : Form
                 Style = SelectedOption(_styleCombo, StyleOptions),
                 BarWidth = SelectedOption(_barWidthCombo, BarWidthOptions),
                 SizePercent = (int)_sizeNumeric.Value,
-                ShowSevenDay = _showSevenDayToggle.Checked,
+                ShowSessionUsage = _showSessionToggle.Checked,
+                ShowWeeklyUsage = _showWeeklyToggle.Checked,
+                ShowTimeToReset = _showTimeToResetToggle.Checked,
                 LabelColor = SelectedOption(_labelColorCombo, LabelColorOptions),
                 NumberColor = SelectedOption(_numberColorCombo, NumberColorOptions),
                 AllMonitors = _allMonitorsToggle.Checked,

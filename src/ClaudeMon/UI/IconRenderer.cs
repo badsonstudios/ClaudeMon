@@ -124,6 +124,13 @@ public static class IconRenderer
     /// </summary>
     private const string UnknownCountdownMarker = "—";
 
+    /// <summary>
+    /// Pending marker shown on the overlay while no usage reading is available yet (first
+    /// poll outstanding, or rate limited / errored with nothing cached). A horizontal
+    /// ellipsis (U+2026), distinct from the em-dash markers above: "waiting", not "broken".
+    /// </summary>
+    private const string WaitingMarker = "…";
+
     /// <summary>Minimum overlay width — keeps single-number mode pixel-identical to before.</summary>
     public const int MinTaskbarWidth = 52;
     private const int TaskbarWidthPadding = 6;
@@ -310,6 +317,20 @@ public static class IconRenderer
     /// <summary>Overlay width for the sign-in-expired marker at the given taskbar height.</summary>
     public static int MeasureTaskbarSignInExpiredWidth(int height)
         => MeasureTaskbarSegmentsWidth(new[] { new TaskbarSegment(SignInExpiredMarker, Color.White) }, height);
+
+    /// <summary>
+    /// Draws the waiting marker on the taskbar overlay — the "Claude" label with a pending
+    /// "…" where the percentage would be — so the readout is visibly alive while no usage
+    /// reading exists yet (rather than rendering nothing at all). Replaced by real numbers
+    /// on the next successful poll.
+    /// </summary>
+    public static void DrawTaskbarWaiting(Graphics graphics, Rectangle bounds, Color labelColor)
+        => DrawTaskbarSegments(graphics, bounds, labelColor,
+            new[] { new TaskbarSegment(WaitingMarker, labelColor) });
+
+    /// <summary>Overlay width for the waiting marker at the given taskbar height.</summary>
+    public static int MeasureTaskbarWaitingWidth(int height)
+        => MeasureTaskbarSegmentsWidth(new[] { new TaskbarSegment(WaitingMarker, Color.White) }, height);
 
     // --- Bar style ---
 

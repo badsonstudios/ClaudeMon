@@ -21,7 +21,7 @@ using Microsoft.Win32;
 public sealed class TaskbarOverlayManager : IDisposable
 {
     /// <summary>The latest reading to seed onto overlays created after a monitor connects.</summary>
-    private readonly record struct OverlayReading(bool SignInExpired, TaskbarReading Reading);
+    private readonly record struct OverlayReading(TaskbarOverlayMarker Marker, TaskbarReading Reading);
 
     /// <summary>Raised when any overlay is clicked, carrying that readout's screen bounds.</summary>
     public event EventHandler<System.Drawing.Rectangle>? OverlayClicked;
@@ -45,9 +45,10 @@ public sealed class TaskbarOverlayManager : IDisposable
     private int _secondaryHorizontalOffset;
     private bool _enabled;
 
-    // Latest reading (null until the first poll), retained so an overlay created after a
-    // monitor connects shows the current value immediately instead of staying blank.
-    private OverlayReading? _reading;
+    // Latest reading, retained so an overlay created after a monitor connects shows the
+    // current value immediately instead of staying blank. Starts as the waiting marker so
+    // the readout is visibly alive from the moment it appears, before the first poll lands.
+    private OverlayReading _reading = new(TaskbarOverlayMarker.Waiting, default);
 
     private bool _disposed;
 
@@ -149,7 +150,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     /// <summary>Push a fresh usage reading to every overlay.</summary>
     public void UpdateUsage(TaskbarReading reading)
     {
-        _reading = new OverlayReading(SignInExpired: false, reading);
+        _reading = new OverlayReading(TaskbarOverlayMarker.None, reading);
         foreach (var overlay in _overlays.Values)
             overlay.UpdateUsage(reading);
     }
@@ -157,9 +158,26 @@ public sealed class TaskbarOverlayManager : IDisposable
     /// <summary>Switch every overlay to the neutral sign-in-expired marker.</summary>
     public void ShowSignInExpired()
     {
-        _reading = new OverlayReading(SignInExpired: true, default);
+        _reading = new OverlayReading(TaskbarOverlayMarker.SignInExpired, default);
         foreach (var overlay in _overlays.Values)
             overlay.ShowSignInExpired();
+    }
+
+    /// <summary>
+    /// Switch every overlay to the waiting marker — shown when no usage reading is available
+    /// (before the first poll, or a poll failed with nothing cached), so the readout stays
+    /// visibly alive instead of blank. Replaced automatically by the next
+    /// <see cref="UpdateUsage"/>. Does not downgrade the sign-in-expired marker: that state
+    /// carries actionable information (re-authenticate) and a transient offline poll while
+    /// signed out must not blur it into a generic "waiting".
+    /// </summary>
+    public void ShowWaiting()
+    {
+        if (_reading.Marker == TaskbarOverlayMarker.SignInExpired) return;
+
+        _reading = new OverlayReading(TaskbarOverlayMarker.Waiting, default);
+        foreach (var overlay in _overlays.Values)
+            overlay.ShowWaiting();
     }
 
     private void OnOverlayClicked(object? sender, System.Drawing.Rectangle bounds) => OverlayClicked?.Invoke(this, bounds);
@@ -240,12 +258,17 @@ public sealed class TaskbarOverlayManager : IDisposable
         overlay.SetDisplay(_showSession, _showWeekly, _showTimeToReset);
         overlay.SetHorizontalOffsets(_primaryHorizontalOffset, _secondaryHorizontalOffset);
 
-        if (_reading is { } reading)
+        switch (_reading.Marker)
         {
-            if (reading.SignInExpired)
+            case TaskbarOverlayMarker.SignInExpired:
                 overlay.ShowSignInExpired();
-            else
-                overlay.UpdateUsage(reading.Reading);
+                break;
+            case TaskbarOverlayMarker.Waiting:
+                overlay.ShowWaiting();
+                break;
+            default:
+                overlay.UpdateUsage(_reading.Reading);
+                break;
         }
     }
 

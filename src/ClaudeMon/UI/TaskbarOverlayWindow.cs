@@ -7,6 +7,19 @@ using ClaudeMon.Models;
 using ClaudeMon.Services;
 
 /// <summary>
+/// The "no usage numbers" placeholder an overlay can show instead of a reading: the neutral
+/// sign-in-expired em dash, or the waiting "…" shown while no reading exists yet. Both
+/// bypass the Numbers/Bar style and are cleared by the next
+/// <see cref="TaskbarOverlayWindow.UpdateUsage"/>.
+/// </summary>
+internal enum TaskbarOverlayMarker
+{
+    None,
+    SignInExpired,
+    Waiting,
+}
+
+/// <summary>
 /// A borderless, always-on-top window that paints the current Claude usage percentage
 /// directly over the right end of one Windows taskbar, just left of that taskbar's system
 /// tray / clock. One instance is created per taskbar (the primary and each
@@ -60,7 +73,7 @@ public sealed class TaskbarOverlayWindow : Form
     private bool _showWeekly;
     private bool _showTimeToReset;
 
-    private bool _signInExpired;
+    private TaskbarOverlayMarker _marker;
     private TaskbarTextColor _labelColor = TaskbarTextColor.White;
     private TaskbarTextColor _numberColor = TaskbarTextColor.Auto;
     private TaskbarStyle _style = TaskbarStyle.Numbers;
@@ -89,7 +102,7 @@ public sealed class TaskbarOverlayWindow : Form
     // countdown's minute rollovers in one comparison.
     private string? _widthSegmentsKey;
     private int _widthHeight;
-    private bool _widthSignInExpired;
+    private TaskbarOverlayMarker _widthMarker;
     private TaskbarStyle _widthStyle = TaskbarStyle.Numbers;
     private TaskbarBarWidth _widthBarWidth = TaskbarBarWidth.Standard;
 
@@ -221,9 +234,9 @@ public sealed class TaskbarOverlayWindow : Form
     /// </summary>
     public void UpdateUsage(TaskbarReading reading)
     {
-        // A fresh reading clears any sign-in-expired marker, so normal display returns
-        // automatically once credentials are refreshed.
-        _signInExpired = false;
+        // A fresh reading clears any placeholder marker (sign-in expired or waiting), so
+        // normal display returns automatically once data is available again.
+        _marker = TaskbarOverlayMarker.None;
         _percentage = reading.FiveHourPct;
         _fiveHourFraction = reading.FiveHourFraction;
         _sevenDayPercentage = reading.SevenDayPct;
@@ -242,7 +255,22 @@ public sealed class TaskbarOverlayWindow : Form
     /// </summary>
     public void ShowSignInExpired()
     {
-        _signInExpired = true;
+        _marker = TaskbarOverlayMarker.SignInExpired;
+        _contentDirty = true;
+        if (Visible) Reposition();
+    }
+
+    /// <summary>
+    /// Replace the usage readout with the waiting marker (see
+    /// <see cref="IconRenderer.DrawTaskbarWaiting"/>) shown while no usage reading is
+    /// available — the first poll is still outstanding, or polling failed with nothing
+    /// cached — so the readout is visibly alive rather than blank. Cleared by the next
+    /// <see cref="UpdateUsage"/>. Honoured the next time the overlay is shown if currently
+    /// disabled.
+    /// </summary>
+    public void ShowWaiting()
+    {
+        _marker = TaskbarOverlayMarker.Waiting;
         _contentDirty = true;
         if (Visible) Reposition();
     }
@@ -371,7 +399,7 @@ public sealed class TaskbarOverlayWindow : Form
     /// Recomputes <see cref="_width"/> from the current readout, but only when the composed
     /// number row, style, or taskbar height changed — measuring allocates fonts and a bitmap,
     /// and this runs on the 500 ms keep-alive tick. The segments are null exactly when the
-    /// Numbers row isn't being rendered (bar style, or sign-in expired).
+    /// Numbers row isn't being rendered (bar style, or a placeholder marker).
     /// </summary>
     private void UpdateMeasuredWidth(IconRenderer.TaskbarSegment[]? segments, string? segmentsKey)
     {
@@ -379,12 +407,14 @@ public sealed class TaskbarOverlayWindow : Form
         // derive the physical window width from the current DPI scale. _width is always refreshed
         // from _logicalWidth because the scale can change (a move to another monitor) even when the
         // logical measurement is unchanged.
-        if (_signInExpired)
+        if (_marker != TaskbarOverlayMarker.None)
         {
-            if (!(_widthSignInExpired && _widthHeight == _logicalHeight))
+            if (!(_widthMarker == _marker && _widthHeight == _logicalHeight))
             {
-                _logicalWidth = IconRenderer.MeasureTaskbarSignInExpiredWidth(_logicalHeight);
-                _widthSignInExpired = true;
+                _logicalWidth = _marker == TaskbarOverlayMarker.SignInExpired
+                    ? IconRenderer.MeasureTaskbarSignInExpiredWidth(_logicalHeight)
+                    : IconRenderer.MeasureTaskbarWaitingWidth(_logicalHeight);
+                _widthMarker = _marker;
                 _widthHeight = _logicalHeight;
             }
 
@@ -392,7 +422,7 @@ public sealed class TaskbarOverlayWindow : Form
             return;
         }
 
-        if (_widthSignInExpired
+        if (_widthMarker != TaskbarOverlayMarker.None
             || _widthStyle != _style || _widthBarWidth != _barWidth
             || _widthSegmentsKey != segmentsKey || _widthHeight != _logicalHeight)
         {
@@ -406,7 +436,7 @@ public sealed class TaskbarOverlayWindow : Form
             _widthHeight = _logicalHeight;
             _widthStyle = _style;
             _widthBarWidth = _barWidth;
-            _widthSignInExpired = false;
+            _widthMarker = TaskbarOverlayMarker.None;
         }
 
         _width = Scale(_logicalWidth);
@@ -493,9 +523,11 @@ public sealed class TaskbarOverlayWindow : Form
         // Re-measure only when the inputs actually change. The composed number row doubles as
         // the countdown's change signal: when its text rolls over a minute the key differs from
         // the painted one, marking the content dirty even though the geometry usually doesn't.
-        // Only the Numbers style renders it, so the bar/sign-in-expired paths skip composing it
+        // Only the Numbers style renders it, so the bar/marker paths skip composing it
         // on every 500 ms tick.
-        var segments = !_signInExpired && _style == TaskbarStyle.Numbers ? BuildNumberSegments() : null;
+        var segments = _marker == TaskbarOverlayMarker.None && _style == TaskbarStyle.Numbers
+            ? BuildNumberSegments()
+            : null;
         var segmentsKey = segments is null ? null : SegmentsKey(segments);
         if (segments is not null && segmentsKey != _paintedSegmentsKey)
             _contentDirty = true;
@@ -534,8 +566,8 @@ public sealed class TaskbarOverlayWindow : Form
     /// <summary>Renders the readout to a 32bpp ARGB bitmap and pushes it via UpdateLayeredWindow.</summary>
     private void Redraw()
     {
-        // Sign-in-expired draws without a percentage; otherwise there's nothing to paint yet.
-        if (!IsHandleCreated || (!_signInExpired && _percentage is null)) return;
+        // The placeholder markers draw without a percentage; otherwise there's nothing to paint yet.
+        if (!IsHandleCreated || (_marker == TaskbarOverlayMarker.None && _percentage is null)) return;
 
         // Read the taskbar theme once (cached in SystemTheme): it feeds the bar tick contrast and
         // the keep-alive's repaint dirty-check.
@@ -558,11 +590,14 @@ public sealed class TaskbarOverlayWindow : Form
             graphics.Clear(Color.FromArgb(1, 0, 0, 0));
             var bounds = new Rectangle(0, 0, _logicalWidth, _logicalHeight);
 
-            if (_signInExpired)
+            if (_marker != TaskbarOverlayMarker.None)
             {
                 // Resolve at 0% so the neutral marker isn't usage-coloured under the Auto preset.
                 var labelColor = IconRenderer.GetTextColor(_labelColor, 0);
-                IconRenderer.DrawTaskbarSignInExpired(graphics, bounds, labelColor);
+                if (_marker == TaskbarOverlayMarker.SignInExpired)
+                    IconRenderer.DrawTaskbarSignInExpired(graphics, bounds, labelColor);
+                else
+                    IconRenderer.DrawTaskbarWaiting(graphics, bounds, labelColor);
             }
             else if (_style == TaskbarStyle.Bar)
             {

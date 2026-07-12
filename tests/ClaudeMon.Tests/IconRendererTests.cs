@@ -193,6 +193,37 @@ public class IconRendererTests
     [Theory]
     [InlineData(30)]   // Win10 taskbar height
     [InlineData(40)]   // Win11 taskbar height
+    public void MeasureTaskbarWaitingWidth_IsAtLeastMinimum(int height)
+    {
+        var width = IconRenderer.MeasureTaskbarWaitingWidth(height);
+        Assert.True(width >= IconRenderer.MinTaskbarWidth, $"expected >= {IconRenderer.MinTaskbarWidth}, got {width}");
+    }
+
+    [Fact]
+    public void DrawTaskbarWaiting_RendersVisibleMarker()
+    {
+        var width = IconRenderer.MeasureTaskbarWaitingWidth(40);
+        using var bitmap = new Bitmap(width, 40, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.Transparent);
+            IconRenderer.DrawTaskbarWaiting(
+                graphics, new Rectangle(0, 0, width, 40),
+                IconRenderer.GetTextColor(TaskbarTextColor.White, 0));
+        }
+
+        // The label + waiting marker should leave some non-transparent pixels.
+        var painted = false;
+        for (var x = 0; x < bitmap.Width && !painted; x++)
+            for (var y = 0; y < bitmap.Height; y++)
+                if (bitmap.GetPixel(x, y).A > 0) { painted = true; break; }
+
+        Assert.True(painted, "expected the waiting marker to render visible pixels");
+    }
+
+    [Theory]
+    [InlineData(30)]   // Win10 taskbar height
+    [InlineData(40)]   // Win11 taskbar height
     [InlineData(72)]   // ~150% DPI
     public void MeasureTaskbarClockReserve_ReservesPositiveWidth(int height)
     {

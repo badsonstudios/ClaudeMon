@@ -3,9 +3,15 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
-## [Unreleased]
+## [0.12.0] - 2026-07-12
 
 ### Added
+- **"Auto (match taskbar)" text color** — the taskbar readout's label and percentage color
+  dropdowns gain an **Auto (match taskbar)** option that picks a contrasting color from the
+  Windows taskbar theme: light text on a dark taskbar, dark text on a light one. It re-evaluates
+  live when the Windows light/dark mode changes (within a few seconds, no restart), previews
+  live in Settings, and the existing fixed presets, the number's **Auto (usage level)** mode,
+  and the defaults are all unchanged. (#15)
 - **In-app update window with Get / Ignore / Skip-this-version** — when a check finds a newer
   release, ClaudeMon now opens a small themed window (light/dark to match the app theme,
   DPI-aware) instead of the easy-to-miss tray balloon: **Get the update** opens the release

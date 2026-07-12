@@ -112,6 +112,28 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void TaskbarDisplay_MatchTaskbarColors_RoundTrip()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+
+        manager.Update(new AppSettings
+        {
+            TaskbarDisplay = new TaskbarDisplaySettings
+            {
+                LabelColor = TaskbarTextColor.MatchTaskbar,
+                NumberColor = TaskbarTextColor.MatchTaskbar,
+            },
+        });
+
+        var manager2 = new ConfigManager(path);
+        manager2.Load();
+
+        Assert.Equal(TaskbarTextColor.MatchTaskbar, manager2.Settings.TaskbarDisplay.LabelColor);
+        Assert.Equal(TaskbarTextColor.MatchTaskbar, manager2.Settings.TaskbarDisplay.NumberColor);
+    }
+
+    [Fact]
     public void TaskbarDisplay_DefaultColors_AreWhiteLabelAndAutoNumber()
     {
         var settings = new AppSettings();

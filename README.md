@@ -85,7 +85,7 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | **Show session (5-hour) usage** | Show the session percentage in the readout (on by default) |
 | **Show weekly (7-day) usage** | Also show the weekly percentage, dot-separated (off by default; replaces the old "Also show 7-day usage" toggle — an existing opt-in migrates automatically) |
 | **Show time left to reset** | Add a compact countdown to the 5-hour reset (e.g. `1h 23m`) that ticks down live. Numbers style only — the Bar style already marks time with its tick (off by default) |
-| **Taskbar text colors** | Color of the "Claude" label and the percentage number (presets; the number can stay Auto / usage-level) |
+| **Taskbar text colors** | Color of the "Claude" label and the percentage number. Fixed presets, plus **Auto (match taskbar)** — light text on a dark taskbar, dark on a light one, following theme changes live; the number can also stay **Auto (usage level)** (green/yellow/orange/red) |
 | **Show on secondary monitors** | Also show the readout on secondary monitors' taskbars, not just the primary (off by default; needs Windows set to show the taskbar on all displays) |
 | **Secondary position** (under *Show on secondary monitors*) | Nudge the readout left (−) or right (+) on secondary monitors to fine-tune the gap from the clock; previews live as you change it (0 by default). Independent of the primary **Position** nudge |
 

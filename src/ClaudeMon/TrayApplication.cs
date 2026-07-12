@@ -35,10 +35,21 @@ public sealed class TrayApplication : IDisposable
         new("Download update...") { Visible = false };
     private string? _updateUrl;
     private bool _settingsOpen;
+    private bool _updateDialogOpen;
     private volatile bool _disposed;
 
     private static Version CurrentVersion =>
         typeof(TrayApplication).Assembly.GetName().Version ?? new Version(0, 0);
+
+    // Where "Get the update" / "Download update" land if a release somehow has no html_url.
+    private const string ReleasesFallbackUrl = "https://github.com/badsonstudios/ClaudeMon/releases";
+
+    /// <summary>
+    /// Formats a version as the 3-part display/comparison form ("0.12.0"). The skip-this-version
+    /// comparison matches persisted strings against this, so every version string in the update
+    /// flow must come from here.
+    /// </summary>
+    private static string FormatVersion(Version v) => $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}";
 
     public TrayApplication()
     {
@@ -276,9 +287,12 @@ public sealed class TrayApplication : IDisposable
     }
 
     /// <summary>
-    /// Queries GitHub for a newer release. On a manual check the user always gets
-    /// feedback (update / up-to-date / failed); automatic checks stay silent unless a
-    /// new version is found, and only balloon once per version (tracked in config).
+    /// Queries GitHub for a newer release. When one is found, the update dialog offers
+    /// Get / Ignore / Skip-this-version (skip suppresses automatic prompts for that exact
+    /// version; see <see cref="UpdatePrompt"/>), and the "Download update" menu item appears
+    /// as a persistent affordance either way. On a manual check the user always gets feedback
+    /// (the dialog even for a skipped version / up-to-date / failed); automatic checks stay
+    /// silent unless a new, unskipped version is found.
     /// </summary>
     private async Task CheckForUpdatesAsync(bool manual)
     {
@@ -294,26 +308,21 @@ public sealed class TrayApplication : IDisposable
 
                 if (result.UpdateAvailable && result.LatestVersion is not null)
                 {
-                    var v = result.LatestVersion;
-                    var version = $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}";
-                    _updateUrl = result.ReleaseUrl;
+                    var version = FormatVersion(result.LatestVersion);
+                    _updateUrl = result.ReleaseUrl ?? ReleasesFallbackUrl;
                     _downloadUpdateItem.Text = $"Download update (v{version})...";
                     _downloadUpdateItem.Visible = true;
 
-                    // All _configManager.Update calls run on the UI thread (this posted
-                    // callback and the Settings dialog), so this read-modify-write is safe.
-                    var alreadyNotified = _configManager.Settings.LastNotifiedVersion == version;
-                    if (manual || !alreadyNotified)
+                    // A second dialog can't stack on the open one (the 24h timer keeps ticking
+                    // while it's up), and an automatic prompt won't pop over the Settings dialog
+                    // — the menu item is already visible and the next check reminds. A manual
+                    // check still prompts there (the tray menu stays reachable under ShowDialog,
+                    // and asking is explicit intent — same reason it overrides a skipped version).
+                    if (UpdatePrompt.ShouldPrompt(manual, version, _configManager.Settings.IgnoredUpdateVersion)
+                        && !_updateDialogOpen && (manual || !_settingsOpen))
                     {
-                        _notifyIcon.ShowBalloonTip(
-                            5000,
-                            "Update available",
-                            $"ClaudeMon v{version} is available. Use \"Download update\" in the menu.",
-                            ToolTipIcon.Info);
+                        ShowUpdateDialog(version);
                     }
-
-                    if (!alreadyNotified)
-                        _configManager.Update(_configManager.Settings with { LastNotifiedVersion = version });
                 }
                 else if (manual && result.ErrorMessage is null)
                 {
@@ -334,6 +343,38 @@ public sealed class TrayApplication : IDisposable
         catch
         {
             // Update checks are best-effort; never crash the app over one.
+        }
+    }
+
+    /// <summary>
+    /// Runs the modal update dialog for <paramref name="version"/> and acts on the choice:
+    /// Get opens the release page, Skip persists the version so automatic checks stop
+    /// prompting for it, Ignore does nothing (the next check reminds again).
+    /// </summary>
+    private void ShowUpdateDialog(string version)
+    {
+        _updateDialogOpen = true;
+        try
+        {
+            using var dialog = new UpdateAvailableDialog(FormatVersion(CurrentVersion), version);
+            dialog.ShowDialog();
+
+            switch (dialog.Choice)
+            {
+                case UpdateDialogChoice.GetUpdate:
+                    OpenUpdatePage();
+                    break;
+                case UpdateDialogChoice.SkipVersion:
+                    // All _configManager.Update calls run on the UI thread (this dialog and
+                    // the Settings dialog), so this read-modify-write is safe.
+                    _configManager.Update(
+                        _configManager.Settings with { IgnoredUpdateVersion = version });
+                    break;
+            }
+        }
+        finally
+        {
+            _updateDialogOpen = false;
         }
     }
 

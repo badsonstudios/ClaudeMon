@@ -6,6 +6,14 @@ GitHub release; the release notes are taken from these entries.
 ## [Unreleased]
 
 ### Added
+- **In-app update window with Get / Ignore / Skip-this-version** — when a check finds a newer
+  release, ClaudeMon now opens a small themed window (light/dark to match the app theme,
+  DPI-aware) instead of the easy-to-miss tray balloon: **Get the update** opens the release
+  page, **Ignore** dismisses until the next check, and **Skip this version** stops automatic
+  prompts for that exact version — persisted across restarts — until something newer ships.
+  A manual **Check for updates** always shows the window, even for a skipped version, and the
+  **Download update (vX)…** menu item stays available either way. The daily automatic check,
+  the startup check, and the **Check for updates automatically** toggle are unchanged. (#42)
 - **Waiting indicator on the taskbar readout** — when no usage reading is available (the app
   just started, or the API is rate limited / erroring before anything was fetched), the taskbar
   readout now shows the "Claude" label with a waiting "…" instead of rendering nothing at all,

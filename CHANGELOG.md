@@ -6,6 +6,14 @@ GitHub release; the release notes are taken from these entries.
 ## [Unreleased]
 
 ### Added
+- **Compose the taskbar readout: session / weekly / time-left toggles** — the single "Also show
+  7-day usage" toggle is replaced by three independent toggles under *Taskbar display*: **Show
+  session (5-hour) usage** (on by default), **Show weekly (7-day) usage**, and **Show time left
+  to reset** — a compact countdown (e.g. `1h 23m`) that ticks down live between polls. Any
+  combination works, in both readout styles: in **Numbers** the enabled elements render
+  dot-separated; in **Bar** the session/weekly toggles pick which bars draw (the countdown is
+  Numbers-only — the bar already marks time with its tick). An existing "Also show 7-day usage"
+  opt-in migrates to the weekly toggle automatically. (#50)
 - **Taskbar readout Size setting** — a new **Size** option on the Settings **Taskbar** tab
   scales the taskbar readout on top of the monitor's DPI scaling: any percentage from 25% to
   150% (arrow keys step by 5). Since the Per-Monitor-V2 change the readout scales with display

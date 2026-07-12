@@ -80,42 +80,83 @@ public class IconRendererTests
         Assert.Equal(IconRenderer.GetColorForPercentage(percentage), color);
     }
 
+    // Composes the dot-joined segment row the overlay builds for the given elements.
+    private static IconRenderer.TaskbarSegment[] Segments(params (string Text, Color Color)[] elements) =>
+        IconRenderer.JoinSegments(elements.Select(e => new IconRenderer.TaskbarSegment(e.Text, e.Color)).ToArray());
+
     [Fact]
-    public void MeasureTaskbarUsageWidth_SingleNumber_IsAtLeastMinimum()
+    public void MeasureTaskbarSegmentsWidth_SingleNumber_IsAtLeastMinimum()
     {
-        var width = IconRenderer.MeasureTaskbarUsageWidth(42, null, 40);
+        var width = IconRenderer.MeasureTaskbarSegmentsWidth(Segments(("42", Color.White)), 40);
         Assert.True(width >= IconRenderer.MinTaskbarWidth, $"expected >= {IconRenderer.MinTaskbarWidth}, got {width}");
     }
 
     [Theory]
-    [InlineData(42, 18)]
-    [InlineData(100, 100)]   // widest case: two 3-digit numbers
-    public void MeasureTaskbarUsageWidth_Dual_IsWiderThanSingle(double five, double seven)
+    [InlineData("42", "18")]
+    [InlineData("100", "100")]   // widest dual case: two 3-digit numbers
+    public void MeasureTaskbarSegmentsWidth_MoreSegments_AreWider(string five, string seven)
     {
-        var single = IconRenderer.MeasureTaskbarUsageWidth(five, null, 40);
-        var dual = IconRenderer.MeasureTaskbarUsageWidth(five, seven, 40);
+        var single = IconRenderer.MeasureTaskbarSegmentsWidth(Segments((five, Color.White)), 40);
+        var dual = IconRenderer.MeasureTaskbarSegmentsWidth(
+            Segments((five, Color.White), (seven, Color.White)), 40);
+        var triple = IconRenderer.MeasureTaskbarSegmentsWidth(
+            Segments((five, Color.White), (seven, Color.White), ("1h 23m", Color.White)), 40);
         Assert.True(dual > single, $"dual {dual} should exceed single {single}");
+        Assert.True(triple > dual, $"triple {triple} should exceed dual {dual}");
     }
 
     [Theory]
     [InlineData(42, 18)]
     [InlineData(0, 0)]
     [InlineData(100, 100)]
-    public void DrawTaskbarUsage_Dual_RendersWithoutError(double five, double seven)
+    public void DrawTaskbarSegments_DualWithCountdown_RendersWithoutError(double five, double seven)
     {
-        var width = IconRenderer.MeasureTaskbarUsageWidth(five, seven, 40);
+        // Mirrors the overlay: each number coloured for its own level, countdown neutral.
+        var segments = Segments(
+            (((int)five).ToString(), IconRenderer.GetTextColor(TaskbarTextColor.Auto, five)),
+            (((int)seven).ToString(), IconRenderer.GetTextColor(TaskbarTextColor.Auto, seven)),
+            ("1h 23m", IconRenderer.GetTextColor(TaskbarTextColor.White, five)));
+        var width = IconRenderer.MeasureTaskbarSegmentsWidth(segments, 40);
         using var bitmap = new Bitmap(width, 40);
         using var graphics = Graphics.FromImage(bitmap);
 
-        // Mirrors the overlay: white label, each number coloured for its own level.
-        IconRenderer.DrawTaskbarUsage(
-            graphics, five, seven, new Rectangle(0, 0, width, 40),
-            IconRenderer.GetTextColor(TaskbarTextColor.White, five),
-            IconRenderer.GetTextColor(TaskbarTextColor.Auto, five),
-            IconRenderer.GetTextColor(TaskbarTextColor.Auto, seven));
+        IconRenderer.DrawTaskbarSegments(
+            graphics, new Rectangle(0, 0, width, 40),
+            IconRenderer.GetTextColor(TaskbarTextColor.White, five), segments);
 
         Assert.Equal(width, bitmap.Width);
         Assert.Equal(40, bitmap.Height);
+    }
+
+    [Fact]
+    public void JoinSegments_InterleavesSeparators()
+    {
+        var joined = Segments(("42", Color.White), ("18", Color.White), ("1h 5m", Color.White));
+        Assert.Equal(5, joined.Length);
+        Assert.Equal("42", joined[0].Text);
+        Assert.Equal(IconRenderer.TaskbarSegment.Separator.Text, joined[1].Text);
+        Assert.Equal("18", joined[2].Text);
+        Assert.Equal(IconRenderer.TaskbarSegment.Separator.Text, joined[3].Text);
+        Assert.Equal("1h 5m", joined[4].Text);
+    }
+
+    [Theory]
+    [InlineData(83, "1h 23m")]     // hours + minutes
+    [InlineData(120, "2h 0m")]     // exact hours keep the minutes for a stable shape
+    [InlineData(45, "45m")]        // under an hour drops the hour part
+    [InlineData(0.5, "1m")]        // sub-minute remainders round up, never "0m"
+    [InlineData(59.5, "1h 0m")]    // ceiling can roll into the next hour
+    [InlineData(0, "now")]         // due
+    [InlineData(-5, "now")]        // past due (clock skew) reads as due, not negative
+    public void FormatTaskbarCountdown_FormatsCompactly(double minutes, string expected)
+    {
+        Assert.Equal(expected, IconRenderer.FormatTaskbarCountdown(TimeSpan.FromMinutes(minutes)));
+    }
+
+    [Fact]
+    public void FormatTaskbarCountdown_UnknownReset_ShowsNeutralMarker()
+    {
+        Assert.Equal("—", IconRenderer.FormatTaskbarCountdown(null));
     }
 
     [Theory]
@@ -207,11 +248,11 @@ public class IconRendererTests
         using (var graphics = Graphics.FromImage(bitmap))
         {
             graphics.Clear(Color.Transparent);
+            var bars = new List<IconRenderer.TaskbarBarSpec> { IconRenderer.TaskbarBarSpec.FiveHour(62, 0.4) };
+            if (dual)
+                bars.Add(IconRenderer.TaskbarBarSpec.SevenDay(30, 0.5));
             IconRenderer.DrawTaskbarBar(
-                graphics, new Rectangle(0, 0, width, 40),
-                fiveHourPct: 62, fiveHourFraction: 0.4,
-                sevenDayPct: dual ? 30 : null, sevenDayFraction: dual ? 0.5 : null,
-                UsageColorMode.Pace);
+                graphics, new Rectangle(0, 0, width, 40), bars, UsageColorMode.Pace);
         }
 
         var painted = false;
@@ -235,8 +276,7 @@ public class IconRendererTests
             g.Clear(Color.Transparent);
             IconRenderer.DrawTaskbarBar(
                 g, new Rectangle(0, 0, width, 40),
-                fiveHourPct: 62, fiveHourFraction: 0.4,
-                sevenDayPct: null, sevenDayFraction: null,
+                new[] { IconRenderer.TaskbarBarSpec.FiveHour(62, 0.4) },
                 UsageColorMode.Pace, lightTaskbar);
             return bmp;
         }
@@ -264,8 +304,7 @@ public class IconRendererTests
             graphics.Clear(Color.Transparent);
             IconRenderer.DrawTaskbarBar(
                 graphics, new Rectangle(0, 0, width, 40),
-                fiveHourPct: 0, fiveHourFraction: null,
-                sevenDayPct: null, sevenDayFraction: null,
+                new[] { IconRenderer.TaskbarBarSpec.FiveHour(0, null) },
                 UsageColorMode.Pace);
         }
 

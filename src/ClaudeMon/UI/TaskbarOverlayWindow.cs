@@ -48,7 +48,14 @@ public sealed class TaskbarOverlayWindow : Form
     private double? _fiveHourFraction;
     private double? _sevenDayPercentage;
     private double? _sevenDayFraction;
-    private bool _showSevenDay;
+    private DateTimeOffset? _fiveHourResetAt;
+
+    // Which elements the readout shows (session %, weekly %, reset countdown). All-off is
+    // normalized to session-only at composition time so the readout never renders empty.
+    private bool _showSession = true;
+    private bool _showWeekly;
+    private bool _showTimeToReset;
+
     private bool _signInExpired;
     private TaskbarTextColor _labelColor = TaskbarTextColor.White;
     private TaskbarTextColor _numberColor = TaskbarTextColor.Auto;
@@ -73,13 +80,18 @@ public sealed class TaskbarOverlayWindow : Form
     private int _logicalHeight = 40;
 
     // Inputs the cached _width was last measured for, so the 500 ms keep-alive tick
-    // doesn't re-measure (allocating fonts + a bitmap) when nothing changed.
-    private double _widthPct = double.NaN;
-    private double? _widthSeven;
+    // doesn't re-measure (allocating fonts + a bitmap) when nothing changed. The segments key
+    // is the composed number-row texts, which covers the display toggles, the values, AND the
+    // countdown's minute rollovers in one comparison.
+    private string? _widthSegmentsKey;
     private int _widthHeight;
     private bool _widthSignInExpired;
     private TaskbarStyle _widthStyle = TaskbarStyle.Numbers;
     private TaskbarBarWidth _widthBarWidth = TaskbarBarWidth.Standard;
+
+    // The segments key last painted, so the keep-alive tick repaints when the countdown text
+    // changes (~once a minute) even though the geometry usually doesn't (monospace digits).
+    private string? _paintedSegmentsKey;
 
     // Cached clock reserve for secondary taskbars (whose clock has no queryable window),
     // re-measured only when the taskbar height changes — see IconRenderer.MeasureTaskbarClockReserve.
@@ -198,10 +210,10 @@ public sealed class TaskbarOverlayWindow : Form
     }
 
     /// <summary>
-    /// Update the displayed values and repaint. The 7-day fields are only shown when the "also
-    /// show 7-day" option is on (see <see cref="SetShowSevenDay"/>); the window-elapsed fractions
-    /// drive the bar style's time tick and pace colouring and may be null when the reset time is
-    /// unknown.
+    /// Update the displayed values and repaint. Which elements actually render is chosen by
+    /// <see cref="SetDisplay"/>; the window-elapsed fractions drive the bar style's time tick
+    /// and pace colouring, and the reset timestamp feeds the countdown element — all may be
+    /// null when the reset time is unknown.
     /// </summary>
     public void UpdateUsage(TaskbarReading reading)
     {
@@ -212,6 +224,7 @@ public sealed class TaskbarOverlayWindow : Form
         _fiveHourFraction = reading.FiveHourFraction;
         _sevenDayPercentage = reading.SevenDayPct;
         _sevenDayFraction = reading.SevenDayFraction;
+        _fiveHourResetAt = reading.FiveHourResetAt;
         _contentDirty = true;
         if (Visible) Reposition();
     }
@@ -283,12 +296,15 @@ public sealed class TaskbarOverlayWindow : Form
     }
 
     /// <summary>
-    /// Toggle whether the 7-day usage is shown alongside the 5-hour one. Re-measures the
-    /// overlay width and repaints live (no restart).
+    /// Choose which elements the readout shows — session (5-hour) usage, weekly (7-day) usage,
+    /// and the reset countdown (Numbers style only; the bar keeps its time tick). Re-measures
+    /// the overlay width and repaints live (no restart). All-off falls back to session-only.
     /// </summary>
-    public void SetShowSevenDay(bool showSevenDay)
+    public void SetDisplay(bool session, bool weekly, bool timeToReset)
     {
-        _showSevenDay = showSevenDay;
+        _showSession = session;
+        _showWeekly = weekly;
+        _showTimeToReset = timeToReset;
         _contentDirty = true;
         if (Visible) Reposition();
     }
@@ -303,15 +319,54 @@ public sealed class TaskbarOverlayWindow : Form
         if (Visible) Reposition();
     }
 
-    /// <summary>The 7-day value to display, or null when the option is off.</summary>
-    private double? SevenDayForDisplay => _showSevenDay ? _sevenDayPercentage : null;
+    /// <summary>The weekly value to display, or null when the toggle is off or the API didn't return one.</summary>
+    private double? WeeklyForDisplay => _showWeekly ? _sevenDayPercentage : null;
 
     /// <summary>
-    /// Recomputes <see cref="_width"/> from the current readout, but only when the
-    /// percentage, 7-day value, or taskbar height changed — measuring allocates fonts
-    /// and a bitmap, and this runs on the 500 ms keep-alive tick.
+    /// The countdown element's current text: minute-granular time until the 5-hour reset, or
+    /// the neutral "—" when the reset time is unknown.
     /// </summary>
-    private void UpdateMeasuredWidth()
+    private string CountdownText() =>
+        IconRenderer.FormatTaskbarCountdown(
+            _fiveHourResetAt is { } resetAt ? resetAt - DateTimeOffset.UtcNow : null);
+
+    /// <summary>
+    /// Composes the Numbers-style number row from the enabled elements: session % and weekly %
+    /// (each coloured for its own usage level under the Auto preset), the reset countdown in the
+    /// neutral label colour, dot-separated. Falls back to session-only rather than an empty row
+    /// when nothing is enabled (or the only enabled element has no data).
+    /// </summary>
+    private IconRenderer.TaskbarSegment[] BuildNumberSegments()
+    {
+        var pct = _percentage ?? 0;
+        var elements = new List<IconRenderer.TaskbarSegment>(3);
+
+        if (_showSession)
+            elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct)));
+
+        if (WeeklyForDisplay is { } weekly)
+            elements.Add(IconRenderer.TaskbarSegment.Percent(weekly, IconRenderer.GetTextColor(_numberColor, weekly)));
+
+        if (_showTimeToReset)
+            elements.Add(new IconRenderer.TaskbarSegment(CountdownText(), IconRenderer.GetTextColor(_labelColor, pct)));
+
+        if (elements.Count == 0)
+            elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct)));
+
+        return IconRenderer.JoinSegments(elements);
+    }
+
+    /// <summary>The measure/repaint cache key for a composed number row — its texts only.</summary>
+    private static string SegmentsKey(IconRenderer.TaskbarSegment[] segments) =>
+        string.Join("", segments.Select(s => s.Text));
+
+    /// <summary>
+    /// Recomputes <see cref="_width"/> from the current readout, but only when the composed
+    /// number row, style, or taskbar height changed — measuring allocates fonts and a bitmap,
+    /// and this runs on the 500 ms keep-alive tick. The segments are null exactly when the
+    /// Numbers row isn't being rendered (bar style, or sign-in expired).
+    /// </summary>
+    private void UpdateMeasuredWidth(IconRenderer.TaskbarSegment[]? segments, string? segmentsKey)
     {
         // Measure in logical units (IconRenderer works at 96 DPI), cache on the logical height, and
         // derive the physical window width from the current DPI scale. _width is always refreshed
@@ -330,19 +385,17 @@ public sealed class TaskbarOverlayWindow : Form
             return;
         }
 
-        var pct = _percentage ?? 0;
-        var seven = SevenDayForDisplay;
         if (_widthSignInExpired
             || _widthStyle != _style || _widthBarWidth != _barWidth
-            || !_widthPct.Equals(pct) || !_widthSeven.Equals(seven) || _widthHeight != _logicalHeight)
+            || _widthSegmentsKey != segmentsKey || _widthHeight != _logicalHeight)
         {
             // The bar's width is fixed by the height + width setting (the value doesn't widen it);
-            // the number's width grows with the digits shown.
+            // the number's width grows with the segments shown (non-null whenever we get here
+            // in the Numbers style).
             _logicalWidth = _style == TaskbarStyle.Bar
                 ? IconRenderer.MeasureTaskbarBarWidth(_logicalHeight, _barWidth)
-                : IconRenderer.MeasureTaskbarUsageWidth(pct, seven, _logicalHeight);
-            _widthPct = pct;
-            _widthSeven = seven;
+                : IconRenderer.MeasureTaskbarSegmentsWidth(segments!, _logicalHeight);
+            _widthSegmentsKey = segmentsKey;
             _widthHeight = _logicalHeight;
             _widthStyle = _style;
             _widthBarWidth = _barWidth;
@@ -425,10 +478,18 @@ public sealed class TaskbarOverlayWindow : Form
         // estimated. The primary is anchored exactly to its tray, so it ignores the offset.
         var offset = taskbar.Value.IsPrimary ? 0 : DpiScale.Scale(_horizontalOffset, _monitorScale);
 
-        // Size the overlay to its content so the dual "5hr / 7day" readout never clips.
-        // The window is right-anchored, so a wider overlay extends leftward and the
-        // clock/tray stay put. Re-measure only when the inputs actually change.
-        UpdateMeasuredWidth();
+        // Size the overlay to its content so a multi-element readout never clips. The window is
+        // right-anchored, so a wider overlay extends leftward and the clock/tray stay put.
+        // Re-measure only when the inputs actually change. The composed number row doubles as
+        // the countdown's change signal: when its text rolls over a minute the key differs from
+        // the painted one, marking the content dirty even though the geometry usually doesn't.
+        // Only the Numbers style renders it, so the bar/sign-in-expired paths skip composing it
+        // on every 500 ms tick.
+        var segments = !_signInExpired && _style == TaskbarStyle.Numbers ? BuildNumberSegments() : null;
+        var segmentsKey = segments is null ? null : SegmentsKey(segments);
+        if (segments is not null && segmentsKey != _paintedSegmentsKey)
+            _contentDirty = true;
+        UpdateMeasuredWidth(segments, segmentsKey);
         (_x, _y) = TaskbarOverlayLayout.Compute(
             new TaskbarRect(rect.Left, rect.Top, rect.Right), notifyLeft, _width, rightReserve, offset);
 
@@ -493,36 +554,30 @@ public sealed class TaskbarOverlayWindow : Form
                 var labelColor = IconRenderer.GetTextColor(_labelColor, 0);
                 IconRenderer.DrawTaskbarSignInExpired(graphics, bounds, labelColor);
             }
+            else if (_style == TaskbarStyle.Bar)
+            {
+                // The session/weekly toggles pick the bars; the countdown doesn't apply (the bar
+                // has its own time tick). Nothing enabled (or weekly-only with no weekly data)
+                // falls back to the session bar rather than an empty readout.
+                var pct = _percentage!.Value;
+                var bars = new List<IconRenderer.TaskbarBarSpec>(2);
+                if (_showSession)
+                    bars.Add(IconRenderer.TaskbarBarSpec.FiveHour(pct, _fiveHourFraction));
+                if (WeeklyForDisplay is { } weekly)
+                    bars.Add(IconRenderer.TaskbarBarSpec.SevenDay(weekly, _sevenDayFraction));
+                if (bars.Count == 0)
+                    bars.Add(IconRenderer.TaskbarBarSpec.FiveHour(pct, _fiveHourFraction));
+
+                IconRenderer.DrawTaskbarBar(graphics, bounds, bars, _colorMode, light);
+            }
             else
             {
-                var pct = _percentage!.Value;
-                var sevenDay = SevenDayForDisplay;
-
-                if (_style == TaskbarStyle.Bar)
-                {
-                    IconRenderer.DrawTaskbarBar(
-                        graphics, bounds,
-                        pct, _fiveHourFraction,
-                        sevenDay, sevenDay is null ? null : _sevenDayFraction,
-                        _colorMode, light);
-                }
-                else
-                {
-                    var labelColor = IconRenderer.GetTextColor(_labelColor, pct);
-                    if (sevenDay is null)
-                    {
-                        var numberColor = IconRenderer.GetTextColor(_numberColor, pct);
-                        IconRenderer.DrawTaskbarUsage(graphics, pct, bounds, labelColor, numberColor);
-                    }
-                    else
-                    {
-                        // Each number is coloured for its own usage level (under the Auto preset).
-                        var fiveColor = IconRenderer.GetTextColor(_numberColor, pct);
-                        var sevenColor = IconRenderer.GetTextColor(_numberColor, sevenDay.Value);
-                        IconRenderer.DrawTaskbarUsage(
-                            graphics, pct, sevenDay.Value, bounds, labelColor, fiveColor, sevenColor);
-                    }
-                }
+                // Rebuilt (not reused from Reposition) so colour-preset changes that repaint
+                // without repositioning (SetColors/SetColorMode) resolve fresh colours.
+                var segments = BuildNumberSegments();
+                var labelColor = IconRenderer.GetTextColor(_labelColor, _percentage!.Value);
+                IconRenderer.DrawTaskbarSegments(graphics, bounds, labelColor, segments);
+                _paintedSegmentsKey = SegmentsKey(segments);
             }
         }
 

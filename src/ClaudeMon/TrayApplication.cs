@@ -77,7 +77,10 @@ public sealed class TrayApplication : IDisposable
         _taskbarOverlay.SetBarWidth(_configManager.Settings.TaskbarDisplay.BarWidth);
         _taskbarOverlay.SetSize(_configManager.Settings.TaskbarDisplay.SizePercent);
         _taskbarOverlay.SetColorMode(_configManager.Settings.ColorMode);
-        _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
+        _taskbarOverlay.SetDisplay(
+            _configManager.Settings.TaskbarDisplay.ShowSessionUsage,
+            _configManager.Settings.TaskbarDisplay.ShowWeeklyUsage,
+            _configManager.Settings.TaskbarDisplay.ShowTimeToReset);
         _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
         _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
         _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
@@ -156,7 +159,8 @@ public sealed class TrayApplication : IDisposable
                         fiveHour.UtilizationPct,
                         fiveHour.ElapsedFraction(UsageWindows.FiveHour),
                         sevenDay?.UtilizationPct,
-                        sevenDay?.ElapsedFraction(UsageWindows.SevenDay)));
+                        sevenDay?.ElapsedFraction(UsageWindows.SevenDay),
+                        fiveHour.ResetAt));
                 }
 
                 var lines = new List<string> { "ClaudeMon" };
@@ -393,7 +397,10 @@ public sealed class TrayApplication : IDisposable
                 _taskbarOverlay.SetBarWidth(_configManager.Settings.TaskbarDisplay.BarWidth);
                 _taskbarOverlay.SetSize(_configManager.Settings.TaskbarDisplay.SizePercent);
                 _taskbarOverlay.SetColorMode(_configManager.Settings.ColorMode);
-                _taskbarOverlay.SetShowSevenDay(_configManager.Settings.TaskbarDisplay.ShowSevenDay);
+                _taskbarOverlay.SetDisplay(
+                    _configManager.Settings.TaskbarDisplay.ShowSessionUsage,
+                    _configManager.Settings.TaskbarDisplay.ShowWeeklyUsage,
+                    _configManager.Settings.TaskbarDisplay.ShowTimeToReset);
                 _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
                 _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
                 _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);

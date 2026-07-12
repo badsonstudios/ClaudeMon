@@ -193,6 +193,8 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Theory]
+    [InlineData(TaskbarSize.Tiny, 0.25f)]
+    [InlineData(TaskbarSize.ExtraSmall, 0.5f)]
     [InlineData(TaskbarSize.Small, 0.75f)]
     [InlineData(TaskbarSize.Standard, 1f)]
     [InlineData(TaskbarSize.Large, 1.25f)]

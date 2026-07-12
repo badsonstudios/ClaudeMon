@@ -114,6 +114,8 @@ public sealed class SettingsForm : Form
 
     private static readonly (string Text, TaskbarSize Value)[] SizeOptions =
     [
+        ("25%", TaskbarSize.Tiny),
+        ("50%", TaskbarSize.ExtraSmall),
         ("75%", TaskbarSize.Small),
         ("100%", TaskbarSize.Standard),
         ("125%", TaskbarSize.Large),

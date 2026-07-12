@@ -72,7 +72,7 @@ public enum TaskbarBarWidth
 
 /// <summary>
 /// The size of the taskbar readout, as a multiplier on the per-monitor DPI scale
-/// (<see cref="TaskbarSizeExtensions.Factor"/>: 75% / 100% / 125% / 150%).
+/// (<see cref="TaskbarSizeExtensions.Factor"/>: 25% / 50% / 75% / 100% / 125% / 150%).
 /// <see cref="Standard"/> (100%) is exactly the DPI-only rendering, so existing installs
 /// look unchanged. Larger sizes are capped by the taskbar height — the readout is laid out
 /// against the space that actually fits, so it never clips.
@@ -80,6 +80,8 @@ public enum TaskbarBarWidth
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum TaskbarSize
 {
+    Tiny,
+    ExtraSmall,
     Small,
     Standard,
     Large,
@@ -91,6 +93,8 @@ public static class TaskbarSizeExtensions
     /// <summary>The scale multiplier a <see cref="TaskbarSize"/> applies on top of the monitor DPI scale.</summary>
     public static float Factor(this TaskbarSize size) => size switch
     {
+        TaskbarSize.Tiny => 0.25f,
+        TaskbarSize.ExtraSmall => 0.5f,
         TaskbarSize.Small => 0.75f,
         TaskbarSize.Large => 1.25f,
         TaskbarSize.ExtraLarge => 1.5f,

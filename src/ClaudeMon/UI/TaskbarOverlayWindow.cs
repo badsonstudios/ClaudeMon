@@ -62,9 +62,13 @@ public sealed class TaskbarOverlayWindow : Form
     private int _height = 40;
 
     // The readout is laid out in logical (96-DPI) units — the hand-tuned sizes IconRenderer expects
-    // — then scaled to physical pixels by the target monitor's DPI so it looks the same apparent
-    // size on every monitor. _scale = monitorDpi / 96.
+    // — then scaled to physical pixels so it looks the same apparent size on every monitor.
+    // _scale is the content scale (monitorDpi / 96 × the user's Size setting); _monitorScale is
+    // the DPI factor alone, for things that track real taskbar UI the Size setting must not
+    // resize (the secondary-taskbar clock reserve and the horizontal-offset nudge).
     private float _scale = 1f;
+    private float _monitorScale = 1f;
+    private TaskbarSize _size = TaskbarSize.Standard;
     private int _logicalWidth = IconRenderer.MinTaskbarWidth;
     private int _logicalHeight = 40;
 
@@ -255,6 +259,18 @@ public sealed class TaskbarOverlayWindow : Form
     }
 
     /// <summary>
+    /// Set the readout size multiplier and re-measure/reposition live. The factor folds into the
+    /// content scale on the next <see cref="Reposition"/>, so it applies to both styles and to
+    /// the layout width as well as the paint.
+    /// </summary>
+    public void SetSize(TaskbarSize size)
+    {
+        _size = size;
+        _contentDirty = true;
+        if (Visible) Reposition();
+    }
+
+    /// <summary>
     /// Set the usage colour mode (pace vs absolute level). Only the bar style's fill honours it;
     /// the number style uses its own colour presets. Colour-only, so it just repaints.
     /// </summary>
@@ -341,14 +357,15 @@ public sealed class TaskbarOverlayWindow : Form
     /// <summary>
     /// Clock-reserve width (logical pixels) for a secondary taskbar, cached per logical taskbar
     /// height so the keep-alive tick doesn't re-measure (allocating fonts + a bitmap) when it
-    /// hasn't changed. The caller scales the result to physical pixels.
+    /// hasn't changed. Measured at the monitor-logical height (DPI only, not the Size setting)
+    /// because it estimates the real clock; the caller scales the result to physical pixels.
     /// </summary>
-    private int ClockReserve()
+    private int ClockReserve(int monitorLogicalHeight)
     {
-        if (_clockReserveHeight != _logicalHeight)
+        if (_clockReserveHeight != monitorLogicalHeight)
         {
-            _clockReserve = IconRenderer.MeasureTaskbarClockReserve(_logicalHeight);
-            _clockReserveHeight = _logicalHeight;
+            _clockReserve = IconRenderer.MeasureTaskbarClockReserve(monitorLogicalHeight);
+            _clockReserveHeight = monitorLogicalHeight;
         }
 
         return _clockReserve;
@@ -382,21 +399,30 @@ public sealed class TaskbarOverlayWindow : Form
 
         // Per-monitor DPI of the target taskbar. Under Per-Monitor-V2 every coordinate here is in
         // real (physical) pixels; we lay the readout out in logical (96-DPI) units and scale to
-        // physical by this factor, so a 150%/200% monitor gets a proportionally larger, crisp
-        // readout instead of a bitmap-stretched one.
+        // physical by the content scale — the DPI factor times the user's Size setting — so a
+        // 150%/200% monitor gets a proportionally larger, crisp readout instead of a
+        // bitmap-stretched one, and the Size setting tunes that. The logical layout height is
+        // derived from the physical taskbar height at the content scale, so the readout stays
+        // vertically centred and can never overflow the taskbar at any size.
         var dpi = GetDpiForWindow(taskbar.Value.Handle);
-        _scale = DpiScale.FactorForDpi((int)dpi);
+        _monitorScale = DpiScale.FactorForDpi((int)dpi);
+        _scale = _monitorScale * _size.Factor();
 
         var taskbarHeight = rect.Bottom - rect.Top; // physical pixels
         _height = taskbarHeight > 0 ? taskbarHeight : _height;
         _logicalHeight = Math.Max(1, (int)Math.Round(_height / _scale));
 
         // Reserve and offset are physical (they live in the taskbar's physical coordinate space).
-        var rightReserve = notifyLeft is null ? Scale(ClockReserve()) : 0;
+        // Both track real taskbar UI (the clock) rather than our content, so they scale by the
+        // monitor DPI alone — the Size setting must not move the readout or resize the gap.
+        var monitorLogicalHeight = Math.Max(1, (int)Math.Round(_height / _monitorScale));
+        var rightReserve = notifyLeft is null
+            ? DpiScale.Scale(ClockReserve(monitorLogicalHeight), _monitorScale)
+            : 0;
 
         // The horizontal nudge only tunes secondary taskbars, where the clock width is
         // estimated. The primary is anchored exactly to its tray, so it ignores the offset.
-        var offset = taskbar.Value.IsPrimary ? 0 : Scale(_horizontalOffset);
+        var offset = taskbar.Value.IsPrimary ? 0 : DpiScale.Scale(_horizontalOffset, _monitorScale);
 
         // Size the overlay to its content so the dual "5hr / 7day" readout never clips.
         // The window is right-anchored, so a wider overlay extends leftward and the

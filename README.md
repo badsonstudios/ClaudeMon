@@ -80,6 +80,7 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | **Show usage on the Windows taskbar** | Show the usage percentage on the taskbar, next to the clock (on by default) |
 | **Style** | Choose how the readout looks: **Numbers** (the stacked label + percentage, default) or **Bar + time tick** (a compact usage bar with hour/day dividers and a "now" tick, pace-coloured) |
 | **Bar width** | Width of the bar style — Compact / Standard / Wide / Extra wide. Wider bars give the dividers and time tick more room to read (only applies to the **Bar** style) |
+| **Size** | Size of the readout — 75% / 100% / 125% / 150% (100% by default, the standard DPI-scaled size). Handy to shrink the readout on high-scaling displays where it fills the taskbar; enlargement is capped by the taskbar height, so it never clips. Previews live |
 | **Also show 7-day usage (5hr / 7day)** | Also display the 7-day percentage next to the 5-hour one, slash-separated (off by default) |
 | **Taskbar text colors** | Color of the "Claude" label and the percentage number (presets; the number can stay Auto / usage-level) |
 | **Show on secondary monitors** | Also show the readout on secondary monitors' taskbars, not just the primary (off by default; needs Windows set to show the taskbar on all displays) |

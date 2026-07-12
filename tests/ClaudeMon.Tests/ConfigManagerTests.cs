@@ -166,6 +166,43 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void TaskbarDisplay_Size_DefaultsToStandard()
+    {
+        // Load-bearing: Standard maps to a 1.0 factor, so an upgrade (config with no "size"
+        // key) must leave the taskbar rendering exactly as it was.
+        var settings = new AppSettings();
+        Assert.Equal(TaskbarSize.Standard, settings.TaskbarDisplay.Size);
+        Assert.Equal(1f, settings.TaskbarDisplay.Size.Factor());
+    }
+
+    [Fact]
+    public void TaskbarDisplay_Size_RoundTrips()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+
+        manager.Update(new AppSettings
+        {
+            TaskbarDisplay = new TaskbarDisplaySettings { Size = TaskbarSize.ExtraLarge },
+        });
+
+        var manager2 = new ConfigManager(path);
+        manager2.Load();
+
+        Assert.Equal(TaskbarSize.ExtraLarge, manager2.Settings.TaskbarDisplay.Size);
+    }
+
+    [Theory]
+    [InlineData(TaskbarSize.Small, 0.75f)]
+    [InlineData(TaskbarSize.Standard, 1f)]
+    [InlineData(TaskbarSize.Large, 1.25f)]
+    [InlineData(TaskbarSize.ExtraLarge, 1.5f)]
+    public void TaskbarSize_Factor_MatchesAdvertisedPercentages(TaskbarSize size, float expected)
+    {
+        Assert.Equal(expected, size.Factor());
+    }
+
+    [Fact]
     public void CheckForUpdates_DefaultsToTrue()
     {
         var settings = new AppSettings();

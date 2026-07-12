@@ -35,6 +35,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     private TaskbarTextColor _numberColor = TaskbarTextColor.Auto;
     private TaskbarStyle _style = TaskbarStyle.Numbers;
     private TaskbarBarWidth _barWidth = TaskbarBarWidth.Standard;
+    private TaskbarSize _size = TaskbarSize.Standard;
     private UsageColorMode _colorMode = UsageColorMode.Pace;
     private bool _showSevenDay;
     private bool _allMonitors;
@@ -76,6 +77,14 @@ public sealed class TaskbarOverlayManager : IDisposable
         _barWidth = barWidth;
         foreach (var overlay in _overlays.Values)
             overlay.SetBarWidth(barWidth);
+    }
+
+    /// <summary>Set the readout size multiplier on every overlay (and ones created later).</summary>
+    public void SetSize(TaskbarSize size)
+    {
+        _size = size;
+        foreach (var overlay in _overlays.Values)
+            overlay.SetSize(size);
     }
 
     /// <summary>Set the usage colour mode (pace vs level) on every overlay (and ones created later).</summary>
@@ -219,6 +228,7 @@ public sealed class TaskbarOverlayManager : IDisposable
         overlay.SetColors(_labelColor, _numberColor);
         overlay.SetStyle(_style);
         overlay.SetBarWidth(_barWidth);
+        overlay.SetSize(_size);
         overlay.SetColorMode(_colorMode);
         overlay.SetShowSevenDay(_showSevenDay);
         overlay.SetHorizontalOffset(_horizontalOffset);

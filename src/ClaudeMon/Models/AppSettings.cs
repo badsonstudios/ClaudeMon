@@ -70,6 +70,34 @@ public enum TaskbarBarWidth
     ExtraWide,
 }
 
+/// <summary>
+/// The size of the taskbar readout, as a multiplier on the per-monitor DPI scale
+/// (<see cref="TaskbarSizeExtensions.Factor"/>: 75% / 100% / 125% / 150%).
+/// <see cref="Standard"/> (100%) is exactly the DPI-only rendering, so existing installs
+/// look unchanged. Larger sizes are capped by the taskbar height — the readout is laid out
+/// against the space that actually fits, so it never clips.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum TaskbarSize
+{
+    Small,
+    Standard,
+    Large,
+    ExtraLarge,
+}
+
+public static class TaskbarSizeExtensions
+{
+    /// <summary>The scale multiplier a <see cref="TaskbarSize"/> applies on top of the monitor DPI scale.</summary>
+    public static float Factor(this TaskbarSize size) => size switch
+    {
+        TaskbarSize.Small => 0.75f,
+        TaskbarSize.Large => 1.25f,
+        TaskbarSize.ExtraLarge => 1.5f,
+        _ => 1f, // Standard
+    };
+}
+
 public record AppSettings
 {
     [JsonPropertyName("pollIntervalMinutes")]
@@ -125,6 +153,14 @@ public record TaskbarDisplaySettings
     /// </summary>
     [JsonPropertyName("barWidth")]
     public TaskbarBarWidth BarWidth { get; init; } = TaskbarBarWidth.Standard;
+
+    /// <summary>
+    /// The readout size, multiplied onto the per-monitor DPI scale (applies to both styles and
+    /// every monitor's overlay). Defaults to <see cref="TaskbarSize.Standard"/> (100%), which is
+    /// exactly the DPI-only rendering — an absent key changes nothing on upgrade.
+    /// </summary>
+    [JsonPropertyName("size")]
+    public TaskbarSize Size { get; init; } = TaskbarSize.Standard;
 
     [JsonPropertyName("labelColor")]
     public TaskbarTextColor LabelColor { get; init; } = TaskbarTextColor.White;

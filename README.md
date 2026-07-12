@@ -22,7 +22,7 @@ The usage percentage can also be shown directly on the taskbar:
 - **Stays signed in on its own** - When the on-disk access token goes stale (common if you only use the Claude Code VS Code extension), ClaudeMon refreshes it automatically using your saved refresh token, so it keeps showing usage instead of falsely reporting a sign-in problem
 - **Sign-in-expired guidance** - When your Claude Code sign-in genuinely can't be refreshed, the tooltip, flyout, and About dialog show a clear "run Claude Code to refresh" message instead of stale usage numbers (the taskbar display shows a neutral "—"); normal display returns automatically after you re-authenticate
 - **Update notifications** - Checks GitHub for newer releases (daily and on demand) and links you to the download; toggle in Settings
-- **Diagnostic logging** - Writes timestamped diagnostics (poll results, status changes, API/auth/network errors) to a size-bounded log file; a **View logs** tray-menu item opens it. Token values are never written
+- **Diagnostic logging** - Writes timestamped diagnostics (poll results, status changes, API/auth/network errors) to a per-day log file, keeping the last 7 days; a **View logs** tray-menu item opens the latest one. Token values are never written
 - **Runs at startup** - Starts with Windows by default (the installer's startup option is pre-checked; you can opt out during setup or later in Settings)
 
 ## Installation
@@ -43,7 +43,7 @@ ClaudeMon reads your existing Claude Code OAuth token from `~/.claude/.credentia
 
 ### Logs
 
-ClaudeMon writes diagnostics to `%LocalAppData%\ClaudeMon\logs\claudemon.log` (with one rotated backup, `claudemon.log.1`). Open it any time from the tray menu via **View logs**. The log records poll results, status changes, and API/auth/network errors to help diagnose intermittent issues — **token values are never written**.
+ClaudeMon writes diagnostics to a per-day file, `%LocalAppData%\ClaudeMon\logs\claudemon-YYYY-MM-DD.log`; files older than 7 days (including any logs from versions before daily files) are deleted automatically. Open the latest one any time from the tray menu via **View logs**. The log records poll results, status changes, and API/auth/network errors to help diagnose intermittent issues — **token values are never written**.
 
 ### Usage history
 

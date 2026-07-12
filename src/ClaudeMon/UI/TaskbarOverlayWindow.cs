@@ -370,23 +370,25 @@ public sealed class TaskbarOverlayWindow : Form
     /// (each coloured for its own usage level under the Auto preset), the reset countdown in the
     /// neutral label colour, dot-separated. Falls back to session-only rather than an empty row
     /// when nothing is enabled (or the only enabled element has no data).
+    /// <paramref name="light"/> is the taskbar theme feeding the MatchTaskbar preset — passed in
+    /// (read once per paint) so one frame never mixes themes across the label and segments.
     /// </summary>
-    private IconRenderer.TaskbarSegment[] BuildNumberSegments()
+    private IconRenderer.TaskbarSegment[] BuildNumberSegments(bool light)
     {
         var pct = _percentage ?? 0;
         var elements = new List<IconRenderer.TaskbarSegment>(3);
 
         if (_showSession)
-            elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct)));
+            elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct, light)));
 
         if (WeeklyForDisplay is { } weekly)
-            elements.Add(IconRenderer.TaskbarSegment.Percent(weekly, IconRenderer.GetTextColor(_numberColor, weekly)));
+            elements.Add(IconRenderer.TaskbarSegment.Percent(weekly, IconRenderer.GetTextColor(_numberColor, weekly, light)));
 
         if (_showTimeToReset)
-            elements.Add(new IconRenderer.TaskbarSegment(CountdownText(), IconRenderer.GetTextColor(_labelColor, pct)));
+            elements.Add(new IconRenderer.TaskbarSegment(CountdownText(), IconRenderer.GetTextColor(_labelColor, pct, light)));
 
         if (elements.Count == 0)
-            elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct)));
+            elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct, light)));
 
         return IconRenderer.JoinSegments(elements);
     }
@@ -526,7 +528,7 @@ public sealed class TaskbarOverlayWindow : Form
         // Only the Numbers style renders it, so the bar/marker paths skip composing it
         // on every 500 ms tick.
         var segments = _marker == TaskbarOverlayMarker.None && _style == TaskbarStyle.Numbers
-            ? BuildNumberSegments()
+            ? BuildNumberSegments(SystemTheme.IsLightWindowsMode())
             : null;
         var segmentsKey = segments is null ? null : SegmentsKey(segments);
         if (segments is not null && segmentsKey != _paintedSegmentsKey)
@@ -593,7 +595,7 @@ public sealed class TaskbarOverlayWindow : Form
             if (_marker != TaskbarOverlayMarker.None)
             {
                 // Resolve at 0% so the neutral marker isn't usage-coloured under the Auto preset.
-                var labelColor = IconRenderer.GetTextColor(_labelColor, 0);
+                var labelColor = IconRenderer.GetTextColor(_labelColor, 0, light);
                 if (_marker == TaskbarOverlayMarker.SignInExpired)
                     IconRenderer.DrawTaskbarSignInExpired(graphics, bounds, labelColor);
                 else
@@ -619,8 +621,8 @@ public sealed class TaskbarOverlayWindow : Form
             {
                 // Rebuilt (not reused from Reposition) so colour-preset changes that repaint
                 // without repositioning (SetColors/SetColorMode) resolve fresh colours.
-                var segments = BuildNumberSegments();
-                var labelColor = IconRenderer.GetTextColor(_labelColor, _percentage!.Value);
+                var segments = BuildNumberSegments(light);
+                var labelColor = IconRenderer.GetTextColor(_labelColor, _percentage!.Value, light);
                 IconRenderer.DrawTaskbarSegments(graphics, bounds, labelColor, segments);
                 _paintedSegmentsKey = SegmentsKey(segments);
             }

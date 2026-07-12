@@ -80,6 +80,29 @@ public class IconRendererTests
         Assert.Equal(IconRenderer.GetColorForPercentage(percentage), color);
     }
 
+    [Theory]
+    [InlineData(false, 255, 255, 255)] // dark taskbar → light text
+    [InlineData(true, 0, 0, 0)]        // light taskbar → dark text
+    public void GetTextColor_MatchTaskbar_ContrastsWithTaskbarTheme(bool lightTaskbar, int r, int g, int b)
+    {
+        // Percentage is irrelevant — MatchTaskbar follows the theme, not the usage level.
+        var color = IconRenderer.GetTextColor(TaskbarTextColor.MatchTaskbar, 95, lightTaskbar);
+        Assert.Equal(Color.FromArgb(r, g, b).ToArgb(), color.ToArgb());
+    }
+
+    [Theory]
+    [InlineData(TaskbarTextColor.White)]
+    [InlineData(TaskbarTextColor.Black)]
+    [InlineData(TaskbarTextColor.LightGray)]
+    [InlineData(TaskbarTextColor.DarkGray)]
+    [InlineData(TaskbarTextColor.Auto)]
+    public void GetTextColor_OtherPresets_IgnoreTaskbarTheme(TaskbarTextColor preset)
+    {
+        Assert.Equal(
+            IconRenderer.GetTextColor(preset, 95, lightTaskbar: false).ToArgb(),
+            IconRenderer.GetTextColor(preset, 95, lightTaskbar: true).ToArgb());
+    }
+
     // Composes the dot-joined segment row the overlay builds for the given elements.
     private static IconRenderer.TaskbarSegment[] Segments(params (string Text, Color Color)[] elements) =>
         IconRenderer.JoinSegments(elements.Select(e => new IconRenderer.TaskbarSegment(e.Text, e.Color)).ToArray());

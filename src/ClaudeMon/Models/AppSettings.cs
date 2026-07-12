@@ -18,7 +18,9 @@ public enum PaceSensitivity
 /// <summary>
 /// Preset colors for taskbar overlay text. <see cref="Auto"/> means "colour by usage
 /// level" (the green/yellow/orange/red threshold colouring) and is only meaningful for
-/// the percentage number.
+/// the percentage number. <see cref="MatchTaskbar"/> contrasts with the taskbar theme —
+/// light text on a dark taskbar, dark text on a light one — re-evaluated live as the
+/// Windows mode changes.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum TaskbarTextColor
@@ -28,6 +30,7 @@ public enum TaskbarTextColor
     Black,
     LightGray,
     DarkGray,
+    MatchTaskbar,
 }
 
 /// <summary>

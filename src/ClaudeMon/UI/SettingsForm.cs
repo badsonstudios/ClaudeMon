@@ -118,6 +118,7 @@ public sealed class SettingsForm : Form
 
     private static readonly (string Text, TaskbarTextColor Value)[] LabelColorOptions =
     [
+        ("Auto (match taskbar)", TaskbarTextColor.MatchTaskbar),
         ("White", TaskbarTextColor.White),
         ("Black", TaskbarTextColor.Black),
         ("Light gray", TaskbarTextColor.LightGray),
@@ -127,6 +128,7 @@ public sealed class SettingsForm : Form
     private static readonly (string Text, TaskbarTextColor Value)[] NumberColorOptions =
     [
         ("Auto (usage level)", TaskbarTextColor.Auto),
+        ("Auto (match taskbar)", TaskbarTextColor.MatchTaskbar),
         ("White", TaskbarTextColor.White),
         ("Black", TaskbarTextColor.Black),
         ("Light gray", TaskbarTextColor.LightGray),

@@ -92,16 +92,21 @@ public static class IconRenderer
 
     /// <summary>
     /// Resolves a <see cref="TaskbarTextColor"/> preset to a concrete colour.
-    /// <see cref="TaskbarTextColor.Auto"/> maps to the usage-level threshold colour.
+    /// <see cref="TaskbarTextColor.Auto"/> maps to the usage-level threshold colour;
+    /// <see cref="TaskbarTextColor.MatchTaskbar"/> contrasts with the taskbar theme (dark text
+    /// on a light taskbar, light on dark). <paramref name="lightTaskbar"/> defaults to dark —
+    /// the same fallback <see cref="SystemTheme"/> uses when the theme can't be read.
     /// </summary>
-    public static Color GetTextColor(TaskbarTextColor preset, double percentage) => preset switch
-    {
-        TaskbarTextColor.White => Color.White,
-        TaskbarTextColor.Black => Color.Black,
-        TaskbarTextColor.LightGray => LightGrayColor,
-        TaskbarTextColor.DarkGray => DarkGrayColor,
-        _ => GetColorForPercentage(percentage),
-    };
+    public static Color GetTextColor(TaskbarTextColor preset, double percentage, bool lightTaskbar = false)
+        => preset switch
+        {
+            TaskbarTextColor.White => Color.White,
+            TaskbarTextColor.Black => Color.Black,
+            TaskbarTextColor.LightGray => LightGrayColor,
+            TaskbarTextColor.DarkGray => DarkGrayColor,
+            TaskbarTextColor.MatchTaskbar => lightTaskbar ? Color.Black : Color.White,
+            _ => GetColorForPercentage(percentage),
+        };
 
     private const string TaskbarLabel = "Claude";
 

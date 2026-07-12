@@ -3,7 +3,7 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
-## [Unreleased]
+## [0.11.0] - 2026-07-11
 
 ### Added
 - **Compose the taskbar readout: session / weekly / time-left toggles** — the single "Also show

@@ -81,7 +81,9 @@ public sealed class TrayApplication : IDisposable
             _configManager.Settings.TaskbarDisplay.ShowSessionUsage,
             _configManager.Settings.TaskbarDisplay.ShowWeeklyUsage,
             _configManager.Settings.TaskbarDisplay.ShowTimeToReset);
-        _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
+        _taskbarOverlay.SetHorizontalOffsets(
+            _configManager.Settings.TaskbarDisplay.PrimaryHorizontalOffset,
+            _configManager.Settings.TaskbarDisplay.HorizontalOffset);
         _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
         _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
         // Clicking any monitor's readout opens the detail flyout at the PRIMARY monitor's tray
@@ -402,7 +404,9 @@ public sealed class TrayApplication : IDisposable
                     _configManager.Settings.TaskbarDisplay.ShowSessionUsage,
                     _configManager.Settings.TaskbarDisplay.ShowWeeklyUsage,
                     _configManager.Settings.TaskbarDisplay.ShowTimeToReset);
-                _taskbarOverlay.SetHorizontalOffset(_configManager.Settings.TaskbarDisplay.HorizontalOffset);
+                _taskbarOverlay.SetHorizontalOffsets(
+                    _configManager.Settings.TaskbarDisplay.PrimaryHorizontalOffset,
+                    _configManager.Settings.TaskbarDisplay.HorizontalOffset);
                 _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
                 _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
 

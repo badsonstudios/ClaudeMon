@@ -54,14 +54,43 @@ public class TaskbarOverlayLayoutTests
     [InlineData(-30)]   // negative nudge moves left
     public void Compute_AppliesHorizontalOffset_OnSecondaryTaskbar(int offset)
     {
-        // The overlay only passes a non-zero offset on secondary taskbars (no notifyLeft, with
-        // a clock reserve); the primary is passed 0. Verify the nudge shifts from that anchor.
+        // Secondary taskbars anchor to an estimated clock reserve (no notifyLeft). Verify the
+        // secondary nudge shifts from that anchor.
         var baseX = 1920 - 120 - 52; // taskbar right − clock reserve − width
         var (x, _) = TaskbarOverlayLayout.Compute(
             new TaskbarRect(Left: 0, Top: 1040, Right: 1920), notifyLeft: null, width: 52,
             rightReserve: 120, horizontalOffset: offset);
 
         Assert.Equal(baseX + offset, x);
+    }
+
+    [Theory]
+    [InlineData(20)]    // positive nudge moves right, toward the tray
+    [InlineData(-30)]   // negative nudge moves left, opening a gap from the tray
+    public void Compute_AppliesHorizontalOffset_OnPrimaryTaskbar(int offset)
+    {
+        // The primary taskbar anchors exactly to its TrayNotifyWnd (notifyLeft known). Verify
+        // the primary nudge shifts from that exact anchor. (Which offset is passed — the
+        // IsPrimary selection — lives in TaskbarOverlayWindow.Reposition, which needs a real
+        // window; only the placement math is covered here.)
+        var baseX = 1700 - 52; // notification area left − width
+        var (x, _) = TaskbarOverlayLayout.Compute(
+            new TaskbarRect(Left: 0, Top: 1040, Right: 1920), notifyLeft: 1700, width: 52,
+            rightReserve: 0, horizontalOffset: offset);
+
+        Assert.Equal(baseX + offset, x);
+    }
+
+    [Fact]
+    public void Compute_ZeroOffset_KeepsExactTrayAnchoring_OnPrimaryTaskbar()
+    {
+        // Load-bearing regression guard: the default (0) must reproduce the pre-nudge exact
+        // primary anchoring — existing installs are visually unchanged until adjusted.
+        var (x, _) = TaskbarOverlayLayout.Compute(
+            new TaskbarRect(Left: 0, Top: 1040, Right: 1920), notifyLeft: 1700, width: 52,
+            rightReserve: 0, horizontalOffset: 0);
+
+        Assert.Equal(1700 - 52, x);
     }
 
     [Fact]

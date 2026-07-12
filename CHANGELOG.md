@@ -5,7 +5,19 @@ GitHub release; the release notes are taken from these entries.
 
 ## [Unreleased]
 
+### Added
+- **Position nudge for the primary monitor's taskbar readout** — a new **Position** option on
+  the Settings **Taskbar** tab nudges the primary readout left (−) or right (+) in pixels, for
+  when the exact tray anchoring crowds something near the clock or you simply want more gap.
+  It is independent of the secondary-monitor nudge (now labelled **Secondary position**),
+  previews live while the dialog is open, and reverts on Cancel. 0 (the default) keeps the
+  exact anchoring, so existing installs are visually unchanged until adjusted. (#39)
+
 ### Changed
+- **Minimum polling interval raised to 2 minutes** — polling the usage API every minute made
+  the refresh fail every other request, so the **Check usage every** setting now starts at
+  **2 minutes** instead of 1. An existing 1-minute preference is treated as 2 automatically
+  (both live and in the Settings dialog); the other intervals are unchanged.
 - **Daily log files with 7-day retention** — diagnostics now write to one file per day
   (`logs/claudemon-YYYY-MM-DD.log`) instead of a single rolling `claudemon.log`, so **View
   logs** opens today's activity rather than a week-long wall of interleaved entries. Files

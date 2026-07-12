@@ -44,8 +44,9 @@ public sealed class SettingsForm : Form
     private readonly ToggleSwitch _showTimeToResetToggle;
     private readonly ComboBox _labelColorCombo;
     private readonly ComboBox _numberColorCombo;
+    private readonly NumericUpDown _primaryOffsetNumeric;
     private readonly ToggleSwitch _allMonitorsToggle;
-    private readonly NumericUpDown _horizontalOffsetNumeric;
+    private readonly NumericUpDown _secondaryOffsetNumeric;
     private readonly ToggleSwitch _runAtStartupToggle;
     private readonly ToggleSwitch _checkForUpdatesToggle;
     private readonly Button _okButton;
@@ -162,7 +163,9 @@ public sealed class SettingsForm : Form
         // --- General tab ---
         _currentTab = 0;
         _runAtStartupToggle = AddToggleRow("Start ClaudeMon when Windows starts");
-        _pollIntervalCombo = AddComboRow("Check usage every", ["1 minute", "3 minutes", "5 minutes", "10 minutes"]);
+        // 2 minutes is the floor: polling every minute made the API refresh fail every other
+        // request (see AppSettings.PollIntervalMinutes).
+        _pollIntervalCombo = AddComboRow("Check usage every", ["2 minutes", "3 minutes", "5 minutes", "10 minutes"]);
 
         // --- Alerts tab ---
         _currentTab = 1;
@@ -185,6 +188,9 @@ public sealed class SettingsForm : Form
             indent: true, visible: () => TaskbarOn() && IsBar());
         _sizeNumeric = AddNumericRow("Size", 25, 150, indent: true, visible: TaskbarOn);
         _sizeNumeric.Increment = 5;
+        _primaryOffsetNumeric = AddNumericRow("Position (− left / + right)", -300, 300,
+            indent: true, visible: TaskbarOn, suffix: null);
+        _primaryOffsetNumeric.Increment = 2;
         _showSessionToggle = AddToggleRow("Show session (5-hour) usage", indent: true, visible: TaskbarOn);
         _showWeeklyToggle = AddToggleRow("Show weekly (7-day) usage", indent: true, visible: TaskbarOn);
         // The countdown is a Numbers-style element; the bar has its own time tick, so the row
@@ -196,9 +202,9 @@ public sealed class SettingsForm : Form
         _numberColorCombo = AddComboRow("Percentage color", NumberColorOptions.Select(o => o.Text),
             indent: true, visible: () => TaskbarOn() && !IsBar());
         _allMonitorsToggle = AddToggleRow("Show on secondary monitors", indent: true, visible: TaskbarOn);
-        _horizontalOffsetNumeric = AddNumericRow("Position (− left / + right)", -300, 300,
+        _secondaryOffsetNumeric = AddNumericRow("Secondary position (− left / + right)", -300, 300,
             indent: true, visible: () => TaskbarOn() && _allMonitorsToggle.Checked, suffix: null);
-        _horizontalOffsetNumeric.Increment = 2;
+        _secondaryOffsetNumeric.Increment = 2;
 
         // --- Updates tab ---
         _currentTab = 3;
@@ -400,8 +406,8 @@ public sealed class SettingsForm : Form
         _showTimeToResetToggle.CheckedChanged += (_, _) => PreviewDisplay();
         _labelColorCombo.SelectedIndexChanged += (_, _) => PreviewColors();
         _numberColorCombo.SelectedIndexChanged += (_, _) => PreviewColors();
-        _horizontalOffsetNumeric.ValueChanged += (_, _) =>
-            Preview(() => _overlayPreview!.SetHorizontalOffset((int)_horizontalOffsetNumeric.Value));
+        _primaryOffsetNumeric.ValueChanged += (_, _) => PreviewOffsets();
+        _secondaryOffsetNumeric.ValueChanged += (_, _) => PreviewOffsets();
     }
 
     private void RelayoutLive()
@@ -425,6 +431,9 @@ public sealed class SettingsForm : Form
     private void PreviewDisplay() => Preview(() => _overlayPreview!.SetDisplay(
         _showSessionToggle.Checked, _showWeeklyToggle.Checked, _showTimeToResetToggle.Checked));
 
+    private void PreviewOffsets() => Preview(() => _overlayPreview!.SetHorizontalOffsets(
+        (int)_primaryOffsetNumeric.Value, (int)_secondaryOffsetNumeric.Value));
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         // Undo every live preview if the dialog wasn't accepted, restoring the saved appearance.
@@ -437,7 +446,7 @@ public sealed class SettingsForm : Form
             _overlayPreview.SetDisplay(t.ShowSessionUsage, t.ShowWeeklyUsage, t.ShowTimeToReset);
             _overlayPreview.SetColors(t.LabelColor, t.NumberColor);
             _overlayPreview.SetAllMonitors(t.AllMonitors);
-            _overlayPreview.SetHorizontalOffset(t.HorizontalOffset);
+            _overlayPreview.SetHorizontalOffsets(t.PrimaryHorizontalOffset, t.HorizontalOffset);
             _overlayPreview.SetEnabled(t.Enabled);
         }
 
@@ -471,7 +480,9 @@ public sealed class SettingsForm : Form
 
         _pollIntervalCombo.SelectedIndex = settings.PollIntervalMinutes switch
         {
-            1 => 0,
+            // Anything at or below the floor (a 1 saved by a version that still offered
+            // "1 minute", or a hand-edited 0) shows as the 2 minutes it effectively runs at.
+            <= 2 => 0,
             3 => 1,
             5 => 2,
             10 => 3,
@@ -494,8 +505,9 @@ public sealed class SettingsForm : Form
         _showTimeToResetToggle.Checked = settings.TaskbarDisplay.ShowTimeToReset;
         SelectOption(_labelColorCombo, LabelColorOptions, settings.TaskbarDisplay.LabelColor);
         SelectOption(_numberColorCombo, NumberColorOptions, settings.TaskbarDisplay.NumberColor);
+        _primaryOffsetNumeric.Value = ClampToRange(_primaryOffsetNumeric, settings.TaskbarDisplay.PrimaryHorizontalOffset);
         _allMonitorsToggle.Checked = settings.TaskbarDisplay.AllMonitors;
-        _horizontalOffsetNumeric.Value = ClampToRange(_horizontalOffsetNumeric, settings.TaskbarDisplay.HorizontalOffset);
+        _secondaryOffsetNumeric.Value = ClampToRange(_secondaryOffsetNumeric, settings.TaskbarDisplay.HorizontalOffset);
 
         _runAtStartupToggle.Checked = ConfigManager.IsRunAtStartupEnabled();
         _checkForUpdatesToggle.Checked = settings.CheckForUpdates;
@@ -510,7 +522,7 @@ public sealed class SettingsForm : Form
     {
         var pollMinutes = _pollIntervalCombo.SelectedIndex switch
         {
-            0 => 1,
+            0 => 2,
             1 => 3,
             2 => 5,
             3 => 10,
@@ -544,7 +556,8 @@ public sealed class SettingsForm : Form
                 LabelColor = SelectedOption(_labelColorCombo, LabelColorOptions),
                 NumberColor = SelectedOption(_numberColorCombo, NumberColorOptions),
                 AllMonitors = _allMonitorsToggle.Checked,
-                HorizontalOffset = (int)_horizontalOffsetNumeric.Value,
+                HorizontalOffset = (int)_secondaryOffsetNumeric.Value,
+                PrimaryHorizontalOffset = (int)_primaryOffsetNumeric.Value,
             },
             CheckForUpdates = _checkForUpdatesToggle.Checked,
         };

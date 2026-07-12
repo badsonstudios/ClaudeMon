@@ -243,6 +243,38 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void TaskbarDisplay_PrimaryHorizontalOffset_RoundTrips_IndependentlyOfSecondary()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+
+        // Distinct signed values confirm the two nudges persist independently.
+        manager.Update(new AppSettings
+        {
+            TaskbarDisplay = new TaskbarDisplaySettings
+            {
+                PrimaryHorizontalOffset = -24,
+                HorizontalOffset = 16,
+            },
+        });
+
+        var manager2 = new ConfigManager(path);
+        manager2.Load();
+
+        Assert.Equal(-24, manager2.Settings.TaskbarDisplay.PrimaryHorizontalOffset);
+        Assert.Equal(16, manager2.Settings.TaskbarDisplay.HorizontalOffset);
+    }
+
+    [Fact]
+    public void TaskbarDisplay_PrimaryHorizontalOffset_DefaultsToZero()
+    {
+        // Load-bearing: 0 keeps the primary readout exactly tray-anchored, so an upgrade
+        // (config with no "primaryHorizontalOffset" key) is visually unchanged.
+        var settings = new AppSettings();
+        Assert.Equal(0, settings.TaskbarDisplay.PrimaryHorizontalOffset);
+    }
+
+    [Fact]
     public void TaskbarDisplay_SizePercent_DefaultsTo100()
     {
         // Load-bearing: 100% is exactly the DPI-only scale, so an upgrade (config with no
@@ -344,6 +376,17 @@ public class ConfigManagerTests : IDisposable
     {
         var settings = new AppSettings { PollIntervalMinutes = 3 };
         Assert.Equal(TimeSpan.FromMinutes(3), settings.PollInterval);
+    }
+
+    [Theory]
+    [InlineData(1)]  // saved by a version that still offered "1 minute"
+    [InlineData(0)]  // hand-edited config
+    public void PollInterval_FlooredAtTwoMinutes(int minutes)
+    {
+        // Polling every minute made the API refresh fail every other request, so the
+        // effective interval never drops below 2 even if the persisted value does.
+        var settings = new AppSettings { PollIntervalMinutes = minutes };
+        Assert.Equal(TimeSpan.FromMinutes(2), settings.PollInterval);
     }
 
     [Fact]

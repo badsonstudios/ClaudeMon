@@ -60,7 +60,7 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | Setting | Description |
 |---------|-------------|
 | **Start ClaudeMon when Windows starts** | Launch ClaudeMon at login |
-| **Check usage every** | Polling interval (1, 3, 5, or 10 minutes) |
+| **Check usage every** | Polling interval (2, 3, 5, or 10 minutes) |
 
 ### Alerts
 
@@ -81,12 +81,13 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | **Style** | Choose how the readout looks: **Numbers** (the stacked label + percentage, default) or **Bar + time tick** (a compact usage bar with hour/day dividers and a "now" tick, pace-coloured) |
 | **Bar width** | Width of the bar style — Compact / Standard / Wide / Extra wide. Wider bars give the dividers and time tick more room to read (only applies to the **Bar** style) |
 | **Size** | Size of the readout as a percentage — any value from 25% to 150% (100% by default, the standard DPI-scaled size; arrow keys step by 5). Handy to shrink the readout on high-scaling displays where it fills the taskbar; enlargement is capped by the taskbar height, so it never clips. Previews live |
+| **Position** | Nudge the primary monitor's readout left (−) or right (+) in pixels — e.g. to open more gap from the clock or clear something near the tray; previews live as you change it. 0 (the default) keeps the exact tray anchoring, so nothing moves until you adjust it |
 | **Show session (5-hour) usage** | Show the session percentage in the readout (on by default) |
 | **Show weekly (7-day) usage** | Also show the weekly percentage, dot-separated (off by default; replaces the old "Also show 7-day usage" toggle — an existing opt-in migrates automatically) |
 | **Show time left to reset** | Add a compact countdown to the 5-hour reset (e.g. `1h 23m`) that ticks down live. Numbers style only — the Bar style already marks time with its tick (off by default) |
 | **Taskbar text colors** | Color of the "Claude" label and the percentage number (presets; the number can stay Auto / usage-level) |
 | **Show on secondary monitors** | Also show the readout on secondary monitors' taskbars, not just the primary (off by default; needs Windows set to show the taskbar on all displays) |
-| **Position** (under *Show on secondary monitors*) | Nudge the readout left (−) or right (+) on secondary monitors to fine-tune the gap from the clock; previews live as you change it (0 by default). The primary monitor is anchored exactly and isn't affected |
+| **Secondary position** (under *Show on secondary monitors*) | Nudge the readout left (−) or right (+) on secondary monitors to fine-tune the gap from the clock; previews live as you change it (0 by default). Independent of the primary **Position** nudge |
 
 ### Updates
 

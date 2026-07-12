@@ -41,7 +41,8 @@ public sealed class TaskbarOverlayManager : IDisposable
     private bool _showWeekly;
     private bool _showTimeToReset;
     private bool _allMonitors;
-    private int _horizontalOffset;
+    private int _primaryHorizontalOffset;
+    private int _secondaryHorizontalOffset;
     private bool _enabled;
 
     // Latest reading (null until the first poll), retained so an overlay created after a
@@ -119,14 +120,16 @@ public sealed class TaskbarOverlayManager : IDisposable
     }
 
     /// <summary>
-    /// Set the horizontal position nudge on every overlay (and on ones created later). Only
-    /// the secondary-monitor overlays act on it; the primary stays anchored to its tray.
+    /// Set the horizontal position nudges on every overlay (and on ones created later).
+    /// Each overlay applies the primary or secondary value by whether its taskbar is
+    /// currently the primary — see <see cref="TaskbarOverlayWindow.SetHorizontalOffsets"/>.
     /// </summary>
-    public void SetHorizontalOffset(int offset)
+    public void SetHorizontalOffsets(int primary, int secondary)
     {
-        _horizontalOffset = offset;
+        _primaryHorizontalOffset = primary;
+        _secondaryHorizontalOffset = secondary;
         foreach (var overlay in _overlays.Values)
-            overlay.SetHorizontalOffset(offset);
+            overlay.SetHorizontalOffsets(primary, secondary);
     }
 
     /// <summary>
@@ -235,7 +238,7 @@ public sealed class TaskbarOverlayManager : IDisposable
         overlay.SetSize(_sizePercent);
         overlay.SetColorMode(_colorMode);
         overlay.SetDisplay(_showSession, _showWeekly, _showTimeToReset);
-        overlay.SetHorizontalOffset(_horizontalOffset);
+        overlay.SetHorizontalOffsets(_primaryHorizontalOffset, _secondaryHorizontalOffset);
 
         if (_reading is { } reading)
         {

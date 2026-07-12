@@ -40,9 +40,13 @@ public sealed class TaskbarOverlayWindow : Form
     // Drives the keep-alive loop and whether Reposition shows or hides the overlay.
     private bool _enabled;
 
-    // User nudge applied to the computed X on secondary taskbars only (positive = right,
-    // negative = left); the primary ignores it since it's anchored exactly to its tray.
-    private int _horizontalOffset;
+    // User nudges applied to the computed X (positive = right, negative = left). The primary
+    // and secondary taskbars each have their own: the primary is anchored exactly to its tray
+    // while the secondary anchor is estimated around a non-queryable clock, so one shared
+    // value would behave inconsistently. Which one applies is decided per reposition, since
+    // the taskbar (and its primary-ness) is re-resolved every tick.
+    private int _primaryHorizontalOffset;
+    private int _secondaryHorizontalOffset;
 
     private double? _percentage;
     private double? _fiveHourFraction;
@@ -310,12 +314,15 @@ public sealed class TaskbarOverlayWindow : Form
     }
 
     /// <summary>
-    /// Set the horizontal nudge (positive = right, negative = left) and reposition live. Only
-    /// affects secondary taskbars; the primary is anchored exactly to its tray and ignores it.
+    /// Set the horizontal nudges (positive = right, negative = left) and reposition live.
+    /// Which one applies is chosen per reposition by whether this overlay's taskbar is
+    /// currently the primary, so the readout stays correctly nudged even if the user changes
+    /// which monitor is primary.
     /// </summary>
-    public void SetHorizontalOffset(int offset)
+    public void SetHorizontalOffsets(int primary, int secondary)
     {
-        _horizontalOffset = offset;
+        _primaryHorizontalOffset = primary;
+        _secondaryHorizontalOffset = secondary;
         if (Visible) Reposition();
     }
 
@@ -474,9 +481,12 @@ public sealed class TaskbarOverlayWindow : Form
             ? DpiScale.Scale(ClockReserve(monitorLogicalHeight), _monitorScale)
             : 0;
 
-        // The horizontal nudge only tunes secondary taskbars, where the clock width is
-        // estimated. The primary is anchored exactly to its tray, so it ignores the offset.
-        var offset = taskbar.Value.IsPrimary ? 0 : DpiScale.Scale(_horizontalOffset, _monitorScale);
+        // The primary and secondary taskbars each take their own nudge (their anchors differ:
+        // the primary's is exact, the secondary's is estimated around the clock). Default 0
+        // keeps the primary's exact tray anchoring untouched.
+        var offset = DpiScale.Scale(
+            taskbar.Value.IsPrimary ? _primaryHorizontalOffset : _secondaryHorizontalOffset,
+            _monitorScale);
 
         // Size the overlay to its content so a multi-element readout never clips. The window is
         // right-anchored, so a wider overlay extends leftward and the clock/tray stay put.

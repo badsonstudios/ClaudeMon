@@ -72,6 +72,12 @@ public enum TaskbarBarWidth
 
 public record AppSettings
 {
+    /// <summary>
+    /// How often usage is polled, in minutes. The effective interval is floored at 2 minutes
+    /// (see <see cref="PollInterval"/>): polling every minute made the API refresh fail every
+    /// other request, so 1 is no longer offered and a persisted 1 (from an older version or a
+    /// hand-edited config) is treated as 2.
+    /// </summary>
     [JsonPropertyName("pollIntervalMinutes")]
     public int PollIntervalMinutes { get; init; } = 5;
 
@@ -103,7 +109,8 @@ public record AppSettings
     [JsonPropertyName("configVersion")]
     public int ConfigVersion { get; init; } = 1;
 
-    public TimeSpan PollInterval => TimeSpan.FromMinutes(PollIntervalMinutes);
+    /// <summary>The effective poll interval — <see cref="PollIntervalMinutes"/> floored at 2.</summary>
+    public TimeSpan PollInterval => TimeSpan.FromMinutes(Math.Max(2, PollIntervalMinutes));
 }
 
 public record TaskbarDisplaySettings
@@ -183,11 +190,22 @@ public record TaskbarDisplaySettings
     /// <summary>
     /// Horizontal nudge in pixels applied to the readout on secondary-monitor taskbars only:
     /// negative moves it left, positive moves it right. Lets you fine-tune the spacing from
-    /// the clock, whose width on secondary taskbars can only be estimated. The primary is
-    /// anchored exactly to its tray and is unaffected. 0 by default.
+    /// the clock, whose width on secondary taskbars can only be estimated. The primary has
+    /// its own independent nudge (<see cref="PrimaryHorizontalOffset"/>) because the two
+    /// anchor differently. 0 by default.
     /// </summary>
     [JsonPropertyName("horizontalOffset")]
     public int HorizontalOffset { get; init; }
+
+    /// <summary>
+    /// Horizontal nudge in pixels applied to the readout on the primary taskbar only:
+    /// negative moves it left, positive moves it right. The primary is anchored exactly to
+    /// its tray, so this defaults to 0 (the exact anchoring, unchanged on upgrade) and is
+    /// kept separate from <see cref="HorizontalOffset"/>, whose secondary anchor is only an
+    /// estimate around a non-queryable clock.
+    /// </summary>
+    [JsonPropertyName("primaryHorizontalOffset")]
+    public int PrimaryHorizontalOffset { get; init; }
 }
 
 public record AlertThresholds

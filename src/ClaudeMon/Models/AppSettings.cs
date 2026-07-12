@@ -99,12 +99,14 @@ public record AppSettings
     public bool CheckForUpdates { get; init; } = true;
 
     /// <summary>
-    /// The newest release version the user has already been notified about, so we
-    /// notify only once per new version (across restarts). Internal state, not a user
-    /// setting — preserved automatically by the settings <c>with</c>-expression save.
+    /// The release version the user chose to suppress ("Skip this version" in the update
+    /// dialog): automatic checks won't prompt for it again, though a manual check or a newer
+    /// release still will. Replaces the pre-0.12 <c>lastNotifiedVersion</c> ("ballooned once per
+    /// version"), whose key is silently dropped on load. Internal state, not a user setting —
+    /// preserved automatically by the settings <c>with</c>-expression save.
     /// </summary>
-    [JsonPropertyName("lastNotifiedVersion")]
-    public string? LastNotifiedVersion { get; init; }
+    [JsonPropertyName("ignoredUpdateVersion")]
+    public string? IgnoredUpdateVersion { get; init; }
 
     [JsonPropertyName("configVersion")]
     public int ConfigVersion { get; init; } = 1;

@@ -317,14 +317,32 @@ public class ConfigManagerTests : IDisposable
         manager.Update(new AppSettings
         {
             CheckForUpdates = false,
-            LastNotifiedVersion = "0.6.0",
+            IgnoredUpdateVersion = "0.6.0",
         });
 
         var manager2 = new ConfigManager(path);
         manager2.Load();
 
         Assert.False(manager2.Settings.CheckForUpdates);
-        Assert.Equal("0.6.0", manager2.Settings.LastNotifiedVersion);
+        Assert.Equal("0.6.0", manager2.Settings.IgnoredUpdateVersion);
+    }
+
+    [Fact]
+    public void Load_DropsLegacyLastNotifiedVersion()
+    {
+        // Pre-0.12 configs tracked "ballooned once per version" in lastNotifiedVersion. That
+        // semantic ("was told") doesn't map to the new one ("chose to skip"), so the old key
+        // must load harmlessly — ignored, not migrated — and disappear on the next save.
+        var path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path, """{"checkForUpdates":true,"lastNotifiedVersion":"0.6.0"}""");
+
+        var manager = new ConfigManager(path);
+        manager.Load();
+
+        Assert.Null(manager.Settings.IgnoredUpdateVersion);
+
+        manager.Save();
+        Assert.DoesNotContain("lastNotifiedVersion", File.ReadAllText(path));
     }
 
     [Fact]

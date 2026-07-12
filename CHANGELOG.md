@@ -5,6 +5,15 @@ GitHub release; the release notes are taken from these entries.
 
 ## [Unreleased]
 
+### Added
+- **Taskbar readout Size setting** — a new **Size** option (25% / 50% / 75% / 100% / 125% /
+  150%) on the Settings **Taskbar** tab scales the taskbar readout on top of the monitor's DPI
+  scaling. Since the Per-Monitor-V2 change the readout scales with display scaling (1.5× larger
+  at 150%), which some found too prominent — the sub-100% sizes bring back a more compact
+  readout. Applies to both styles and every monitor's overlay, previews live, and reverts on
+  Cancel. Enlargement is capped by the taskbar height so the readout never clips; 100% (the
+  default) renders exactly as before. (#46)
+
 ### Fixed
 - **Settings window cramped at high display scaling** — the Settings dialog laid its rows,
   padding, and controls out in fixed pixels while its fonts scaled with the display DPI, so on

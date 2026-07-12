@@ -38,6 +38,7 @@ public sealed class SettingsForm : Form
     private readonly ToggleSwitch _taskbarToggle;
     private readonly ComboBox _styleCombo;
     private readonly ComboBox _barWidthCombo;
+    private readonly ComboBox _sizeCombo;
     private readonly ToggleSwitch _showSevenDayToggle;
     private readonly ComboBox _labelColorCombo;
     private readonly ComboBox _numberColorCombo;
@@ -111,6 +112,16 @@ public sealed class SettingsForm : Form
         ("Extra wide", TaskbarBarWidth.ExtraWide),
     ];
 
+    private static readonly (string Text, TaskbarSize Value)[] SizeOptions =
+    [
+        ("25%", TaskbarSize.Tiny),
+        ("50%", TaskbarSize.ExtraSmall),
+        ("75%", TaskbarSize.Small),
+        ("100%", TaskbarSize.Standard),
+        ("125%", TaskbarSize.Large),
+        ("150%", TaskbarSize.ExtraLarge),
+    ];
+
     private static readonly (string Text, TaskbarTextColor Value)[] LabelColorOptions =
     [
         ("White", TaskbarTextColor.White),
@@ -179,6 +190,7 @@ public sealed class SettingsForm : Form
         _styleCombo = AddComboRow("Style", StyleOptions.Select(o => o.Text), indent: true, visible: TaskbarOn);
         _barWidthCombo = AddComboRow("Bar width", BarWidthOptions.Select(o => o.Text),
             indent: true, visible: () => TaskbarOn() && IsBar());
+        _sizeCombo = AddComboRow("Size", SizeOptions.Select(o => o.Text), indent: true, visible: TaskbarOn);
         _showSevenDayToggle = AddToggleRow("Also show 7-day usage (5hr · 7day)", indent: true, visible: TaskbarOn);
         _labelColorCombo = AddComboRow("\"Claude\" label color", LabelColorOptions.Select(o => o.Text),
             indent: true, visible: () => TaskbarOn() && !IsBar());
@@ -382,6 +394,8 @@ public sealed class SettingsForm : Form
         // Live-preview only (no layout impact).
         _barWidthCombo.SelectedIndexChanged += (_, _) =>
             Preview(() => _overlayPreview!.SetBarWidth(SelectedOption(_barWidthCombo, BarWidthOptions)));
+        _sizeCombo.SelectedIndexChanged += (_, _) =>
+            Preview(() => _overlayPreview!.SetSize(SelectedOption(_sizeCombo, SizeOptions)));
         _showSevenDayToggle.CheckedChanged += (_, _) =>
             Preview(() => _overlayPreview!.SetShowSevenDay(_showSevenDayToggle.Checked));
         _labelColorCombo.SelectedIndexChanged += (_, _) => PreviewColors();
@@ -416,6 +430,7 @@ public sealed class SettingsForm : Form
             var t = _originalTaskbar;
             _overlayPreview.SetStyle(t.Style);
             _overlayPreview.SetBarWidth(t.BarWidth);
+            _overlayPreview.SetSize(t.Size);
             _overlayPreview.SetShowSevenDay(t.ShowSevenDay);
             _overlayPreview.SetColors(t.LabelColor, t.NumberColor);
             _overlayPreview.SetAllMonitors(t.AllMonitors);
@@ -470,6 +485,7 @@ public sealed class SettingsForm : Form
         _taskbarToggle.Checked = settings.TaskbarDisplay.Enabled;
         SelectOption(_styleCombo, StyleOptions, settings.TaskbarDisplay.Style);
         SelectOption(_barWidthCombo, BarWidthOptions, settings.TaskbarDisplay.BarWidth);
+        SelectOption(_sizeCombo, SizeOptions, settings.TaskbarDisplay.Size);
         _showSevenDayToggle.Checked = settings.TaskbarDisplay.ShowSevenDay;
         SelectOption(_labelColorCombo, LabelColorOptions, settings.TaskbarDisplay.LabelColor);
         SelectOption(_numberColorCombo, NumberColorOptions, settings.TaskbarDisplay.NumberColor);
@@ -516,6 +532,7 @@ public sealed class SettingsForm : Form
                 Enabled = _taskbarToggle.Checked,
                 Style = SelectedOption(_styleCombo, StyleOptions),
                 BarWidth = SelectedOption(_barWidthCombo, BarWidthOptions),
+                Size = SelectedOption(_sizeCombo, SizeOptions),
                 ShowSevenDay = _showSevenDayToggle.Checked,
                 LabelColor = SelectedOption(_labelColorCombo, LabelColorOptions),
                 NumberColor = SelectedOption(_numberColorCombo, NumberColorOptions),

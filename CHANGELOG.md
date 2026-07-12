@@ -3,6 +3,19 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [Unreleased]
+
+### Changed
+- **Daily log files with 7-day retention** — diagnostics now write to one file per day
+  (`logs/claudemon-YYYY-MM-DD.log`) instead of a single rolling `claudemon.log`, so **View
+  logs** opens today's activity rather than a week-long wall of interleaved entries. Files
+  older than 7 days are deleted automatically on startup and at midnight rollover — including
+  the old `claudemon.log`/`claudemon.log.1` from earlier versions, so existing installs
+  converge without a migration. The date rolls at local midnight without a restart, and if
+  nothing has been logged yet today, **View logs** opens the most recent day's file. The
+  per-file size cap remains as a backstop, and logging stays best-effort: IO failures never
+  reach the app. (#54)
+
 ## [0.11.0] - 2026-07-11
 
 ### Added

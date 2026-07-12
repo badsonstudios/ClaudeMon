@@ -351,11 +351,12 @@ public sealed class TrayApplication : IDisposable
     {
         try
         {
-            // Open the log file if it exists; otherwise open the logs folder so the
-            // user still lands somewhere useful before anything has been logged.
-            if (File.Exists(_logger.FilePath))
+            // Open the newest log file (today's, or the most recent day's if nothing
+            // has been logged yet today); otherwise open the logs folder so the user
+            // still lands somewhere useful before anything has been logged.
+            if (_logger.LatestExistingFilePath is { } logFile)
             {
-                Process.Start(new ProcessStartInfo(_logger.FilePath) { UseShellExecute = true });
+                Process.Start(new ProcessStartInfo(logFile) { UseShellExecute = true });
             }
             else
             {

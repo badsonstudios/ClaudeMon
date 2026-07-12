@@ -186,6 +186,12 @@ public sealed class TrayApplication : IDisposable
                 _notifyIcon.Icon = IconRenderer.RenderErrorIcon();
                 oldIcon?.Dispose();
                 _notifyIcon.Text = $"ClaudeMon\n{Truncate(e.Error, 100)}";
+
+                // No usage carried with the error means nothing was ever cached (SetError
+                // forwards the last reading when there is one) — keep the taskbar readout
+                // visibly alive with the waiting marker instead of leaving it blank. With a
+                // cached reading the overlay keeps showing the last known numbers, as today.
+                _taskbarOverlay.ShowWaiting();
             }
         }, null);
     }

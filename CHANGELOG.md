@@ -6,6 +6,14 @@ GitHub release; the release notes are taken from these entries.
 ## [Unreleased]
 
 ### Added
+- **Waiting indicator on the taskbar readout** — when no usage reading is available (the app
+  just started, or the API is rate limited / erroring before anything was fetched), the taskbar
+  readout now shows the "Claude" label with a waiting "…" instead of rendering nothing at all,
+  so it's clear the readout is alive and will update. Applies from the moment the readout
+  appears (including taskbars added later via monitor hotplug), honours the size, color, and
+  position settings, and is replaced by real numbers on the next successful poll. Once a
+  reading exists, rate limiting keeps showing the last known numbers, as before; the
+  sign-in-expired "—" marker still takes priority. (#56)
 - **Position nudge for the primary monitor's taskbar readout** — a new **Position** option on
   the Settings **Taskbar** tab nudges the primary readout left (−) or right (+) in pixels, for
   when the exact tray anchoring crowds something near the clock or you simply want more gap.

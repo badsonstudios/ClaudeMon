@@ -51,8 +51,6 @@ Recent usage samples are recorded to `%LocalAppData%\ClaudeMon\history.json` to 
 
 ## Settings
 
-![Settings](images/settings.png)
-
 Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and **Updates**.
 
 ### General
@@ -64,6 +62,8 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 
 ### Alerts
 
+![Alerts settings](images/settings.png)
+
 | Setting | Description |
 |---------|-------------|
 | **Enable desktop notifications** | Master toggle for all alerts |
@@ -74,6 +74,8 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | **Notify when the rate limit resets** | Notify when your 5-hour limit resets to full capacity |
 
 ### Taskbar
+
+![Taskbar settings](images/settings2.png)
 
 | Setting | Description |
 |---------|-------------|

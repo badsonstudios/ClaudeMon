@@ -3,6 +3,18 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.12.1] - 2026-07-18
+
+### Fixed
+- **Taskbar readout now appears on its own after a reboot** — when ClaudeMon starts with
+  Windows, it could launch before Explorer had created the taskbar; the readout then never
+  appeared until something poked it (like opening Settings). ClaudeMon now listens for the
+  shell's `TaskbarCreated` broadcast and also retries every 2 seconds while no taskbar has
+  been found, so the readout shows up within a couple of seconds of the taskbar being
+  available — no interaction needed. Explorer restarts and monitor hotplug behave as
+  before, and the log now records when taskbar enumeration comes up empty (and when it
+  recovers), so future reports are diagnosable from a single boot's log. (#62)
+
 ## [0.12.0] - 2026-07-12
 
 ### Added

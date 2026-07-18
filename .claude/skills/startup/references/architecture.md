@@ -9,7 +9,7 @@ ClaudeMon/
 │   ├── TrayApplication.cs          #   wires together tray icon, monitor, alerts, UI
 │   ├── Models/                     #   data records (AppSettings, UsageResponse, CredentialData)
 │   ├── Services/                   #   CredentialReader, ClaudeApiClient (Anthropic API)
-│   ├── Monitoring/                 #   UsageMonitor (polling loop), AlertManager (alert logic)
+│   ├── Monitoring/                 #   UsageMonitor (polling), AlertManager, LimitDisplay, TrayTooltip
 │   ├── Configuration/              #   ConfigManager (load/save settings, startup registry)
 │   └── UI/                         #   IconRenderer, FlyoutPanel, SettingsForm
 ├── tests/ClaudeMon.Tests/          # xUnit tests (mirrors src; uses InternalsVisibleTo)
@@ -22,7 +22,10 @@ ClaudeMon/
 - **UI** (`UI/`) — `IconRenderer` draws the 16×16 tray icon (number + threshold color),
   `FlyoutPanel` shows usage details, `SettingsForm` edits `AppSettings`.
 - **Monitoring** (`Monitoring/`) — `UsageMonitor` polls on an interval and surfaces usage;
-  `AlertManager` decides when to notify (threshold vs. progressive modes).
+  `AlertManager` decides when to notify (threshold vs. progressive modes); `LimitDisplay`
+  turns the API's `limits[]` buckets into display rows (legacy 5h/7d fallback included) and
+  `TrayTooltip` composes the tray hover text under the 127-char `NotifyIcon` cap — both pure
+  and unit-tested, consumed by the UI layer.
 - **Services** (`Services/`) — `ClaudeApiClient` calls the Anthropic usage API;
   `CredentialReader` loads the OAuth token from `~/.claude/.credentials.json`.
 - **Configuration** (`Configuration/`) — `ConfigManager` persists `AppSettings` as JSON and

@@ -60,6 +60,39 @@ public class AlertManagerTests : IDisposable
         new(FiveHourBucket(fiveHourPct, elapsedFraction), new UsageBucket(sevenDayPct, DateTimeOffset.UtcNow.AddDays(3)));
 
     // ================================================================
+    // limits[] must not change alerting (issue #67: display-only)
+    // ================================================================
+
+    [Fact]
+    public void Check_LimitsArrayPresent_FiresSameAlertsAsLegacyOnlyResponse()
+    {
+        // A response carrying limits[] — including a critical scoped weekly — must fire exactly
+        // the alerts the equivalent legacy-only response fires. Per-bucket alerts are a separate
+        // ticket; severity is a display input only.
+        var legacy = Both(95, 50);
+        var withLimits = legacy with
+        {
+            Limits = new[]
+            {
+                new UsageLimit("weekly_scoped", "seven_day", 99, "critical",
+                    DateTimeOffset.UtcNow.AddDays(2), true,
+                    new LimitScope(new LimitScopeModel("Fable"))),
+            },
+        };
+
+        _alertManager.Check(withLimits, DefaultSettings());
+        var fired = _notifications.ToList();
+
+        // Fresh manager, legacy-only equivalent.
+        var baselineNotifications = new List<(string Title, string Text, ToolTipIcon Icon)>();
+        var baselineManager = new AlertManager(_notifyIcon, (title, text, icon) =>
+            baselineNotifications.Add((title, text, icon)));
+        baselineManager.Check(legacy, DefaultSettings());
+
+        Assert.Equal(baselineNotifications.Select(n => n.Title), fired.Select(n => n.Title));
+    }
+
+    // ================================================================
     // Notifications disabled
     // ================================================================
 

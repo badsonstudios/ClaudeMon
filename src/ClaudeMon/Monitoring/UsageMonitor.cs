@@ -17,6 +17,7 @@ public sealed class UsageMonitor : IDisposable
     private readonly object _lock = new();
     private bool _polling;
     private MonitorStatus _loggedStatus = MonitorStatus.Initializing;
+    private readonly HashSet<string> _loggedUnknownLimitKinds = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _cts;
 
     public UsageResponse? LastUsage { get; private set; }
@@ -164,6 +165,7 @@ public sealed class UsageMonitor : IDisposable
                 LastUpdated = DateTimeOffset.UtcNow;
                 Status = MonitorStatus.Connected;
                 LogTransition(MonitorStatus.Connected, "usage poll succeeded");
+                LogUnknownLimitKinds(apiResult.Data!);
                 RecordHistory(apiResult.Data!);
 
                 UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(
@@ -280,6 +282,20 @@ public sealed class UsageMonitor : IDisposable
             DateTimeOffset.UtcNow,
             usage.FiveHour.UtilizationPct,
             usage.SevenDay?.UtilizationPct));
+    }
+
+    // Logs each unrecognized limits[] kind once per app run — a breadcrumb that the API grew a
+    // new bucket type (rendered generically until the code learns it), without spamming every poll.
+    private void LogUnknownLimitKinds(UsageResponse usage)
+    {
+        if (_logger is null)
+            return;
+
+        foreach (var kind in LimitDisplay.UnknownKinds(usage))
+        {
+            if (_loggedUnknownLimitKinds.Add(kind))
+                _logger.Info($"Usage API returned unrecognized limit kind '{kind}'; rendering it generically.");
+        }
     }
 
     // Logs only when the status actually changes, so a steady state (e.g. polling

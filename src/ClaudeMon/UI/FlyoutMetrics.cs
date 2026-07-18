@@ -84,7 +84,7 @@ public sealed class FlyoutMetrics
     /// clipping or overlap. The form is sized to this so the box can never be
     /// shorter than what the paint code draws.
     /// </summary>
-    public Size ContentSize(bool isAuthError, bool hasFiveHour, bool hasSevenDay, bool hasHistory = false)
+    public Size ContentSize(bool isAuthError, int usageRows, bool hasForecast = false, bool hasHistory = false)
     {
         int body;
         if (isAuthError)
@@ -93,8 +93,7 @@ public sealed class FlyoutMetrics
         }
         else
         {
-            var rows = (hasFiveHour ? 1 : 0) + (hasSevenDay ? 1 : 0);
-            body = rows > 0 ? rows * RowAdvance : NoDataAdvance;
+            body = usageRows > 0 ? usageRows * RowAdvance : NoDataAdvance;
         }
 
         // The sparkline band is only present with usable data (not in the
@@ -103,7 +102,7 @@ public sealed class FlyoutMetrics
             body += SparklineGap + SparklineHeight;
 
         // The burn-rate forecast line accompanies the 5-hour usage display.
-        if (hasFiveHour && !isAuthError)
+        if (hasForecast && !isAuthError)
             body += ForecastGap + ForecastHeight;
 
         var height = TopPadding + TitleAdvance + body + StatusGap + StatusLineHeight + BottomPadding;

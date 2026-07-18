@@ -1,5 +1,6 @@
 namespace ClaudeMon.UI;
 
+using System.Runtime.InteropServices;
 using ClaudeMon.Models;
 using ClaudeMon.Services;
 using Microsoft.Win32;
@@ -8,7 +9,10 @@ using Microsoft.Win32;
 /// Owns one <see cref="TaskbarOverlayWindow"/> per Windows taskbar — the primary plus
 /// every secondary-monitor taskbar — so the usage readout appears on all of them. The
 /// live set is reconciled whenever the display layout changes (monitor plugged or
-/// unplugged, "show taskbar on all displays" toggled). This mirrors the
+/// unplugged, "show taskbar on all displays" toggled), when Explorer (re)creates the
+/// taskbar (the <c>TaskbarCreated</c> broadcast), and on a short retry timer while no
+/// taskbar has been found — so starting before Explorer at login still ends with a
+/// readout. This mirrors the
 /// <see cref="TaskbarOverlayWindow"/> surface so <see cref="TrayApplication"/> drives the
 /// multi-monitor case exactly as it did the single one.
 /// </summary>
@@ -29,6 +33,25 @@ public sealed class TaskbarOverlayManager : IDisposable
     // Keyed by monitor device name (e.g. \\.\DISPLAY1) — one overlay per taskbar.
     private readonly Dictionary<string, TaskbarOverlayWindow> _overlays = new();
     private readonly Logger _logger;
+    private readonly TaskbarCreatedListener _taskbarCreatedListener;
+
+    // Retries Reconcile while the feature is enabled but no taskbar has been found yet.
+    // Apps launched from the Run key race Explorer's shell initialization at login: if we
+    // start before Explorer has created the taskbar windows, the startup Reconcile finds
+    // nothing and would otherwise never run again (the per-overlay keep-alive can only heal
+    // overlays that already exist). The TaskbarCreated broadcast below is the canonical
+    // recovery hook; this timer backstops the narrow window where that broadcast fires
+    // before our listener window exists, and any other "enabled but zero overlays" state.
+    private readonly System.Windows.Forms.Timer _emptyRetryTimer;
+
+    // Whether the last Reconcile found no taskbars, so the empty/recovered log lines fire
+    // once per transition instead of on every retry tick.
+    private bool _noTaskbarsFound;
+
+    // Devices whose overlay-creation failure has already been logged, so a persistent
+    // failure doesn't re-WARN on every 2-second retry tick — once per device until it
+    // succeeds (or its taskbar goes away and comes back).
+    private readonly HashSet<string> _creationFailureLogged = new();
 
     // Presentation settings seeded onto every overlay (and any created later).
     private TaskbarTextColor _labelColor = TaskbarTextColor.White;
@@ -56,6 +79,9 @@ public sealed class TaskbarOverlayManager : IDisposable
     {
         _logger = logger;
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        _taskbarCreatedListener = new TaskbarCreatedListener(OnTaskbarCreated);
+        _emptyRetryTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+        _emptyRetryTimer.Tick += (_, _) => TryReconcile("Taskbar overlay retry reconcile failed");
     }
 
     /// <summary>Set the text colour presets on every overlay (and on ones created later).</summary>
@@ -117,7 +143,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     public void SetAllMonitors(bool allMonitors)
     {
         _allMonitors = allMonitors;
-        Reconcile();
+        TryReconcile("Taskbar overlay reconcile on all-monitors change failed");
     }
 
     /// <summary>
@@ -142,9 +168,23 @@ public sealed class TaskbarOverlayManager : IDisposable
     {
         _enabled = enabled;
         if (enabled)
-            Reconcile();
+        {
+            // Guarded: this runs from the TrayApplication constructor at login, exactly
+            // when taskbar enumeration is most likely to misbehave — a throw here must
+            // not take the app down (the retry timer will heal it).
+            TryReconcile("Taskbar overlay reconcile on enable failed");
+        }
         else
+        {
+            _emptyRetryTimer.Stop();
+            // Reset the transition flag so re-enabling with a taskbar present doesn't log
+            // a spurious "Taskbar appeared" — nothing appeared, the user toggled a setting.
+            // The failure-log dampener resets too: toggling the feature off and on is the
+            // natural "try again" gesture, and that retry's diagnostics should be logged.
+            _noTaskbarsFound = false;
+            _creationFailureLogged.Clear();
             DisposeAllOverlays();
+        }
     }
 
     /// <summary>Push a fresh usage reading to every overlay.</summary>
@@ -182,19 +222,31 @@ public sealed class TaskbarOverlayManager : IDisposable
 
     private void OnOverlayClicked(object? sender, System.Drawing.Rectangle bounds) => OverlayClicked?.Invoke(this, bounds);
 
-    private void OnDisplaySettingsChanged(object? sender, EventArgs e)
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
+        TryReconcile("Taskbar overlay reconcile failed");
+
+    // Explorer broadcasts TaskbarCreated when it (re)creates the taskbar — at login, and
+    // after an Explorer restart. Reconciling here closes the startup race (see the
+    // _emptyRetryTimer remarks) with no polling delay.
+    private void OnTaskbarCreated() =>
+        TryReconcile("Taskbar overlay reconcile after TaskbarCreated failed");
+
+    /// <summary>
+    /// Reconcile guarded for event-driven callers (system events, window messages, timer
+    /// ticks): raised exactly when overlay creation/positioning is most likely to throw —
+    /// never let that escape into the message loop and crash the app.
+    /// </summary>
+    private void TryReconcile(string failureContext)
     {
         if (_disposed || !_enabled) return;
 
-        // Raised mid-hotplug, exactly when overlay creation/positioning is most likely to
-        // throw — never let that escape into the system-event callback and crash the app.
         try
         {
             Reconcile();
         }
         catch (Exception ex)
         {
-            _logger.Warn($"Taskbar overlay reconcile failed: {ex.Message}");
+            _logger.Warn($"{failureContext}: {ex.Message}");
         }
     }
 
@@ -207,43 +259,78 @@ public sealed class TaskbarOverlayManager : IDisposable
     {
         if (!_enabled) return;
 
-        var present = new HashSet<string>();
-        foreach (var taskbar in TaskbarEnumerator.Enumerate())
+        // The retry-timer decision lives in the finally: even if reconciling throws partway
+        // (a caught-and-logged event path), an empty overlay set must still be retrying —
+        // otherwise one bad tick recreates exactly the "nothing ever retries" state this
+        // timer exists to eliminate.
+        try
         {
-            // When multi-monitor is off, only the primary taskbar gets a readout.
-            if (!_allMonitors && !taskbar.IsPrimary)
-                continue;
+            var taskbars = TaskbarEnumerator.Enumerate();
 
-            present.Add(taskbar.MonitorDevice);
-            if (_overlays.ContainsKey(taskbar.MonitorDevice))
-                continue;
+            // Log the empty/recovered transitions once each (not per retry tick), so a single
+            // boot's log shows whether the login race was hit and when it healed.
+            if (taskbars.Count == 0 && !_noTaskbarsFound)
+                _logger.Warn("No taskbars found to overlay (Explorer may still be starting) — retrying until one appears.");
+            else if (taskbars.Count > 0 && _noTaskbarsFound)
+                _logger.Info("Taskbar appeared — creating overlay(s).");
+            _noTaskbarsFound = taskbars.Count == 0;
 
-            // Build the overlay fully before publishing it, so a failure mid-construction
-            // disposes the half-built Form rather than leaking an untracked ghost window.
-            TaskbarOverlayWindow? overlay = null;
-            try
+            var present = new HashSet<string>();
+            foreach (var taskbar in taskbars)
             {
-                overlay = new TaskbarOverlayWindow(taskbar.MonitorDevice, _logger);
-                overlay.Clicked += OnOverlayClicked;
-                Seed(overlay);
-                overlay.SetEnabled(true);
-            }
-            catch (Exception ex)
-            {
-                _logger.Warn($"Failed to create taskbar overlay for {taskbar.MonitorDevice}: {ex.Message}");
-                overlay?.Dispose();
-                continue;
+                // When multi-monitor is off, only the primary taskbar gets a readout.
+                if (!_allMonitors && !taskbar.IsPrimary)
+                    continue;
+
+                present.Add(taskbar.MonitorDevice);
+                if (_overlays.ContainsKey(taskbar.MonitorDevice))
+                    continue;
+
+                // Build the overlay fully before publishing it, so a failure mid-construction
+                // disposes the half-built Form rather than leaking an untracked ghost window.
+                TaskbarOverlayWindow? overlay = null;
+                try
+                {
+                    overlay = new TaskbarOverlayWindow(taskbar.MonitorDevice, _logger);
+                    overlay.Clicked += OnOverlayClicked;
+                    Seed(overlay);
+                    overlay.SetEnabled(true);
+                }
+                catch (Exception ex)
+                {
+                    // Once per device until it succeeds — the 2-second retry would otherwise
+                    // turn a persistent failure into unbounded WARN spam.
+                    if (_creationFailureLogged.Add(taskbar.MonitorDevice))
+                        _logger.Warn($"Failed to create taskbar overlay for {taskbar.MonitorDevice}: {ex.Message}");
+                    overlay?.Dispose();
+                    continue;
+                }
+
+                _creationFailureLogged.Remove(taskbar.MonitorDevice);
+                _overlays[taskbar.MonitorDevice] = overlay;
             }
 
-            _overlays[taskbar.MonitorDevice] = overlay;
+            // Tear down overlays whose taskbar is no longer present (monitor unplugged, or its
+            // taskbar turned off). ToList so we don't mutate the dictionary while enumerating it.
+            foreach (var device in _overlays.Keys.Where(k => !present.Contains(k)).ToList())
+            {
+                DisposeOverlay(_overlays[device]);
+                _overlays.Remove(device);
+            }
+
+            // A device that left re-arms its failure log line, so a taskbar that goes away
+            // and comes back broken is diagnosable again.
+            _creationFailureLogged.RemoveWhere(d => !present.Contains(d));
         }
-
-        // Tear down overlays whose taskbar is no longer present (monitor unplugged, or its
-        // taskbar turned off). ToList so we don't mutate the dictionary while enumerating it.
-        foreach (var device in _overlays.Keys.Where(k => !present.Contains(k)).ToList())
+        finally
         {
-            DisposeOverlay(_overlays[device]);
-            _overlays.Remove(device);
+            // Keep retrying while enabled with nothing to show (login race, or overlay
+            // creation failed); stop as soon as an overlay exists — the per-overlay
+            // keep-alive owns recovery from there.
+            if (_overlays.Count == 0)
+                _emptyRetryTimer.Start();
+            else
+                _emptyRetryTimer.Stop();
         }
     }
 
@@ -290,6 +377,42 @@ public sealed class TaskbarOverlayManager : IDisposable
         if (_disposed) return;
         _disposed = true;
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
+        _emptyRetryTimer.Dispose();
+        _taskbarCreatedListener.Dispose();
         DisposeAllOverlays();
+    }
+
+    /// <summary>
+    /// A hidden top-level window whose only job is to receive the shell's registered
+    /// <c>TaskbarCreated</c> broadcast — sent to all top-level windows when Explorer
+    /// (re)creates the taskbar — and invoke the given callback. Message-only
+    /// (<c>HWND_MESSAGE</c>) windows never receive broadcasts, so this must be a real,
+    /// invisible top-level window. Created and messaged on the UI thread.
+    /// </summary>
+    private sealed class TaskbarCreatedListener : NativeWindow, IDisposable
+    {
+        // 0 if registration fails (effectively never); guarded in WndProc so a 0 value
+        // can't make WM_NULL (also 0) trigger the callback.
+        private static readonly int TaskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
+
+        private readonly Action _onTaskbarCreated;
+
+        public TaskbarCreatedListener(Action onTaskbarCreated)
+        {
+            _onTaskbarCreated = onTaskbarCreated;
+            CreateHandle(new CreateParams());
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (TaskbarCreatedMessage != 0 && m.Msg == TaskbarCreatedMessage)
+                _onTaskbarCreated();
+            base.WndProc(ref m);
+        }
+
+        public void Dispose() => DestroyHandle();
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int RegisterWindowMessage(string lpString);
     }
 }

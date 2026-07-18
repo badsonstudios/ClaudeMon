@@ -43,7 +43,7 @@ public class FlyoutMetricsTests
     public void ContentSize_WidthScalesWithDpi(int dpi)
     {
         var m = FlyoutMetrics.ForDpi(dpi);
-        var size = m.ContentSize(isAuthError: false, hasFiveHour: true, hasSevenDay: true);
+        var size = m.ContentSize(isAuthError: false, usageRows: 2, hasForecast: true);
 
         Assert.Equal(m.Width, size.Width);
         Assert.True(size.Width > 0 && size.Height > 0);
@@ -54,14 +54,30 @@ public class FlyoutMetricsTests
     {
         var m = FlyoutMetrics.ForDpi(96);
 
-        var none = m.ContentSize(false, hasFiveHour: false, hasSevenDay: false).Height;
-        var one = m.ContentSize(false, hasFiveHour: true, hasSevenDay: false).Height;
-        var two = m.ContentSize(false, hasFiveHour: true, hasSevenDay: true).Height;
+        var none = m.ContentSize(false, usageRows: 0).Height;
+        var one = m.ContentSize(false, usageRows: 1, hasForecast: true).Height;
+        var two = m.ContentSize(false, usageRows: 2, hasForecast: true).Height;
 
         Assert.True(one > none, "one row should be taller than the no-data placeholder");
         Assert.True(two > one, "two rows should be taller than one");
         // The second row adds exactly one row advance.
         Assert.Equal(m.RowAdvance, two - one);
+    }
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void ContentSize_EachExtraLimitRowAddsOneRowAdvance(int rows)
+    {
+        // limits[] can carry more than the classic two buckets (e.g. per-model weekly caps);
+        // the flyout must grow by exactly one row advance per extra bar.
+        var m = FlyoutMetrics.ForDpi(96);
+
+        var fewer = m.ContentSize(false, usageRows: rows - 1, hasForecast: true).Height;
+        var more = m.ContentSize(false, usageRows: rows, hasForecast: true).Height;
+
+        Assert.Equal(m.RowAdvance, more - fewer);
     }
 
     [Fact]
@@ -73,25 +89,26 @@ public class FlyoutMetricsTests
         {
             var m = FlyoutMetrics.ForDpi(dpi);
 
-            foreach (var (auth, five, seven) in new[]
+            foreach (var (auth, rows, forecast) in new[]
             {
-                (true, false, false),
-                (false, true, true),
-                (false, true, false),
-                (false, false, false),
+                (true, 0, false),
+                (false, 2, true),
+                (false, 1, true),
+                (false, 4, true),
+                (false, 0, false),
             })
             {
                 var body = auth
                     ? m.AuthMessageHeight
-                    : ((five ? 1 : 0) + (seven ? 1 : 0)) is var rows && rows > 0
+                    : rows > 0
                         ? rows * m.RowAdvance
                         : m.NoDataAdvance;
 
                 var statusBottom = m.TopPadding + m.TitleAdvance + body + m.StatusGap + m.StatusLineHeight;
-                var height = m.ContentSize(auth, five, seven).Height;
+                var height = m.ContentSize(auth, rows, forecast).Height;
 
                 Assert.True(height >= statusBottom,
-                    $"dpi={dpi} auth={auth} five={five} seven={seven}: height {height} < content bottom {statusBottom}");
+                    $"dpi={dpi} auth={auth} rows={rows} forecast={forecast}: height {height} < content bottom {statusBottom}");
             }
         }
     }
@@ -102,7 +119,7 @@ public class FlyoutMetricsTests
         // Locks the at-100% layout. Base rows: 12 + 28 + (42*2) + 4 + 18 + 14 = 160,
         // plus the 5-hour forecast band (6 + 16) = 182.
         var m = FlyoutMetrics.ForDpi(96);
-        Assert.Equal(182, m.ContentSize(false, hasFiveHour: true, hasSevenDay: true).Height);
+        Assert.Equal(182, m.ContentSize(false, usageRows: 2, hasForecast: true).Height);
     }
 
     [Theory]
@@ -132,8 +149,8 @@ public class FlyoutMetricsTests
     {
         var m = FlyoutMetrics.ForDpi(96);
 
-        var without = m.ContentSize(false, hasFiveHour: true, hasSevenDay: true, hasHistory: false).Height;
-        var with = m.ContentSize(false, hasFiveHour: true, hasSevenDay: true, hasHistory: true).Height;
+        var without = m.ContentSize(false, usageRows: 2, hasForecast: true, hasHistory: false).Height;
+        var with = m.ContentSize(false, usageRows: 2, hasForecast: true, hasHistory: true).Height;
 
         Assert.Equal(m.SparklineGap + m.SparklineHeight, with - without);
     }
@@ -144,8 +161,8 @@ public class FlyoutMetricsTests
         var m = FlyoutMetrics.ForDpi(96);
 
         // No sparkline in the sign-in-expired state, even if history exists.
-        var withHistory = m.ContentSize(isAuthError: true, false, false, hasHistory: true).Height;
-        var withoutHistory = m.ContentSize(isAuthError: true, false, false, hasHistory: false).Height;
+        var withHistory = m.ContentSize(isAuthError: true, 0, false, hasHistory: true).Height;
+        var withoutHistory = m.ContentSize(isAuthError: true, 0, false, hasHistory: false).Height;
 
         Assert.Equal(withoutHistory, withHistory);
     }
@@ -157,8 +174,8 @@ public class FlyoutMetricsTests
 
         // The forecast line accompanies the 5-hour display. Compare the 5-hour case
         // against a no-data flyout, isolating the forecast + the one usage row.
-        var withFiveHour = m.ContentSize(false, hasFiveHour: true, hasSevenDay: false).Height;
-        var noData = m.ContentSize(false, hasFiveHour: false, hasSevenDay: false).Height;
+        var withFiveHour = m.ContentSize(false, usageRows: 1, hasForecast: true).Height;
+        var noData = m.ContentSize(false, usageRows: 0).Height;
 
         var expectedDelta = (m.RowAdvance - m.NoDataAdvance) + m.ForecastGap + m.ForecastHeight;
         Assert.Equal(expectedDelta, withFiveHour - noData);
@@ -170,8 +187,8 @@ public class FlyoutMetricsTests
         var m = FlyoutMetrics.ForDpi(96);
 
         // Auth-error height must not include the forecast band regardless of flags.
-        var authNoData = m.ContentSize(isAuthError: true, hasFiveHour: false, hasSevenDay: false).Height;
-        var authFiveHour = m.ContentSize(isAuthError: true, hasFiveHour: true, hasSevenDay: false).Height;
+        var authNoData = m.ContentSize(isAuthError: true, 0).Height;
+        var authFiveHour = m.ContentSize(isAuthError: true, 1, hasForecast: true).Height;
 
         Assert.Equal(authNoData, authFiveHour);
     }

@@ -396,6 +396,34 @@ public class UsageMonitorTests : IDisposable
         Assert.True(handler.CallCount <= 2);
     }
 
+    [Fact]
+    public async Task RefreshNow_UnknownLimitKind_LoggedOncePerRun()
+    {
+        var credPath = WriteCredentialFile();
+        var logDir = Path.Combine(_tempDir, "logs");
+        var logger = new Logger(logDir);
+        var handler = new MockHttpHandler(HttpStatusCode.OK, """
+        {
+            "five_hour": {"utilization": 10.0, "resets_at": "2026-06-01T00:00:00Z"},
+            "limits": [
+                {"kind": "seven_day_cowork", "group": "seven_day", "percent": 5.0, "severity": "normal", "resets_at": "2026-06-05T00:00:00Z"}
+            ]
+        }
+        """);
+        using var httpClient = new HttpClient(handler);
+        using var apiClient = new ClaudeApiClient(httpClient);
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), logger: logger);
+
+        // Two successful polls with the same unknown kind → exactly one log line for it.
+        await monitor.RefreshNowAsync();
+        await monitor.RefreshNowAsync();
+
+        var log = File.ReadAllText(logger.FilePath);
+        var occurrences = log.Split("seven_day_cowork").Length - 1;
+        Assert.Equal(1, occurrences);
+    }
+
     private sealed class MockHttpHandler : HttpMessageHandler
     {
         private HttpStatusCode _statusCode;

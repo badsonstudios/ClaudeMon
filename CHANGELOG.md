@@ -3,6 +3,24 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.14.0] - 2026-07-18
+
+### Added
+- **All quota buckets in the flyout, including per-model weekly caps** — the usage API
+  reports more limits than the classic 5-hour/7-day pair; the flyout now renders one bar per
+  reported limit. Max plans have a separate weekly cap per model (e.g. **Weekly (Fable)**)
+  that can be closer to exhaustion than the overall weekly — previously invisible in
+  ClaudeMon, now shown with its own percentage, bar, and reset countdown. Unknown future
+  bucket types render generically from the API's own metadata instead of being dropped (and
+  are logged once so they're diagnosable). Responses without the new data fall back to
+  exactly the old two-bar display. (#67)
+- **Severity-tinted bars** — each limit carries Anthropic's own severity judgment; a limit
+  flagged *critical* draws its flyout bar red and *warning* at least orange, on top of the
+  usual pace/absolute coloring. Severity only ever raises urgency, and is display-only:
+  alerts, the tray icon, and the taskbar readout behave exactly as before. (#67)
+- **Tray tooltip shows the tightest per-model weekly** — hovering the tray icon now includes
+  a compact line like `Fable wk: 84% (2d 3h)` when a model-scoped weekly cap exists. (#67)
+
 ## [0.13.0] - 2026-07-18
 
 ### Added

@@ -13,6 +13,8 @@ public sealed class FlyoutPanel : Form
     private readonly Button _settingsButton;
     private readonly Logger? _logger;
     private UsageResponse? _usage;
+    // Display rows for the current usage, built once per data update (not per paint).
+    private IReadOnlyList<LimitRow> _rows = Array.Empty<LimitRow>();
     private MonitorStatus _status = MonitorStatus.Initializing;
     private DateTimeOffset? _lastUpdated;
     private IReadOnlyList<double> _history = Array.Empty<double>();
@@ -85,6 +87,7 @@ public sealed class FlyoutPanel : Form
         UsageColorMode colorMode = UsageColorMode.Pace)
     {
         _usage = usage;
+        _rows = usage is null ? Array.Empty<LimitRow>() : LimitDisplay.BuildRows(usage);
         _status = status;
         _lastUpdated = lastUpdated;
         _history = history ?? Array.Empty<double>();
@@ -103,9 +106,9 @@ public sealed class FlyoutPanel : Form
         var metrics = FlyoutMetrics.ForDpi(DeviceDpi);
         Size = metrics.ContentSize(
             _status == MonitorStatus.AuthError,
-            _usage?.FiveHour is not null,
-            _usage?.SevenDay is not null,
-            HasHistory);
+            _rows.Count,
+            hasForecast: _usage?.FiveHour is not null,
+            hasHistory: HasHistory);
 
         // Gear in the right corner, vertically centred on the status line (the bottom-left text)
         // so it reads as part of that row. The point-size glyph scales with DPI on its own; only
@@ -250,21 +253,13 @@ public sealed class FlyoutPanel : Form
         }
         else
         {
-            if (_usage?.FiveHour is not null)
+            foreach (var row in _rows)
             {
-                DrawUsageRow(g, "5-hour", _usage.FiveHour, UsageWindows.FiveHour, segments: 5,
-                    left, y, contentWidth, labelFont, textBrush, dimBrush, m);
+                DrawUsageRow(g, row, left, y, contentWidth, labelFont, textBrush, dimBrush, m);
                 y += m.RowAdvance;
             }
 
-            if (_usage?.SevenDay is not null)
-            {
-                DrawUsageRow(g, "7-day", _usage.SevenDay, UsageWindows.SevenDay, segments: 7,
-                    left, y, contentWidth, labelFont, textBrush, dimBrush, m);
-                y += m.RowAdvance;
-            }
-
-            if (_usage?.FiveHour is null && _usage?.SevenDay is null)
+            if (_rows.Count == 0)
             {
                 g.DrawString("No usage data available", labelFont, dimBrush, left, y);
                 y += m.NoDataAdvance;
@@ -343,18 +338,32 @@ public sealed class FlyoutPanel : Form
     }
 
     private void DrawUsageRow(
-        Graphics g, string label, UsageBucket bucket, TimeSpan window, int segments,
+        Graphics g, LimitRow row,
         int x, int y, int width,
         Font font, Brush textBrush, Brush dimBrush, FlyoutMetrics m)
     {
+        var (label, bucket, window, segments, severity) = row;
         var pct = bucket.UtilizationPct;
         var pctText = $"{pct:F0}%";
         var resetText = bucket.FormatResetCountdown();
-        var windowFraction = bucket.ElapsedFraction(window);
+        // Unknown window length (an unrecognized bucket kind): no pace fraction, so the bar
+        // colours by absolute level and the segment/time-marker visuals are skipped.
+        var windowFraction = window is { } w ? bucket.ElapsedFraction(w) : null;
 
-        // Label and percentage on the same line
-        g.DrawString(label, font, textBrush, x, y);
+        // Label and percentage on the same line. The label is bounded so an API-supplied model
+        // name ("Weekly (<display_name>)") trims with an ellipsis instead of colliding with the
+        // right-aligned percent or clipping at the form edge.
         var pctSize = g.MeasureString(pctText, font);
+        var labelWidth = Math.Max(0, width - pctSize.Width - m.BarHeight);
+        using (var labelFormat = new StringFormat(StringFormatFlags.NoWrap)
+        {
+            Trimming = StringTrimming.EllipsisCharacter,
+        })
+        {
+            g.DrawString(label, font, textBrush,
+                new RectangleF(x, y, labelWidth, m.LabelToBarGap), labelFormat);
+        }
+
         g.DrawString(pctText, font, textBrush, x + width - pctSize.Width, y);
 
         y += m.LabelToBarGap;
@@ -372,7 +381,8 @@ public sealed class FlyoutPanel : Form
             if (fillWidth > 0)
             {
                 var fillRect = new Rectangle(x, y, fillWidth, barHeight);
-                var barColor = IconRenderer.GetUsageColor(pct, windowFraction, _colorMode);
+                var barColor = IconRenderer.ApplySeverityFloor(
+                    IconRenderer.GetUsageColor(pct, windowFraction, _colorMode), severity);
                 using var barFillBrush = new SolidBrush(barColor);
                 using var fillPath = CreateRoundedRect(fillRect, barHeight / 2);
                 g.FillPath(barFillBrush, fillPath);

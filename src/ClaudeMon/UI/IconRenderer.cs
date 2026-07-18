@@ -48,6 +48,19 @@ public static class IconRenderer
         };
     }
 
+    /// <summary>
+    /// Escalates a usage colour by the API's own severity judgment for that limit:
+    /// <c>critical</c> forces red and <c>warning</c> raises anything milder to orange.
+    /// Severity is a floor, never a ceiling — it can only raise urgency, so a red pace
+    /// reading is never downgraded by a "normal" severity.
+    /// </summary>
+    public static Color ApplySeverityFloor(Color baseColor, LimitSeverity severity) => severity switch
+    {
+        LimitSeverity.Critical => RedColor,
+        LimitSeverity.Warning when baseColor != OrangeColor && baseColor != RedColor => OrangeColor,
+        _ => baseColor,
+    };
+
     public static Icon RenderUsageIcon(double percentage)
         => RenderUsageIcon(percentage, GetColorForPercentage(percentage));
 

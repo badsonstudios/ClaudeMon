@@ -24,6 +24,43 @@ public class IconRendererTests
         Assert.Equal(Color.FromArgb(r, g, b), color);
     }
 
+    // Severity floor: the API's own severity judgment can only raise urgency, never lower it.
+    // Base colours come from GetColorForPercentage (10→green, 70→yellow, 85→orange, 95→red).
+
+    [Theory]
+    [InlineData(10, LimitSeverity.Critical, 95)]  // green → red
+    [InlineData(85, LimitSeverity.Critical, 95)]  // orange → red
+    [InlineData(95, LimitSeverity.Critical, 95)]  // red stays red
+    [InlineData(10, LimitSeverity.Warning, 85)]   // green → orange
+    [InlineData(70, LimitSeverity.Warning, 85)]   // yellow → orange
+    public void ApplySeverityFloor_EscalatesToSeverityColor(
+        double basePct, LimitSeverity severity, double expectedPct)
+    {
+        var result = IconRenderer.ApplySeverityFloor(
+            IconRenderer.GetColorForPercentage(basePct), severity);
+
+        Assert.Equal(IconRenderer.GetColorForPercentage(expectedPct), result);
+    }
+
+    [Theory]
+    [InlineData(LimitSeverity.Warning)]
+    [InlineData(LimitSeverity.Normal)]
+    [InlineData(LimitSeverity.Unknown)]
+    public void ApplySeverityFloor_NeverDowngradesRed(LimitSeverity severity)
+    {
+        var red = IconRenderer.GetColorForPercentage(95);
+        Assert.Equal(red, IconRenderer.ApplySeverityFloor(red, severity));
+    }
+
+    [Theory]
+    [InlineData(LimitSeverity.Normal)]
+    [InlineData(LimitSeverity.Unknown)]
+    public void ApplySeverityFloor_NormalAndUnknown_PassThrough(LimitSeverity severity)
+    {
+        var green = IconRenderer.GetColorForPercentage(10);
+        Assert.Equal(green, IconRenderer.ApplySeverityFloor(green, severity));
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(42)]

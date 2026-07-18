@@ -187,18 +187,7 @@ public sealed class TrayApplication : IDisposable
                         fiveHour.ResetAt));
                 }
 
-                var lines = new List<string> { "ClaudeMon" };
-
-                if (fiveHour is not null)
-                    lines.Add($"5hr: {fiveHour.UtilizationPct:F0}% ({fiveHour.FormatResetCountdown()})");
-
-                if (sevenDay is not null)
-                    lines.Add($"7day: {sevenDay.UtilizationPct:F0}% ({sevenDay.FormatResetCountdown()})");
-
-                if (e.Status != MonitorStatus.Connected)
-                    lines.Add($"[{e.Status}]");
-
-                _notifyIcon.Text = string.Join("\n", lines);
+                _notifyIcon.Text = TrayTooltip.Compose(e.Usage, e.Status);
 
                 _alertManager.Check(e.Usage, _configManager.Settings);
             }

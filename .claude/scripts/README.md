@@ -12,7 +12,7 @@ this folder). Pass an explicit path as the last argument to override.
 | `load-env` | Load `.env` vars into the **current** shell (must be sourced/dot-sourced) | `. ./load-env.ps1` |
 | `get-secret` | Print a single value from `.env` (without dumping the whole file) | `./get-secret.sh GITHUB_TOKEN` |
 | `bump-version` | Set the release version (single source of truth: the `.csproj`) | `./bump-version.sh 0.2.0` |
-| `publish-release` | Create the GitHub release for the current version (notes from `CHANGELOG.md`, installer attached) | `./publish-release.sh` |
+| `publish-release` | Create the GitHub release for the current version (notes from `CHANGELOG.md`, installer + `.sha256` attached) | `./publish-release.sh` |
 
 ## Usage notes
 
@@ -49,7 +49,9 @@ this folder). Pass an explicit path as the last argument to override.
 - **Run it after the version PR is merged to `main`**, so the tag points at merged code.
 - Reads the version from `src/ClaudeMon/ClaudeMon.csproj`, extracts that version's notes
   from `CHANGELOG.md`, tags `v<version>`, and attaches `dist/ClaudeMon-Setup-<version>.exe`
-  (run `bash installer/build.sh` first to produce it).
+  plus its generated `.sha256` checksum (run `bash installer/build.sh` first to produce the
+  installer). The checksum asset is **required** for the in-app auto-updater — it refuses to
+  run an installer it can't verify and falls back to opening the release page.
 - **Idempotent**: if a release for the version already exists, it does nothing.
 - PowerShell: `.\publish-release.ps1 [-Target main] [-Draft]` · bash: `./publish-release.sh [--target main] [--draft]`
 - Release flow: `bump-version` → commit/push/PR → merge → `bash installer/build.sh` → `publish-release`.

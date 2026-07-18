@@ -122,6 +122,62 @@ public class UpdateCheckerTests : IDisposable
         Assert.NotEmpty(_handler.LastRequest.Headers.UserAgent);
     }
 
+    [Fact]
+    public async Task Check_ReleaseWithInstallerAndChecksumAssets_ExposesBothUrls()
+    {
+        _handler.SetResponse(HttpStatusCode.OK, """
+            {
+              "tag_name": "v0.6.0",
+              "html_url": "https://example.com/rel",
+              "assets": [
+                { "name": "ClaudeMon-Setup-0.6.0.exe",
+                  "browser_download_url": "https://example.com/setup.exe" },
+                { "name": "ClaudeMon-Setup-0.6.0.exe.sha256",
+                  "browser_download_url": "https://example.com/setup.exe.sha256" }
+              ]
+            }
+            """);
+
+        var result = await _checker.CheckAsync(new Version(0, 5, 0));
+
+        Assert.True(result.UpdateAvailable);
+        Assert.Equal("https://example.com/setup.exe", result.InstallerUrl);
+        Assert.Equal("https://example.com/setup.exe.sha256", result.ChecksumUrl);
+    }
+
+    [Fact]
+    public async Task Check_ReleaseWithoutAssets_HasNullAssetUrls()
+    {
+        // Older releases (and notes-only releases) carry no installer/checksum; the caller
+        // must fall back to the release page rather than attempt an in-app install.
+        _handler.SetResponse(HttpStatusCode.OK, Release("v0.6.0"));
+
+        var result = await _checker.CheckAsync(new Version(0, 5, 0));
+
+        Assert.True(result.UpdateAvailable);
+        Assert.Null(result.InstallerUrl);
+        Assert.Null(result.ChecksumUrl);
+    }
+
+    [Fact]
+    public async Task Check_UnrelatedAssets_AreIgnored()
+    {
+        _handler.SetResponse(HttpStatusCode.OK, """
+            {
+              "tag_name": "v0.6.0",
+              "assets": [
+                { "name": "source.zip", "browser_download_url": "https://example.com/source.zip" },
+                { "name": "notes.txt", "browser_download_url": "https://example.com/notes.txt" }
+              ]
+            }
+            """);
+
+        var result = await _checker.CheckAsync(new Version(0, 5, 0));
+
+        Assert.Null(result.InstallerUrl);
+        Assert.Null(result.ChecksumUrl);
+    }
+
     [Theory]
     [InlineData("v0.6.0", true, 0, 6, 0)]
     [InlineData("0.6.0", true, 0, 6, 0)]

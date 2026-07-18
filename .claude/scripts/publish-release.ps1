@@ -2,7 +2,8 @@
 #
 #   - Version comes from src\ClaudeMon\ClaudeMon.csproj <Version> (single source of truth).
 #   - Release notes are extracted from CHANGELOG.md for that version.
-#   - Attaches the built installer dist\ClaudeMon-Setup-<version>.exe when present.
+#   - Attaches the built installer dist\ClaudeMon-Setup-<version>.exe when present, plus its
+#     SHA-256 checksum (<installer>.sha256) - required for in-app auto-updates to verify.
 #   - No-op if a release tagged v<version> already exists.
 #
 # APPROVAL FIRST: this publishes a public GitHub release - confirm with the user.
@@ -52,7 +53,13 @@ $ghArgs = @('release', 'create', $tag, '--title', $tag, '--notes', $notes)
 if ($Draft) { $ghArgs += '--draft' }
 if ($Target) { $ghArgs += @('--target', $Target) }
 if (Test-Path $asset) {
-    $ghArgs += $asset
+    # (Re)generate the checksum beside the installer, in sha256sum "<hash>  <filename>" format
+    # (bare filename) so both script variants produce identical assets.
+    $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+    $checksumFile = "$asset.sha256"
+    $fileName = Split-Path $asset -Leaf
+    Set-Content -Path $checksumFile -Value "$hash  $fileName" -Encoding ascii -NoNewline
+    $ghArgs += @($asset, $checksumFile)
 }
 else {
     Write-Warning "Installer not found at $asset - publishing notes without an asset."

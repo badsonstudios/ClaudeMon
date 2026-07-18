@@ -339,14 +339,27 @@ public class ConfigManagerTests : IDisposable
         manager.Update(new AppSettings
         {
             CheckForUpdates = false,
+            AutoInstallUpdates = true,
             IgnoredUpdateVersion = "0.6.0",
+            PendingUpdateVersion = "0.7.0",
         });
 
         var manager2 = new ConfigManager(path);
         manager2.Load();
 
         Assert.False(manager2.Settings.CheckForUpdates);
+        Assert.True(manager2.Settings.AutoInstallUpdates);
         Assert.Equal("0.6.0", manager2.Settings.IgnoredUpdateVersion);
+        Assert.Equal("0.7.0", manager2.Settings.PendingUpdateVersion);
+    }
+
+    [Fact]
+    public void AutoInstallUpdates_DefaultsToFalse()
+    {
+        // Load-bearing: on by default would silently start restarting existing users' apps
+        // to install updates they never opted into.
+        var settings = new AppSettings();
+        Assert.False(settings.AutoInstallUpdates);
     }
 
     [Fact]

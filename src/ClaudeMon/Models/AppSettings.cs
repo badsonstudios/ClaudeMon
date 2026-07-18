@@ -102,6 +102,15 @@ public record AppSettings
     public bool CheckForUpdates { get; init; } = true;
 
     /// <summary>
+    /// When true, an automatic update check that finds a newer release downloads and installs it
+    /// silently instead of prompting — the app restarts on the new version and notifies
+    /// afterward. Off by default (updating restarts the app, so it's opt-in). Only meaningful
+    /// while <see cref="CheckForUpdates"/> is on; manual checks still prompt either way.
+    /// </summary>
+    [JsonPropertyName("autoInstallUpdates")]
+    public bool AutoInstallUpdates { get; init; }
+
+    /// <summary>
     /// The release version the user chose to suppress ("Skip this version" in the update
     /// dialog): automatic checks won't prompt for it again, though a manual check or a newer
     /// release still will. Replaces the pre-0.12 <c>lastNotifiedVersion</c> ("ballooned once per
@@ -110,6 +119,16 @@ public record AppSettings
     /// </summary>
     [JsonPropertyName("ignoredUpdateVersion")]
     public string? IgnoredUpdateVersion { get; init; }
+
+    /// <summary>
+    /// The version a silent install was just launched for, written the moment the installer
+    /// starts. The next startup compares it to the running version: a match means the update
+    /// landed ("Updated to vX" notification), a mismatch means the install didn't happen; the
+    /// field is cleared either way. Internal state, not a user setting — preserved automatically
+    /// by the settings <c>with</c>-expression save.
+    /// </summary>
+    [JsonPropertyName("pendingUpdateVersion")]
+    public string? PendingUpdateVersion { get; init; }
 
     [JsonPropertyName("configVersion")]
     public int ConfigVersion { get; init; } = 1;

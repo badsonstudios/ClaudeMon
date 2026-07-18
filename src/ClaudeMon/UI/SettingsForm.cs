@@ -49,6 +49,7 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _secondaryOffsetNumeric;
     private readonly ToggleSwitch _runAtStartupToggle;
     private readonly ToggleSwitch _checkForUpdatesToggle;
+    private readonly ToggleSwitch _autoInstallUpdatesToggle;
     private readonly Button _okButton;
     private readonly Button _cancelButton;
 
@@ -211,6 +212,10 @@ public sealed class SettingsForm : Form
         // --- Updates tab ---
         _currentTab = 3;
         _checkForUpdatesToggle = AddToggleRow("Check for updates automatically");
+        // Silent download + install on the automatic check. Hidden while checks are off — with
+        // no check there is nothing to auto-install.
+        _autoInstallUpdatesToggle = AddToggleRow("Install updates automatically", indent: true,
+            visible: () => _checkForUpdatesToggle.Checked);
 
         // --- Buttons ---
         // Position/size are applied — DPI-scaled — by Relayout from _hspec.
@@ -381,6 +386,7 @@ public sealed class SettingsForm : Form
 
         // Collapse/expand on the gating toggles; some also live-preview the taskbar appearance.
         _notificationsToggle.CheckedChanged += (_, _) => RelayoutLive();
+        _checkForUpdatesToggle.CheckedChanged += (_, _) => RelayoutLive();
         _paceAlertsToggle.CheckedChanged += (_, _) => RelayoutLive();
         _taskbarToggle.CheckedChanged += (_, _) =>
         {
@@ -513,6 +519,7 @@ public sealed class SettingsForm : Form
 
         _runAtStartupToggle.Checked = ConfigManager.IsRunAtStartupEnabled();
         _checkForUpdatesToggle.Checked = settings.CheckForUpdates;
+        _autoInstallUpdatesToggle.Checked = settings.AutoInstallUpdates;
 
         // Controls now hold the saved values, so start honouring relayout + live previews and do
         // the initial layout pass.
@@ -562,6 +569,7 @@ public sealed class SettingsForm : Form
                 PrimaryHorizontalOffset = (int)_primaryOffsetNumeric.Value,
             },
             CheckForUpdates = _checkForUpdatesToggle.Checked,
+            AutoInstallUpdates = _autoInstallUpdatesToggle.Checked,
         };
 
         _configManager.Update(newSettings);

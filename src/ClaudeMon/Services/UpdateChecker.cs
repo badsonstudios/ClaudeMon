@@ -56,9 +56,10 @@ public sealed class UpdateChecker : IDisposable
                 return UpdateCheckResult.Failed("Could not parse the latest release version.");
 
             var url = root.TryGetProperty("html_url", out var urlEl) ? urlEl.GetString() : null;
+            var (installerUrl, checksumUrl) = ExtractInstallerAssets(root);
 
             return Normalize(latest) > Normalize(currentVersion)
-                ? UpdateCheckResult.Available(latest, url)
+                ? UpdateCheckResult.Available(latest, url, installerUrl, checksumUrl)
                 : UpdateCheckResult.NoUpdate();
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -69,6 +70,36 @@ public sealed class UpdateChecker : IDisposable
         {
             return UpdateCheckResult.Failed(ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Finds the installer (<c>ClaudeMon-Setup-*.exe</c>) and its SHA-256 checksum
+    /// (<c>ClaudeMon-Setup-*.exe.sha256</c>) in the release's assets. Either may be null — older
+    /// releases carry no checksum, a notes-only release carries neither — and the caller falls
+    /// back to the release page then (the in-app install requires both).
+    /// </summary>
+    internal static (string? InstallerUrl, string? ChecksumUrl) ExtractInstallerAssets(JsonElement root)
+    {
+        if (!root.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array)
+            return (null, null);
+
+        string? installerUrl = null;
+        string? checksumUrl = null;
+        foreach (var asset in assets.EnumerateArray())
+        {
+            var name = asset.TryGetProperty("name", out var nameEl) ? nameEl.GetString() : null;
+            var url = asset.TryGetProperty("browser_download_url", out var urlEl) ? urlEl.GetString() : null;
+            if (name is null || url is null
+                || !name.StartsWith("ClaudeMon-Setup-", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                installerUrl = url;
+            else if (name.EndsWith(".exe.sha256", StringComparison.OrdinalIgnoreCase))
+                checksumUrl = url;
+        }
+
+        return (installerUrl, checksumUrl);
     }
 
     /// <summary>Parses a release tag such as "v0.6.0" or "0.6.0" into a <see cref="Version"/>.</summary>
@@ -104,10 +135,29 @@ public record UpdateCheckResult
     public bool UpdateAvailable { get; private init; }
     public Version? LatestVersion { get; private init; }
     public string? ReleaseUrl { get; private init; }
+
+    /// <summary>Download URL of the release's installer asset, when it has one.</summary>
+    public string? InstallerUrl { get; private init; }
+
+    /// <summary>
+    /// Download URL of the installer's SHA-256 checksum asset. The in-app silent install runs
+    /// only when both this and <see cref="InstallerUrl"/> are present — an unverifiable
+    /// installer is never launched.
+    /// </summary>
+    public string? ChecksumUrl { get; private init; }
+
     public string? ErrorMessage { get; private init; }
 
-    public static UpdateCheckResult Available(Version latest, string? releaseUrl) =>
-        new() { UpdateAvailable = true, LatestVersion = latest, ReleaseUrl = releaseUrl };
+    public static UpdateCheckResult Available(
+        Version latest, string? releaseUrl, string? installerUrl = null, string? checksumUrl = null) =>
+        new()
+        {
+            UpdateAvailable = true,
+            LatestVersion = latest,
+            ReleaseUrl = releaseUrl,
+            InstallerUrl = installerUrl,
+            ChecksumUrl = checksumUrl,
+        };
 
     public static UpdateCheckResult NoUpdate() => new();
 

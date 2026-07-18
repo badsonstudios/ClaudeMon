@@ -3,7 +3,10 @@
 #
 #   - Version comes from src/ClaudeMon/ClaudeMon.csproj <Version> (single source of truth).
 #   - Release notes are extracted from CHANGELOG.md for that version.
-#   - Attaches the built installer dist/ClaudeMon-Setup-<version>.exe when present.
+#   - Attaches the built installer dist/ClaudeMon-Setup-<version>.exe when present, plus its
+#     SHA-256 checksum (<installer>.sha256, sha256sum format) — the in-app auto-updater
+#     refuses to run an installer it can't verify, so the checksum asset is required for
+#     in-app updates to work.
 #   - No-op (exit 0) if a release tagged v<version> already exists.
 #
 # APPROVAL FIRST: this publishes a public GitHub release — confirm with the user.
@@ -52,7 +55,10 @@ args=(release create "$TAG" --title "$TAG" --notes "$NOTES")
 [ "$draft" -eq 1 ] && args+=(--draft)
 [ -n "$target" ] && args+=(--target "$target")
 if [ -f "$ASSET" ]; then
-  args+=("$ASSET")
+  # (Re)generate the checksum beside the installer; run from dist/ so the recorded
+  # filename is bare (the updater takes the first token, but keep the file canonical).
+  (cd "$(dirname "$ASSET")" && sha256sum "$(basename "$ASSET")" > "$(basename "$ASSET").sha256")
+  args+=("$ASSET" "$ASSET.sha256")
 else
   echo "warning: installer not found at $ASSET — publishing notes without an asset." >&2
   echo "         run 'bash installer/build.sh' first to attach the installer." >&2

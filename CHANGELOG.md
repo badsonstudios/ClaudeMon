@@ -3,6 +3,27 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.13.0] - 2026-07-18
+
+### Added
+- **One-click and fully automatic updates** — **Get the update** (and the tray's **Download
+  update** item) now downloads the new version's installer in-app with a progress window,
+  verifies it against the release's published SHA-256 checksum, and installs it silently: no
+  installer wizard, no SmartScreen/Defender popup (the in-app download carries no
+  Mark-of-the-Web), no UAC prompt. ClaudeMon relaunches on the new version and confirms with
+  an "updated to vX" notification. A new **Install updates automatically** setting (Updates
+  tab, off by default) runs the same flow hands-free when the daily check finds a release.
+  If anything fails — download, checksum, installer — ClaudeMon falls back to opening the
+  release page as before. (#63)
+- Releases now publish a `.sha256` checksum next to the installer; the in-app updater refuses
+  to run an installer it can't verify.
+
+### Fixed
+- **Updates preserve your "run at Windows startup" choice** — silent updates pin the
+  installer's startup task to your current setting, and the interactive installer now defaults
+  the checkbox to your actual state on upgrades (and actually disables startup when you untick
+  it, which previously left it on). Fresh installs still default to on. (#63)
+
 ## [0.12.1] - 2026-07-18
 
 ### Fixed

@@ -21,7 +21,7 @@ The usage percentage can also be shown directly on the taskbar:
 - **Time-to-limit estimate** - When 5-hour usage is rising, the flyout projects how long until you hit 100% at the current rate (e.g. "~35m to limit"); shows "—" when usage is flat/declining or there isn't enough recent history
 - **Stays signed in on its own** - When the on-disk access token goes stale (common if you only use the Claude Code VS Code extension), ClaudeMon refreshes it automatically using your saved refresh token, so it keeps showing usage instead of falsely reporting a sign-in problem
 - **Sign-in-expired guidance** - When your Claude Code sign-in genuinely can't be refreshed, the tooltip, flyout, and About dialog show a clear "run Claude Code to refresh" message instead of stale usage numbers (the taskbar display shows a neutral "—"); normal display returns automatically after you re-authenticate
-- **Update notifications** - Checks GitHub for newer releases (daily and on demand); a small in-app window offers **Get the update**, **Ignore**, or **Skip this version**; toggle in Settings
+- **In-app updates** - Checks GitHub for newer releases (daily and on demand); a small in-app window offers **Get the update**, **Ignore**, or **Skip this version**. **Get the update** downloads the installer in-app, verifies it (SHA-256), and installs it silently — no installer wizard, no SmartScreen popup — then relaunches on the new version. An optional **Install updates automatically** setting does the whole thing hands-free
 - **Diagnostic logging** - Writes timestamped diagnostics (poll results, status changes, API/auth/network errors) to a per-day log file, keeping the last 7 days; a **View logs** tray-menu item opens the latest one. Token values are never written
 - **Runs at startup** - Starts with Windows by default (the installer's startup option is pre-checked; you can opt out during setup or later in Settings)
 
@@ -96,6 +96,7 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | Setting | Description |
 |---------|-------------|
 | **Check for updates automatically** | Periodically check GitHub for a newer ClaudeMon release and offer it in the update window (on by default). Skipped versions stay quiet until something newer ships; a manual **Check for updates** from the tray menu always asks |
+| **Install updates automatically** (under *Check for updates*) | When the automatic check finds a newer release, download and install it silently — no prompts, no wizard — and relaunch on the new version, with a tray notification afterward (off by default). Your **run at Windows startup** choice is always preserved across updates |
 
 ## Building from Source
 

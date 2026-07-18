@@ -52,9 +52,10 @@ MinVersion=10.0
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-; No 'unchecked'/'checkedonce' flag: the task is checked by default on every
-; install (including upgrades), so new users opt into start-with-Windows by
-; default. They can still untick it to opt out.
+; No 'unchecked'/'checkedonce' flag: the task is checked by default so new users
+; opt into start-with-Windows by default (they can still untick it). On upgrades
+; the default follows the user's current Run-value state instead — see
+; CurPageChanged in [Code].
 Name: "startup"; Description: "Run {#MyAppName} at Windows startup"; GroupDescription: "Additional options:"
 
 [Files]
@@ -67,6 +68,10 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 [Registry]
 ; Run at startup (only if task selected)
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup
+; Task NOT selected: actively remove any existing Run value. Without this, unticking the box on
+; an upgrade would silently leave startup enabled (Inno never deletes what an unselected task
+; would have written). Harmless when the value is already absent.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#MyAppName}"; Flags: deletevalue; Tasks: not startup
 
 [Run]
 ; Fresh install (app wasn't already running): offer to launch from the final page.
@@ -119,6 +124,32 @@ begin
     Sleep(150);
     Waited := Waited + 1;
   end;
+end;
+
+// True once a previous ClaudeMon install exists on this machine (its per-user uninstall entry
+// is present) — tells an upgrade apart from a fresh install on the tasks page.
+function IsUpgradeInstall(): Boolean;
+begin
+  Result := RegKeyExists(HKCU,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\' +
+    ExpandConstant('{#SetupSetting("AppId")}') + '_is1');
+end;
+
+// On an upgrade, default the "run at Windows startup" checkbox to the user's actual current
+// state — the HKCU Run value that both the installer task and the app's own Settings toggle
+// write — instead of the fresh-install default of checked. An upgrade must never re-enable
+// startup for a user who turned it off. Silent upgrades skip this page entirely; the in-app
+// auto-updater pins the task explicitly with /MERGETASKS instead (issue #63).
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  // Interactive runs only: page events still fire in silent mode, where this would override
+  // the explicit /MERGETASKS selection the auto-updater passes.
+  if WizardSilent() then
+    Exit;
+  if (CurPageID = wpSelectTasks) and IsUpgradeInstall() and
+     not RegValueExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run',
+       ExpandConstant('{#MyAppName}')) then
+    WizardSelectTasks('!startup');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

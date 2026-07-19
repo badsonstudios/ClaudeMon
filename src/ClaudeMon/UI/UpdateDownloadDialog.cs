@@ -79,7 +79,8 @@ internal sealed class UpdateDownloadDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        StartPosition = FormStartPosition.CenterScreen;
+        // Manual + CenterOnPrimary in OnLoad — all app dialogs open on the primary monitor (#88).
+        StartPosition = FormStartPosition.Manual;
         // Same reasoning as UpdateAvailableDialog: this can open from a background check with no
         // owner window, where the foreground lock would bury it. Cancel is one Esc away.
         TopMost = true;
@@ -159,6 +160,7 @@ internal sealed class UpdateDownloadDialog : Form
         base.OnLoad(e);
         // DeviceDpi is only reliable once the handle exists (see UpdateAvailableDialog.OnLoad).
         Relayout();
+        DialogPlacement.CenterOnPrimary(this);
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)

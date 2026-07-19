@@ -41,6 +41,7 @@ public sealed class TrayApplication : IDisposable
     private string? _checksumUrl;
     private bool _settingsOpen;
     private bool _updateDialogOpen;
+    private bool _aboutOpen;
     private bool _updateInstallInProgress;
     private volatile bool _disposed;
 
@@ -713,17 +714,23 @@ public sealed class TrayApplication : IDisposable
 
     private void ShowAbout()
     {
-        var version = typeof(TrayApplication).Assembly.GetName().Version;
-        MessageBox.Show(
-            $"ClaudeMon v{version?.ToString(3) ?? "0.0.1"}\n\n" +
-            "Windows system tray monitor for Claude AI usage.\n\n" +
-            "Monitors 5-hour and 7-day rate limits\n" +
-            "for Claude Max subscribers.\n\n" +
-            $"Status: {MonitorStatusText.Describe(_monitor.Status)}\n\n" +
-            "github.com/badsonstudios/ClaudeMon",
-            "About ClaudeMon",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Information);
+        // Same stacking guard as ShowSettings: an ownerless ShowDialog doesn't disable the
+        // tray menu, so without this the user could pile up identical About dialogs.
+        if (_aboutOpen)
+            return;
+
+        _aboutOpen = true;
+        try
+        {
+            // A themed dialog instead of a MessageBox so the repo link is clickable (#86).
+            using var dialog = new AboutDialog(
+                FormatVersion(CurrentVersion), MonitorStatusText.Describe(_monitor.Status));
+            dialog.ShowDialog();
+        }
+        finally
+        {
+            _aboutOpen = false;
+        }
     }
 
     public void Dispose()

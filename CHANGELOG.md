@@ -3,6 +3,15 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.18.0] - 2026-07-18
+
+### Changed
+- **Clickable GitHub link in the About dialog** — About ClaudeMon is now a themed dialog
+  (matching the update windows) instead of a plain message box, and the
+  github.com/badsonstudios/ClaudeMon line at the bottom is a real link that opens the
+  repository in your browser. Same content as before: version, description, and current
+  monitor status. (#86)
+
 ## [0.17.0] - 2026-07-18
 
 ### Added

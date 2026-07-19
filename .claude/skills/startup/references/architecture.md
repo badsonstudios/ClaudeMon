@@ -22,15 +22,22 @@ ClaudeMon/
 - **UI** (`UI/`) — `IconRenderer` draws the 16×16 tray icon (number + threshold color),
   `FlyoutPanel` shows usage details, `SettingsForm` edits `AppSettings`.
 - **Monitoring** (`Monitoring/`) — `UsageMonitor` polls on an interval and surfaces usage;
-  `AlertManager` decides when to notify (threshold vs. progressive modes); `LimitDisplay`
-  turns the API's `limits[]` buckets into display rows (legacy 5h/7d fallback included) and
-  `TrayTooltip` composes the tray hover text under the 127-char `NotifyIcon` cap — both pure
-  and unit-tested, consumed by the UI layer.
+  `LocalUsageMonitor` drives the local-transcript scanner on its own timer (same
+  Start/Pause/Resume shape); `AlertManager` decides when to notify (threshold vs.
+  progressive modes); `LimitDisplay` turns the API's `limits[]` buckets into display rows
+  (legacy 5h/7d fallback included), `TrayTooltip` composes the tray hover text under the
+  127-char `NotifyIcon` cap, and `LocalCostText` composes the flyout's "Today: ~$…" cost
+  line — all pure and unit-tested, consumed by the UI layer.
 - **Services** (`Services/`) — `ClaudeApiClient` calls the Anthropic usage API;
   `CredentialReader` loads the OAuth token from `~/.claude/.credentials.json`;
   `TokenRefresher` renews it; `UpdateChecker`/`UpdateInstaller` drive in-app updates;
   `SessionEvents` wraps lock/unlock notifications; `BrowserLauncher` is the sole
-  http(s)-only gate for opening URLs in the browser; `Logger` writes the daily logs.
+  http(s)-only gate for opening URLs in the browser; `Logger` writes the daily logs;
+  `LocalUsageStore` + `JsonlUsageParser` incrementally scan Claude Code's transcripts
+  (`~/.claude/projects/**/*.jsonl`, per-file byte offsets, dedupe by message/request id)
+  into per-day cost/token aggregates cached at `%LocalAppData%\ClaudeMon\local-usage.json`;
+  `PricingTable` resolves model ids against the embedded `Resources/model-pricing.json`
+  (list prices; unknown models stay unpriced rather than guessing).
 - **Configuration** (`Configuration/`) — `ConfigManager` persists `AppSettings` as JSON and
   manages the "Start with Windows" registry entry.
 - **Models** (`Models/`) — immutable `record` types for settings and API payloads.

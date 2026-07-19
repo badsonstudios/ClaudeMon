@@ -3,6 +3,18 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.15.0] - 2026-07-18
+
+### Added
+- **Smart polling: pause while the workstation is locked** — ClaudeMon no longer polls the
+  usage API while your session is locked (previously it kept burning API calls all night and
+  showed stale numbers until the next tick after unlock). On unlock it resumes and refreshes
+  **immediately**, so the tray icon and readout are current within seconds of sitting back
+  down. The daily update check pauses too and, because pausing resets its 24-hour countdown,
+  an overdue check now runs on unlock — without this, a machine locked at least once a day
+  would never check for updates again after startup. Lock/unlock transitions are logged so
+  gaps in the poll log are explainable. (#69)
+
 ## [0.14.1] - 2026-07-18
 
 ### Fixed

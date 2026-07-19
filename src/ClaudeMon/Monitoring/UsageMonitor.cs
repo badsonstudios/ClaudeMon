@@ -41,20 +41,10 @@ public sealed class UsageMonitor : IDisposable
         _logger = logger;
         _history = history;
         _timer = new System.Timers.Timer(pollInterval.TotalMilliseconds);
-        // The handler is async, so it runs as async void on a timer thread-pool thread: any
-        // exception PollAsync doesn't swallow would otherwise escape unobserved and tear the
-        // whole app down. Guard it here (mirrors TrayApplication.CheckForUpdatesAsync).
-        _timer.Elapsed += async (_, _) =>
-        {
-            try
-            {
-                await PollAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger?.Error($"Usage poll failed: {ex.Message}");
-            }
-        };
+        // The poll runs unawaited on a timer thread-pool thread: any exception PollAsync
+        // doesn't swallow would otherwise escape unobserved and tear the whole app down.
+        // SafePollAsync guards it (mirrors TrayApplication.CheckForUpdatesAsync).
+        _timer.Elapsed += (_, _) => _ = SafePollAsync();
         _timer.AutoReset = true;
     }
 
@@ -62,7 +52,7 @@ public sealed class UsageMonitor : IDisposable
     {
         _cts = new CancellationTokenSource();
         _timer.Start();
-        _ = PollAsync();
+        _ = SafePollAsync();
     }
 
     public void Stop()
@@ -74,6 +64,44 @@ public sealed class UsageMonitor : IDisposable
     public async Task RefreshNowAsync()
     {
         await PollAsync();
+    }
+
+    /// <summary>
+    /// Stops the poll timer while the workstation is locked. Deliberately does
+    /// not cancel an in-flight poll: a poll that started while unlocked is
+    /// still valid data, and letting it drain is the simplest non-faulting
+    /// behavior. Counterpart of <see cref="Resume"/>; distinct from
+    /// <see cref="Stop"/>, which is shutdown and cancels outstanding work.
+    /// </summary>
+    public void Pause()
+    {
+        _timer.Stop();
+    }
+
+    /// <summary>
+    /// Restarts the poll timer and fires an immediate poll so the readout is
+    /// fresh within seconds of unlock rather than a full interval later. If a
+    /// paused-era poll is somehow still draining, the re-entrancy guard in
+    /// PollAsync makes the immediate poll a no-op and the timer catches up.
+    /// </summary>
+    public void Resume()
+    {
+        _timer.Start();
+        _ = SafePollAsync();
+    }
+
+    // Fire-and-forget wrapper for polls started outside the timer: PollAsync runs
+    // unawaited, so any exception it doesn't swallow would escape unobserved.
+    private async Task SafePollAsync()
+    {
+        try
+        {
+            await PollAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger?.Error($"Usage poll failed: {ex.Message}");
+        }
     }
 
     public void UpdateInterval(TimeSpan newInterval)

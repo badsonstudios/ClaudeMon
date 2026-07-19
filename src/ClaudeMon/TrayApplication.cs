@@ -31,6 +31,7 @@ public sealed class TrayApplication : IDisposable
     private readonly UpdateChecker _updateChecker;
     private readonly UpdateInstaller _updateInstaller;
     private readonly System.Timers.Timer _updateTimer;
+    private readonly SessionLockWatcher _sessionWatcher;
     private readonly CancellationTokenSource _updateCts = new();
     private readonly ToolStripMenuItem _downloadUpdateItem =
         new("Download update...") { Visible = false };
@@ -42,6 +43,12 @@ public sealed class TrayApplication : IDisposable
     private bool _updateDialogOpen;
     private bool _updateInstallInProgress;
     private volatile bool _disposed;
+
+    // UTC ticks of the last update-check attempt (0 = never). Written at the top of
+    // CheckForUpdatesAsync — possibly from a timer thread-pool thread — and read on the
+    // UI thread in the session-unlock handler, hence Volatile on a long rather than a
+    // DateTimeOffset field (which could tear).
+    private long _lastUpdateCheckTicks;
 
     private static Version CurrentVersion =>
         typeof(TrayApplication).Assembly.GetName().Version ?? new Version(0, 0);
@@ -126,6 +133,32 @@ public sealed class TrayApplication : IDisposable
             AutoReset = true,
         };
         _updateTimer.Elapsed += (_, _) => _ = CheckForUpdatesAsync(manual: false);
+
+        // Smart polling (issue #69): stop hitting the usage API while the workstation is
+        // locked, and refresh immediately on unlock so the readout is fresh within seconds.
+        // The update-check timer pauses too; on unlock it resumes only if the setting is
+        // still on (the setting stays the source of truth — no "was running" flag needed).
+        _sessionWatcher = new SessionLockWatcher(new SystemSessionEvents(), _logger);
+        _sessionWatcher.Locked += (_, _) =>
+        {
+            _monitor.Pause();
+            _updateTimer.Stop();
+        };
+        _sessionWatcher.Unlocked += (_, _) =>
+        {
+            _monitor.Resume();
+            if (_configManager.Settings.CheckForUpdates)
+            {
+                // Stop()/Start() resets the 24h countdown, so on a machine that locks at
+                // least once a day the timer alone would never fire again after startup.
+                // Compensate the same way Resume() does for the poll timer: run a check
+                // now if one is overdue.
+                _updateTimer.Start();
+                var last = Volatile.Read(ref _lastUpdateCheckTicks);
+                if (DateTimeOffset.UtcNow.UtcTicks - last >= UpdateCheckInterval.Ticks)
+                    _ = CheckForUpdatesAsync(manual: false);
+            }
+        };
 
         // If the last run launched a silent update, report how it went, and sweep installers
         // that finished updates left in %TEMP% (a running installer can't delete itself).
@@ -301,6 +334,10 @@ public sealed class TrayApplication : IDisposable
         // an exception escape. CheckAsync is already non-throwing, but guard regardless.
         try
         {
+            // Attempts count, not just successes: a failing check shouldn't make every
+            // unlock retry it (the daily timer already handles retries).
+            Volatile.Write(ref _lastUpdateCheckTicks, DateTimeOffset.UtcNow.UtcTicks);
+
             var result = await _updateChecker.CheckAsync(CurrentVersion, _updateCts.Token);
 
             _syncContext.Post(_ =>
@@ -703,6 +740,7 @@ public sealed class TrayApplication : IDisposable
     {
         _disposed = true;
         _logger.Info("ClaudeMon shutting down.");
+        _sessionWatcher.Dispose();
         _updateTimer.Stop();
         _updateCts.Cancel();
         _updateTimer.Dispose();

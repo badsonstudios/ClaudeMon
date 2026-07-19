@@ -424,6 +424,92 @@ public class UsageMonitorTests : IDisposable
         Assert.Equal(1, occurrences);
     }
 
+    [Fact]
+    public async Task Resume_TriggersImmediatePoll()
+    {
+        var credPath = WriteCredentialFile();
+        var handler = new MockHttpHandler(HttpStatusCode.OK, """
+        {"five_hour": {"utilization": 55.0, "resets_at": "2026-06-01T00:00:00Z"}}
+        """);
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        // Hour-long interval: any update that arrives must come from Resume's
+        // immediate poll, not a timer tick.
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1));
+
+        var updated = new TaskCompletionSource<UsageUpdatedEventArgs>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        monitor.UsageUpdated += (_, args) => updated.TrySetResult(args);
+
+        monitor.Resume();
+
+        var args = await updated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(MonitorStatus.Connected, args.Status);
+        Assert.Equal(55.0, monitor.LastUsage?.FiveHour?.UtilizationPct);
+    }
+
+    [Fact]
+    public async Task Pause_StopsTimerPolls()
+    {
+        var credPath = WriteCredentialFile();
+        var handler = new CountingHttpHandler("""
+        {"five_hour": {"utilization": 5.0, "resets_at": "2026-06-01T00:00:00Z"}}
+        """);
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromMilliseconds(30));
+
+        monitor.Start();
+
+        // Wait until the timer has demonstrably ticked at least once past the
+        // initial Start() poll, then pause.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (handler.CallCount < 2 && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        Assert.True(handler.CallCount >= 2, "timer never ticked");
+
+        monitor.Pause();
+        // Ticks queued before Pause can still land arbitrarily late on a starved
+        // runner (Timer.Stop doesn't wait for dispatched Elapsed callbacks), so
+        // wait for the count to hold still across consecutive samples before
+        // asserting silence over several would-be intervals.
+        var countAfterPause = handler.CallCount;
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+            var current = handler.CallCount;
+            if (current == countAfterPause) break;
+            countAfterPause = current;
+        }
+        await Task.Delay(300);
+
+        Assert.Equal(countAfterPause, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task Pause_DuringInFlightPoll_PollCompletesWithoutFault()
+    {
+        var credPath = WriteCredentialFile();
+        var handler = new GatedHttpHandler("""
+        {"five_hour": {"utilization": 21.0, "resets_at": "2026-06-01T00:00:00Z"}}
+        """);
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1));
+
+        // Start a poll and hold it at the API call, then pause mid-flight
+        // (the lock-while-polling case).
+        var poll = monitor.RefreshNowAsync();
+        await handler.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        monitor.Pause();
+        handler.Release.TrySetResult();
+        await poll.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // The in-flight poll drained normally and its result still landed.
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+        Assert.Equal(21.0, monitor.LastUsage?.FiveHour?.UtilizationPct);
+    }
+
     private sealed class MockHttpHandler : HttpMessageHandler
     {
         private HttpStatusCode _statusCode;
@@ -507,6 +593,54 @@ public class UsageMonitorTests : IDisposable
             {
                 Content = new StringContent(_usageResponse),
             });
+        }
+    }
+
+    private sealed class CountingHttpHandler : HttpMessageHandler
+    {
+        private readonly string _responseBody;
+        private int _callCount;
+
+        public CountingHttpHandler(string responseBody) => _responseBody = responseBody;
+
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _callCount);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_responseBody),
+            });
+        }
+    }
+
+    /// <summary>
+    /// Signals <see cref="Entered"/> when the usage call arrives, then holds the
+    /// response until the test sets <see cref="Release"/> — lets a test act (e.g.
+    /// Pause) while a poll is verifiably in flight.
+    /// </summary>
+    private sealed class GatedHttpHandler : HttpMessageHandler
+    {
+        private readonly string _responseBody;
+
+        public GatedHttpHandler(string responseBody) => _responseBody = responseBody;
+
+        public TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_responseBody),
+            };
         }
     }
 

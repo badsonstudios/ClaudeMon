@@ -3,6 +3,17 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.18.1] - 2026-07-18
+
+### Fixed
+- **Dialogs open on the primary monitor** — the update prompt (popped by a background
+  timer) appeared on whichever monitor the mouse cursor happened to be on; all app dialogs
+  (update, download, About, Settings) now always open centered on the primary monitor,
+  where the tray lives. (#88)
+- **"View release notes" opens the full releases page** — the update dialog's link now goes
+  to the releases index (all versions, newest first) instead of the single offered release,
+  so nothing is missed when several versions ship between updates. (#89)
+
 ## [0.18.0] - 2026-07-18
 
 ### Changed

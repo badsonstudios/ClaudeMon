@@ -15,6 +15,18 @@ public sealed record LimitRow(
     LimitSeverity Severity);
 
 /// <summary>
+/// One weekly quota bucket to run alerts against (issue #98). <see cref="Key"/> is a stable
+/// identity across polls — the bucket's kind, or its model for a per-model cap — so the
+/// fired/hysteresis state follows the right bucket even as percentages and tightness ranking
+/// change. <see cref="Noun"/> is how the alert text names it ("7-day", "Fable weekly").
+/// </summary>
+public sealed record WeeklyAlertTarget(
+    string Key,
+    string Noun,
+    UsageBucket Bucket,
+    LimitSeverity Severity);
+
+/// <summary>
 /// Pure presentation logic for the usage API's <c>limits[]</c> array: turns a
 /// <see cref="UsageResponse"/> into the list of rows the flyout and tray tooltip display.
 /// Kept free of UI dependencies so the row-building rules are unit-testable.
@@ -24,6 +36,10 @@ public static class LimitDisplay
     private const string SessionKind = "session";
     private const string WeeklyAllKind = "weekly_all";
     private const string WeeklyScopedKind = "weekly_scoped";
+    // The limits' "group" values that mark a bucket as weekly, for kinds not yet recognized.
+    // The live API sends "weekly"; "seven_day" is accepted too because earlier payloads (and
+    // the parsing fixtures written from them) used it — cheap insurance either way.
+    private static readonly string[] WeeklyGroups = ["weekly", "seven_day"];
 
     private const int FiveHourSegments = 5;
     private const int SevenDaySegments = 7;
@@ -42,24 +58,7 @@ public static class LimitDisplay
         if (limits is null || limits.Count == 0)
             return BuildLegacyRows(usage);
 
-        // De-dup exact (kind, scope) repeats, keeping the higher percent. Two weekly_scoped
-        // entries for *different* models are distinct buckets, not duplicates.
-        var deduped = new List<UsageLimit>();
-        var indexByKey = new Dictionary<(string Kind, string Scope), int>();
-        foreach (var limit in limits)
-        {
-            var key = (Normalize(limit.Kind), Normalize(limit.Scope?.Model?.DisplayName));
-            if (indexByKey.TryGetValue(key, out var existing))
-            {
-                if ((limit.Percent ?? 0) > (deduped[existing].Percent ?? 0))
-                    deduped[existing] = limit;
-            }
-            else
-            {
-                indexByKey[key] = deduped.Count;
-                deduped.Add(limit);
-            }
-        }
+        var deduped = Dedup(limits);
 
         // Session first, overall weekly second, scoped weeklies tightest-first, then unknown
         // kinds in API order.
@@ -82,6 +81,115 @@ public static class LimitDisplay
             .OrderByDescending(l => l.Percent ?? 0)
             .FirstOrDefault();
 
+    /// <summary>
+    /// The weekly (7-day) buckets alerts should run against: the overall weekly plus every
+    /// per-model cap (issue #98). The source mirrors <see cref="BuildRows"/> exactly — from
+    /// <c>limits[]</c> when it's present, otherwise the legacy <c>seven_day</c> field — so
+    /// alerting and the flyout can never disagree about which buckets exist. Crucially, a
+    /// real payload carries the overall weekly BOTH as <c>seven_day</c> and as a
+    /// <c>weekly_all</c> limit; taking only one source is what stops it double-alerting.
+    ///
+    /// The session/5-hour bucket is deliberately absent: those alerts are pace-aware and keep
+    /// running off <see cref="UsageResponse.FiveHour"/>.
+    ///
+    /// <c>is_active</c> is deliberately NOT used to filter: the live API reports the overall
+    /// weekly as inactive while it is plainly in force, so gating alerts on that flag would
+    /// silence the very alert this app has always had. <see cref="BuildRows"/> renders inactive
+    /// caps for the same reason — a nearly-exhausted cap matters whatever the flag says.
+    /// </summary>
+    public static IReadOnlyList<WeeklyAlertTarget> WeeklyAlertTargets(UsageResponse usage)
+    {
+        var limits = usage.Limits;
+        if (limits is null || limits.Count == 0)
+        {
+            return usage.SevenDay is { } sevenDay
+                ? [new WeeklyAlertTarget(WeeklyAllKind, "7-day", sevenDay, LimitSeverity.Normal)]
+                : Array.Empty<WeeklyAlertTarget>();
+        }
+
+        var targets = new List<WeeklyAlertTarget>();
+        foreach (var limit in Dedup(limits))
+        {
+            var kind = Normalize(limit.Kind);
+            var scopeName = limit.Scope?.Model?.DisplayName;
+
+            switch (Rank(kind))
+            {
+                case WeeklyAllRank:
+                    targets.Add(new WeeklyAlertTarget(
+                        WeeklyAllKind, "7-day", limit.ToBucket(), limit.SeverityLevel));
+                    break;
+
+                case ScopedRank:
+                    // Keyed by the normalized model — an unnamed cap keys on the empty string,
+                    // which no display name can produce, so it can't collide with a real model.
+                    var model = string.IsNullOrWhiteSpace(scopeName) ? "model" : scopeName.Trim();
+                    targets.Add(new WeeklyAlertTarget(
+                        $"scoped:{Normalize(scopeName)}", $"{model} weekly",
+                        limit.ToBucket(), limit.SeverityLevel));
+                    break;
+
+                case UnknownRank when IsWeeklyGroup(Normalize(limit.Group)):
+                    // A weekly-group kind this code doesn't know yet still gets alerts —
+                    // the same future-proofing GenericRow gives it in the flyout. The scope is
+                    // part of the key because Dedup keys on (kind, scope): two such limits can
+                    // share a kind and differ only by scope, and must not share alert state.
+                    targets.Add(new WeeklyAlertTarget(
+                        $"kind:{kind}:{Normalize(scopeName)}", UnknownWeeklyNoun(kind, scopeName),
+                        limit.ToBucket(), limit.SeverityLevel));
+                    break;
+            }
+        }
+
+        return targets;
+    }
+
+    // De-dup exact (kind, scope) repeats, keeping the higher percent. Two weekly_scoped
+    // entries for *different* models are distinct buckets, not duplicates.
+    private static List<UsageLimit> Dedup(IReadOnlyList<UsageLimit> limits)
+    {
+        var deduped = new List<UsageLimit>();
+        var indexByKey = new Dictionary<(string Kind, string Scope), int>();
+        foreach (var limit in limits)
+        {
+            var key = (Normalize(limit.Kind), Normalize(limit.Scope?.Model?.DisplayName));
+            if (indexByKey.TryGetValue(key, out var existing))
+            {
+                if ((limit.Percent ?? 0) > (deduped[existing].Percent ?? 0))
+                    deduped[existing] = limit;
+            }
+            else
+            {
+                indexByKey[key] = deduped.Count;
+                deduped.Add(limit);
+            }
+        }
+
+        return deduped;
+    }
+
+    // How an unrecognized weekly-group bucket names itself in alert text: its scope model
+    // if it has one, else the kind's residual after the group prefix ("seven_day_cowork"
+    // → "Cowork weekly"), else just the plain weekly noun.
+    private static string UnknownWeeklyNoun(string kind, string? scopeName)
+    {
+        if (!string.IsNullOrWhiteSpace(scopeName))
+            return $"{scopeName.Trim()} weekly";
+
+        foreach (var group in WeeklyGroups)
+        {
+            if (kind.StartsWith(group + "_", StringComparison.Ordinal)
+                && Humanize(kind[(group.Length + 1)..]) is { } residual)
+            {
+                return $"{residual} weekly";
+            }
+        }
+
+        return "7-day";
+    }
+
+    private static bool IsWeeklyGroup(string group) => WeeklyGroups.Contains(group);
+
     /// <summary>Distinct limit kinds this code doesn't recognize — the log-once feed.</summary>
     public static IEnumerable<string> UnknownKinds(UsageResponse usage)
         => (usage.Limits ?? Array.Empty<UsageLimit>())
@@ -100,6 +208,7 @@ public static class LimitDisplay
         return rows;
     }
 
+    private const int WeeklyAllRank = 1;
     private const int ScopedRank = 2;
     private const int UnknownRank = 3;
 
@@ -108,7 +217,7 @@ public static class LimitDisplay
     private static int Rank(string kind) => kind switch
     {
         SessionKind => 0,
-        WeeklyAllKind => 1,
+        WeeklyAllKind => WeeklyAllRank,
         WeeklyScopedKind => ScopedRank,
         _ => UnknownRank,
     };
@@ -142,7 +251,10 @@ public static class LimitDisplay
 
         var (label, window, segments) = group switch
         {
-            "seven_day" or WeeklyAllKind => ("7-day", (TimeSpan?)UsageWindows.SevenDay, SevenDaySegments),
+            // Any weekly group (the live API's "weekly", or the older "seven_day") gets the
+            // 7-day window so an unrecognized weekly kind still draws pace visuals.
+            _ when IsWeeklyGroup(group) || group == WeeklyAllKind
+                => ("7-day", (TimeSpan?)UsageWindows.SevenDay, SevenDaySegments),
             SessionKind or "five_hour" => ("5-hour", UsageWindows.FiveHour, FiveHourSegments),
             _ => (Humanize(group) ?? Humanize(kind) ?? "Limit", null, 0),
         };

@@ -216,6 +216,176 @@ public class LimitDisplayTests
             new UsageResponse(null, null)));
     }
 
+    [Fact]
+    public void BuildRows_UnknownKindInLiveWeeklyGroup_GetsSevenDayVisuals()
+    {
+        // The live API's weekly group is "weekly"; an unrecognized kind in it should still draw
+        // the 7-day window and segments rather than falling back to a windowless generic row.
+        var rows = LimitDisplay.BuildRows(WithLimits(Limit("weekly_beta", 60, group: "weekly")));
+
+        var row = Assert.Single(rows);
+        Assert.Equal(UsageWindows.SevenDay, row.Window);
+        Assert.Equal(7, row.Segments);
+        Assert.StartsWith("7-day", row.Label);
+    }
+
+    // ================================================================
+    // WeeklyAlertTargets (issue #98)
+    // ================================================================
+
+    [Fact]
+    public void WeeklyAlertTargets_NoLimitsArray_UsesLegacySevenDayOnly()
+    {
+        var usage = new UsageResponse(new UsageBucket(20, Reset), new UsageBucket(45, Reset));
+
+        var target = Assert.Single(LimitDisplay.WeeklyAlertTargets(usage));
+
+        Assert.Equal("weekly_all", target.Key);
+        Assert.Equal("7-day", target.Noun);
+        Assert.Equal(45, target.Bucket.UtilizationPct);
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_NoWeeklyDataAtAll_IsEmpty()
+    {
+        Assert.Empty(LimitDisplay.WeeklyAlertTargets(new UsageResponse(new UsageBucket(20, Reset), null)));
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_LimitsPresent_IgnoresLegacySevenDaySoOverallIsNotDoubled()
+    {
+        // The response carries the overall weekly twice — top-level seven_day (10) and
+        // weekly_all (77). Exactly one overall target must come out, sourced from limits[].
+        var usage = WithLimits(Limit("weekly_all", 77));
+
+        var target = Assert.Single(LimitDisplay.WeeklyAlertTargets(usage));
+
+        Assert.Equal("weekly_all", target.Key);
+        Assert.Equal(77, target.Bucket.UtilizationPct);
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_ScopedCaps_KeyedByModelWithNamedNoun()
+    {
+        var targets = LimitDisplay.WeeklyAlertTargets(WithLimits(
+            Limit("weekly_all", 40),
+            Limit("weekly_scoped", 84, displayName: "Fable"),
+            Limit("weekly_scoped", 60, displayName: "Opus")));
+
+        Assert.Equal(3, targets.Count);
+        var fable = Assert.Single(targets, t => t.Key == "scoped:fable");
+        Assert.Equal("Fable weekly", fable.Noun);
+        Assert.Equal(84, fable.Bucket.UtilizationPct);
+        Assert.Contains(targets, t => t.Key == "scoped:opus");
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_SessionIsExcluded()
+    {
+        // The 5-hour alerts own the session bucket; including it here would double-drive them.
+        var targets = LimitDisplay.WeeklyAlertTargets(WithLimits(
+            Limit("session", 95, group: "session"),
+            Limit("weekly_all", 40)));
+
+        Assert.Equal(new[] { "weekly_all" }, targets.Select(t => t.Key));
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_InactiveCapsIncluded()
+    {
+        // The live API marks the overall weekly is_active=false while it is plainly in force,
+        // so the flag can't gate alerting (BuildRows renders inactive caps for the same reason).
+        var targets = LimitDisplay.WeeklyAlertTargets(WithLimits(
+            Limit("weekly_all", 40, isActive: false),
+            Limit("weekly_scoped", 95, displayName: "Fable", isActive: false)));
+
+        Assert.Equal(2, targets.Count);
+    }
+
+    [Theory]
+    [InlineData("weekly")]      // what the live API sends
+    [InlineData("seven_day")]   // older payloads / parsing fixtures
+    public void WeeklyAlertTargets_UnknownKind_RecognizedInEitherWeeklyGroup(string group)
+    {
+        var target = Assert.Single(LimitDisplay.WeeklyAlertTargets(
+            WithLimits(Limit($"{group}_cowork", 60, group: group))));
+
+        Assert.StartsWith($"kind:{group}_cowork", target.Key);
+        Assert.Equal("Cowork weekly", target.Noun);
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_CarriesApiSeverity()
+    {
+        var target = Assert.Single(LimitDisplay.WeeklyAlertTargets(WithLimits(
+            Limit("weekly_scoped", 60, severity: "critical", displayName: "Fable"))));
+
+        Assert.Equal(LimitSeverity.Critical, target.Severity);
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_UnknownWeeklyGroupKind_IsIncluded()
+    {
+        var target = Assert.Single(LimitDisplay.WeeklyAlertTargets(
+            WithLimits(Limit("seven_day_cowork", 60))));
+
+        Assert.StartsWith("kind:seven_day_cowork", target.Key);
+        Assert.Equal("Cowork weekly", target.Noun);
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_UnknownNonWeeklyKind_IsExcluded()
+    {
+        // No reliable weekly semantics — the flyout still renders it generically.
+        Assert.Empty(LimitDisplay.WeeklyAlertTargets(
+            WithLimits(Limit("monthly_thing", 60, group: "monthly"))));
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_DuplicateEntries_DedupedKeepingHigher()
+    {
+        var targets = LimitDisplay.WeeklyAlertTargets(WithLimits(
+            Limit("weekly_scoped", 40, displayName: "Fable"),
+            Limit("weekly_scoped", 84, displayName: "Fable")));
+
+        var target = Assert.Single(targets);
+        Assert.Equal(84, target.Bucket.UtilizationPct);
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_ScopedWithoutModelName_FallsBackToGenericIdentity()
+    {
+        var target = Assert.Single(LimitDisplay.WeeklyAlertTargets(
+            WithLimits(Limit("weekly_scoped", 60))));
+
+        // Keyed on the empty name, which no real display name can produce — so a model
+        // literally called "Model" can't collide with the unnamed fallback.
+        Assert.Equal("scoped:", target.Key);
+        Assert.Equal("model weekly", target.Noun);
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_ModelNamedModel_DoesNotCollideWithUnnamedFallback()
+    {
+        var targets = LimitDisplay.WeeklyAlertTargets(WithLimits(
+            Limit("weekly_scoped", 60),
+            Limit("weekly_scoped", 70, displayName: "Model")));
+
+        Assert.Equal(2, targets.Select(t => t.Key).Distinct().Count());
+    }
+
+    [Fact]
+    public void WeeklyAlertTargets_UnknownKindsDifferingOnlyByScope_GetDistinctKeys()
+    {
+        // Dedup keys on (kind, scope), so both survive — they must not then share alert state.
+        var targets = LimitDisplay.WeeklyAlertTargets(WithLimits(
+            Limit("weekly_beta", 60, group: "weekly", displayName: "Fable"),
+            Limit("weekly_beta", 70, group: "weekly", displayName: "Opus")));
+
+        Assert.Equal(2, targets.Count);
+        Assert.Equal(2, targets.Select(t => t.Key).Distinct().Count());
+    }
+
     // ================================================================
     // UnknownKinds
     // ================================================================

@@ -75,6 +75,9 @@ internal sealed class UsageBreakdownForm : Form
         _heading = new Label
         {
             Text = "Usage & costs",
+            // Labels treat '&' as a mnemonic marker and swallow it — the
+            // heading rendered "Usage costs" without this.
+            UseMnemonic = false,
             AutoSize = true,
             Font = _headingFont,
             ForeColor = _theme.HeaderAccent,

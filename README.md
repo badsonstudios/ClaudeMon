@@ -56,7 +56,11 @@ Recent usage samples are recorded to `%LocalAppData%\ClaudeMon\history.json` to 
 
 ### Local cost estimates (from Claude Code logs)
 
-The flyout's `Today: ~$… · … tokens · ~$…/hr (est.)` line, the **Usage & costs** breakdown window, and the budget alerts are all computed from **Claude Code's own local transcripts** in `~/.claude/projects/**/*.jsonl` — the same source popular tools like ccusage read. ClaudeMon tails these files incrementally (only new bytes are read on each pass, so even a large history costs almost nothing after the first scan) and keeps small per-day, per-model, per-project totals for the last 30 days in `%LocalAppData%\ClaudeMon\local-usage.json`. Budget periods are your local calendar day and calendar week (Monday–Sunday).
+The flyout's `Today: ~$… · … tokens · ~$…/hr (est.)` line, the **Usage & costs** breakdown window, and the budget alerts are all computed from **Claude Code's own local transcripts** in `~/.claude/projects/**/*.jsonl` — the same source popular tools like ccusage read.
+
+![Usage & costs breakdown window](images/usage_costs.png)
+
+ClaudeMon tails these files incrementally (only new bytes are read on each pass, so even a large history costs almost nothing after the first scan) and keeps small per-day, per-model, per-project totals for the last 30 days in `%LocalAppData%\ClaudeMon\local-usage.json`. Budget periods are your local calendar day and calendar week (Monday–Sunday).
 
 **These numbers are estimates, not billing.** Keep in mind:
 

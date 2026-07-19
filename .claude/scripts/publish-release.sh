@@ -3,6 +3,9 @@
 #
 #   - Version comes from src/ClaudeMon/ClaudeMon.csproj <Version> (single source of truth).
 #   - Release notes are extracted from CHANGELOG.md for that version.
+#   - If older CHANGELOG.md versions were never published as GitHub releases (a release got
+#     skipped), their sections are rolled into this release's notes automatically, with a
+#     notice — so no shipped work is ever invisible on the releases page.
 #   - Attaches the built installer dist/ClaudeMon-Setup-<version>.exe when present, plus its
 #     SHA-256 checksum (<installer>.sha256, sha256sum format) — the in-app auto-updater
 #     refuses to run an installer it can't verify, so the checksum asset is required for
@@ -47,7 +50,33 @@ NOTES="$(awk -v ver="$VERSION" '
   inblock && index($0, "## ") == 1 { exit }
   inblock { print }
 ' "$CHANGELOG" | sed -E '/./,$!d')"   # strip leading blank lines
-[ -n "$NOTES" ] || NOTES="Release $TAG"
+if [ -z "$NOTES" ]; then
+  echo "error: CHANGELOG.md has no section for $VERSION — add one before publishing." >&2
+  echo "       (Publishing without notes creates an empty release the auto-updater will offer.)" >&2
+  exit 1
+fi
+
+# Safety net: roll up older changelog versions that were never published as releases.
+# Walk CHANGELOG.md versions older than this one (the file is newest-first) and collect
+# their sections until we hit the first version that already has a GitHub release.
+mapfile -t CL_VERSIONS < <(sed -n -E 's/^## \[([0-9]+\.[0-9]+\.[0-9]+)\].*/\1/p' "$CHANGELOG")
+rollup=""
+seen_current=0
+for v in "${CL_VERSIONS[@]}"; do
+  if [ "$v" = "$VERSION" ]; then seen_current=1; continue; fi
+  [ "$seen_current" -eq 1 ] || continue
+  gh release view "v$v" >/dev/null 2>&1 && break
+  echo "notice: changelog version $v was never published — rolling its notes into $TAG." >&2
+  section="$(awk -v ver="$v" '
+    index($0, "## [" ver "]") == 1 { inblock=1; next }
+    inblock && index($0, "## ") == 1 { exit }
+    inblock { print }
+  ' "$CHANGELOG" | sed -E '/./,$!d')"
+  rollup+=$'\n'"## $v (previously unpublished)"$'\n\n'"$section"$'\n'
+done
+if [ -n "$rollup" ]; then
+  NOTES="This release also rolls up previously unpublished changelog versions — their GitHub releases were never created; their notes are included below."$'\n\n'"$NOTES"$'\n\n'"---"$'\n'"$rollup"
+fi
 
 ASSET="$REPO_ROOT/dist/ClaudeMon-Setup-$VERSION.exe"
 

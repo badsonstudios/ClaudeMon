@@ -53,6 +53,14 @@ this folder). Pass an explicit path as the last argument to override.
   installer). The checksum asset is **required** for the in-app auto-updater — it refuses to
   run an installer it can't verify and falls back to opening the release page.
 - **Idempotent**: if a release for the version already exists, it does nothing.
+- **Rolls up skipped versions**: if older `CHANGELOG.md` versions were never published as
+  GitHub releases (a publish step got missed), their sections are automatically included in
+  this release's notes with a "previously unpublished" header, so no shipped work is
+  invisible on the releases page. It walks the changelog newest-first and stops at the
+  first version that already has a release.
+- **Refuses to publish without notes**: if `CHANGELOG.md` has no section for the current
+  version, the script errors out instead of creating an empty release (which the in-app
+  auto-updater would offer to users). Add the changelog entry first.
 - PowerShell: `.\publish-release.ps1 [-Target main] [-Draft]` · bash: `./publish-release.sh [--target main] [--draft]`
 - Release flow: `bump-version` → commit/push/PR → merge → `bash installer/build.sh` → `publish-release`.
 

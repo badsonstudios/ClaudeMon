@@ -9,22 +9,38 @@ internal enum UpdateDownloadOutcome
     /// <summary>Cancelled (button, Esc, or close box) — nothing to do. The default.</summary>
     Cancelled,
 
-    /// <summary>The installer downloaded and verified; <see cref="UpdateDownloadDialog.InstallerPath"/> is set.</summary>
-    Downloaded,
-
     /// <summary>The download or verification failed and the user dismissed the error.</summary>
     Failed,
 
     /// <summary>The download failed and the user chose the release-page fallback.</summary>
     OpenReleasePage,
+
+    /// <summary>
+    /// The installer was launched and is (as far as we know) installing. The normal end state:
+    /// the dialog usually never closes from this — the installer stops the process and the
+    /// window dies with it. Seen by the caller only on the safety-timeout or user-dismiss
+    /// exits, where the installer is still presumed running.
+    /// </summary>
+    Installing,
+
+    /// <summary>
+    /// The installer exited without installing (see TrayApplication.WatchInstallerProcess) —
+    /// the in-progress claim must be released.
+    /// </summary>
+    InstallerAborted,
 }
 
 /// <summary>
-/// Modal progress window for the in-app update download: runs
+/// Modal progress window for the in-app update: runs
 /// <see cref="UpdateInstaller.DownloadAndVerifyAsync"/> with a progress bar and Cancel, and on
-/// failure swaps to an error state offering the release page as the manual fallback. Like
-/// <see cref="UpdateAvailableDialog"/> it only collects an outcome — the caller launches the
-/// installer — and follows the same hand-scaled DPI/theme conventions.
+/// failure swaps to an error state offering the release page as the manual fallback. On
+/// success it does NOT close (issue #94 — a sub-second download made the window a barely
+/// visible flash, and the silent install that follows has no UI): it flips to an
+/// "Installing…" marquee state and invokes the caller's launch callback, then stays up until
+/// the installer stops the process — the window's disappearance IS the restart. Guards: a
+/// safety timeout closes it if the installer never kills us, and
+/// <see cref="InstallerExited"/> closes it when the installer aborts without installing.
+/// Follows the UpdateAvailableDialog hand-scaled DPI/theme conventions.
 /// </summary>
 internal sealed class UpdateDownloadDialog : Form
 {
@@ -59,21 +75,34 @@ internal sealed class UpdateDownloadDialog : Form
     private readonly UpdateInstaller _installer;
     private readonly string _installerUrl;
     private readonly string _checksumUrl;
+    private readonly string _version;
+    private readonly Func<string, bool> _launchInstaller;
     private readonly CancellationTokenSource _cts = new();
     private bool _finished;
 
+    // If the installer hasn't stopped this process within this window, something is wrong
+    // enough that holding a modal "Installing…" open forever helps nobody — close and let
+    // WatchInstallerProcess's abort handling (or the user) take it from there.
+    private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(2);
+    private System.Windows.Forms.Timer? _installTimeout;
+
     public UpdateDownloadOutcome Outcome { get; private set; } = UpdateDownloadOutcome.Cancelled;
 
-    /// <summary>Local path of the verified installer once <see cref="Outcome"/> is Downloaded.</summary>
-    public string? InstallerPath { get; private set; }
-
     /// <param name="version">The version being downloaded, already formatted (e.g. "0.13.0").</param>
+    /// <param name="launchInstaller">
+    /// Launches the verified installer at the given path, returning whether the process
+    /// started (TrayApplication.LaunchDownloadedInstaller). Invoked on the UI thread from
+    /// inside the modal pump when the download succeeds.
+    /// </param>
     public UpdateDownloadDialog(
-        UpdateInstaller installer, string installerUrl, string checksumUrl, string version)
+        UpdateInstaller installer, string installerUrl, string checksumUrl, string version,
+        Func<string, bool> launchInstaller)
     {
         _installer = installer;
         _installerUrl = installerUrl;
         _checksumUrl = checksumUrl;
+        _version = version;
+        _launchInstaller = launchInstaller;
 
         Text = "ClaudeMon update";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -209,9 +238,7 @@ internal sealed class UpdateDownloadDialog : Form
 
             if (result.InstallerPath is not null)
             {
-                InstallerPath = result.InstallerPath;
-                Outcome = UpdateDownloadOutcome.Downloaded;
-                Close();
+                BeginInstall(result.InstallerPath);
             }
             else
             {
@@ -229,6 +256,67 @@ internal sealed class UpdateDownloadDialog : Form
     }
 
     /// <summary>
+    /// Swaps to the installing state and hands the verified installer to the caller's
+    /// launcher, keeping the window up for continuous feedback: the installer stops this
+    /// process, so the window vanishing IS the restart. A launch failure falls into the
+    /// existing error state (the launcher itself already opened the release-page fallback).
+    /// Runs on the UI thread inside the modal pump.
+    /// </summary>
+    private void BeginInstall(string installerPath)
+    {
+        _heading.Text = $"Installing ClaudeMon v{_version}";
+        _status.Text = "ClaudeMon will close and restart itself in a moment…";
+        _progressBar.Style = ProgressBarStyle.Marquee;
+        // Nothing to cancel any more: the installer is (about to be) a separate process.
+        // Esc routes to this disabled button, so it goes inert too; the close box stays
+        // available but is harmless — dismissing the window doesn't touch the installer.
+        _cancelButton.Enabled = false;
+
+        if (!_launchInstaller(installerPath))
+        {
+            ShowLaunchFailure();
+            return;
+        }
+
+        Outcome = UpdateDownloadOutcome.Installing;
+        // Belt-and-braces: if the installer never stops this process (hung, blocked by AV
+        // before reaching the kill), don't hold a modal "Installing…" open forever.
+        _installTimeout = new System.Windows.Forms.Timer { Interval = (int)InstallTimeout.TotalMilliseconds };
+        _installTimeout.Tick += (_, _) => Close();
+        _installTimeout.Start();
+    }
+
+    /// <summary>
+    /// Called (on the UI thread) when the launched installer exited without installing —
+    /// flips the outcome so the caller releases its in-progress claim, and closes.
+    /// </summary>
+    public void InstallerExited()
+    {
+        if (IsDisposed || Outcome != UpdateDownloadOutcome.Installing)
+            return;
+        _installTimeout?.Stop();
+        Outcome = UpdateDownloadOutcome.InstallerAborted;
+        Close();
+    }
+
+    /// <summary>
+    /// The download and verify succeeded but the installer process couldn't be started.
+    /// Distinct from <see cref="ShowError"/>: "couldn't be downloaded" would be false here,
+    /// and the launcher's own failure path has already opened the release page — offering
+    /// an "Open release page" button too would open it twice.
+    /// </summary>
+    private void ShowLaunchFailure()
+    {
+        Outcome = UpdateDownloadOutcome.Failed;
+        _heading.Text = "The update couldn't be installed";
+        _status.Text = "The installer couldn't be started. The release page has been opened "
+            + "in your browser — you can install the update from there.";
+        _progressBar.Visible = false;
+        _cancelButton.Text = "Close";
+        _cancelButton.Enabled = true;
+    }
+
+    /// <summary>
     /// Swaps the dialog to its failure state: the progress bar goes away, the status explains,
     /// and the buttons become "Open release page" (the manual fallback) / "Close". The error
     /// detail is deliberately generic — the user can't act on an HTTP status, and the release
@@ -242,6 +330,7 @@ internal sealed class UpdateDownloadDialog : Form
         _progressBar.Visible = false;
         _openPageButton.Visible = true;
         _cancelButton.Text = "Close";
+        _cancelButton.Enabled = true; // BeginInstall disables it; the error state needs it back
         AcceptButton = _openPageButton;
     }
 
@@ -272,6 +361,7 @@ internal sealed class UpdateDownloadDialog : Form
         base.Dispose(disposing);
         if (disposing)
         {
+            _installTimeout?.Dispose();
             _cts.Dispose();
             _baseFont.Dispose();
             _headingFont.Dispose();

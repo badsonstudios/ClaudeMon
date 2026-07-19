@@ -3,6 +3,17 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.19.1] - 2026-07-19
+
+### Fixed
+- **Visible progress through the whole update** — on a fast connection the update download
+  finished in under a second, so the progress window was a barely-visible flash and the
+  silent install that followed showed nothing at all: dead air until ClaudeMon restarted.
+  The window now stays up after the download, switching to an **"Installing — ClaudeMon
+  will close and restart itself"** state with an activity bar, and disappears only when the
+  installer actually restarts the app — continuous feedback from click to relaunch. If the
+  installer can't start or aborts, the window says so instead of lingering. (#94)
+
 ## [0.19.0] - 2026-07-19
 
 ### Added

@@ -3,6 +3,14 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.17.0] - 2026-07-18
+
+### Added
+- **"View release notes" link in the update dialog** — the "new version available" window
+  now links to the offered release's GitHub page, so you can read what changed before
+  choosing Get / Ignore / Skip. The link opens your browser without closing the dialog.
+  (#84)
+
 ## [0.16.0] - 2026-07-18
 
 ### Added

@@ -27,7 +27,10 @@ ClaudeMon/
   `TrayTooltip` composes the tray hover text under the 127-char `NotifyIcon` cap — both pure
   and unit-tested, consumed by the UI layer.
 - **Services** (`Services/`) — `ClaudeApiClient` calls the Anthropic usage API;
-  `CredentialReader` loads the OAuth token from `~/.claude/.credentials.json`.
+  `CredentialReader` loads the OAuth token from `~/.claude/.credentials.json`;
+  `TokenRefresher` renews it; `UpdateChecker`/`UpdateInstaller` drive in-app updates;
+  `SessionEvents` wraps lock/unlock notifications; `BrowserLauncher` is the sole
+  http(s)-only gate for opening URLs in the browser; `Logger` writes the daily logs.
 - **Configuration** (`Configuration/`) — `ConfigManager` persists `AppSettings` as JSON and
   manages the "Start with Windows" registry entry.
 - **Models** (`Models/`) — immutable `record` types for settings and API payloads.

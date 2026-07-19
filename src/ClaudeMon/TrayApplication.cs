@@ -411,7 +411,8 @@ public sealed class TrayApplication : IDisposable
         _updateDialogOpen = true;
         try
         {
-            using var dialog = new UpdateAvailableDialog(FormatVersion(CurrentVersion), version);
+            using var dialog = new UpdateAvailableDialog(
+                FormatVersion(CurrentVersion), version, _updateUrl);
             dialog.ShowDialog();
 
             switch (dialog.Choice)
@@ -621,23 +622,10 @@ public sealed class TrayApplication : IDisposable
         }
     }
 
-    private void OpenUpdatePage()
-    {
-        // Only ever shell out to an http(s) URL (GitHub's release page), never an
-        // arbitrary scheme, even though the value comes from a trusted HTTPS response.
-        if (!Uri.TryCreate(_updateUrl, UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-            return;
-
-        try
-        {
-            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
-        }
-        catch
-        {
-            // Best-effort: if the shell can't open the URL there's nothing useful to do.
-        }
-    }
+    // Only ever shells out to an http(s) URL (GitHub's release page), never an arbitrary
+    // scheme — the guard lives in BrowserLauncher, shared with the update dialog's
+    // release-notes link.
+    private void OpenUpdatePage() => BrowserLauncher.TryOpenHttp(_updateUrl);
 
     private void OpenLogs()
     {

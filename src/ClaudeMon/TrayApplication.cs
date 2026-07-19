@@ -46,6 +46,7 @@ public sealed class TrayApplication : IDisposable
     private bool _settingsOpen;
     private bool _updateDialogOpen;
     private bool _aboutOpen;
+    private bool _breakdownOpen;
 
     // The download/install dialog while it's showing — WatchInstallerProcess closes it if
     // the installer aborts without installing, so an "Installing…" window can't linger.
@@ -91,6 +92,8 @@ public sealed class TrayApplication : IDisposable
             pricing: PricingTable.LoadEmbedded(_logger), logger: _logger);
         localUsageStore.Load();
         _localUsage = new LocalUsageMonitor(localUsageStore, _logger);
+        // Budget alerts (issue #74) re-evaluate after every transcript scan.
+        _localUsage.ScanCompleted += OnLocalScanCompleted;
 
         _apiClient = new ClaudeApiClient();
         _tokenRefresher = new TokenRefresher();
@@ -325,6 +328,9 @@ public sealed class TrayApplication : IDisposable
         var menu = new ContextMenuStrip();
         menu.Items.Add("Refresh Now", null, async (_, _) => await _monitor.RefreshNowAsync());
         menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
+        // The cost-breakdown window (issue #74): per-model / per-project tables
+        // from the local transcripts, with CSV export.
+        menu.Items.Add("Usage && costs...", null, (_, _) => ShowUsageBreakdown());
 
         // Snooze (issue #14): quiet the alert balloons for a while; polling and the
         // tray/taskbar readouts keep updating. The submenu's header doubles as the snoozed
@@ -801,6 +807,76 @@ public sealed class TrayApplication : IDisposable
             : "Snooze notifications";
         _resumeAlertsItem.Visible = snoozed;
         _resumeSeparator.Visible = snoozed;
+    }
+
+    private void ShowUsageBreakdown()
+    {
+        // Same stacking guard as ShowSettings/ShowAbout: an ownerless ShowDialog
+        // doesn't disable the tray menu, so the user could pile up copies.
+        if (_breakdownOpen)
+            return;
+
+        _breakdownOpen = true;
+        try
+        {
+            using var form = new UsageBreakdownForm(_localUsage, _logger);
+            form.ShowDialog();
+        }
+        finally
+        {
+            _breakdownOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// Budget check, run after every transcript scan (issue #74). Evaluation is
+    /// pure (<see cref="BudgetAlerts"/>); this handler owns the UI-thread
+    /// marshaling, the snooze/notifications gate, showing the balloons, and
+    /// persisting the once-per-period latch. While snoozed nothing latches, and
+    /// because period cost only grows, a crossed threshold still fires on the
+    /// first scan after the snooze expires.
+    /// </summary>
+    private void OnLocalScanCompleted(object? sender, EventArgs e)
+    {
+        if (_disposed) return;
+
+        _syncContext.Post(_ =>
+        {
+            if (_disposed) return;
+
+            var settings = _configManager.Settings;
+            if (!settings.Budgets.DailyEnabled && !settings.Budgets.WeeklyEnabled)
+                return;
+            if (!settings.Notifications.Enabled || settings.Notifications.IsSnoozed(DateTimeOffset.UtcNow))
+                return;
+
+            var totals = _localUsage.BudgetTotals();
+            if (totals is null)
+                return;
+
+            var (state, alerts) = BudgetAlerts.Evaluate(totals, settings.Budgets, settings.BudgetAlertState);
+
+            foreach (var alert in alerts)
+                _logger.Info($"Budget alert: {alert.Title} — {alert.Text}");
+
+            // NotifyIcon shows one balloon at a time — a second call replaces
+            // the first instantly. When daily and weekly cross on the same scan
+            // (both latch regardless), combine them so neither is lost.
+            if (alerts.Count == 1)
+            {
+                _notifyIcon.ShowBalloonTip(5000, alerts[0].Title, alerts[0].Text, alerts[0].Icon);
+            }
+            else if (alerts.Count > 1)
+            {
+                var worstIcon = alerts.Max(a => a.Icon);
+                var text = string.Join("\n", alerts.Select(a => a.Text));
+                _notifyIcon.ShowBalloonTip(5000, "Budget alerts", text, worstIcon);
+            }
+
+            // Runs on the UI thread (the _configManager.Update contract).
+            if (!Equals(state, settings.BudgetAlertState))
+                _configManager.Update(_configManager.Settings with { BudgetAlertState = state });
+        }, null);
     }
 
     private void ShowAbout()

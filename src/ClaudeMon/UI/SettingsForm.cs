@@ -35,6 +35,10 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _nearCapNumeric;
     private readonly NumericUpDown _sevenDayWarningNumeric;
     private readonly ToggleSwitch _notifyOnResetToggle;
+    private readonly ToggleSwitch _dailyBudgetToggle;
+    private readonly NumericUpDown _dailyCapNumeric;
+    private readonly ToggleSwitch _weeklyBudgetToggle;
+    private readonly NumericUpDown _weeklyCapNumeric;
     private readonly ToggleSwitch _taskbarToggle;
     private readonly ComboBox _styleCombo;
     private readonly ComboBox _barWidthCombo;
@@ -182,6 +186,17 @@ public sealed class SettingsForm : Form
         _nearCapNumeric = AddNumericRow("Critical alert near the limit at", 50, 100, indent: true, visible: AlertsOn);
         _sevenDayWarningNumeric = AddNumericRow("Weekly (7-day) warning at", 10, 100, indent: true, visible: AlertsOn);
         _notifyOnResetToggle = AddToggleRow("Notify when the limit resets", indent: true, visible: AlertsOn);
+        // Estimated-cost budgets (issue #74), computed from the local Claude Code
+        // transcripts. Caps are dollars, two decimals; sub-rows collapse with
+        // their toggle like the pace sensitivity row above.
+        _dailyBudgetToggle = AddToggleRow("Daily budget alert (est. cost)", indent: true, visible: AlertsOn);
+        _dailyCapNumeric = AddNumericRow("Daily cap", 1, 10_000,
+            indent: true, visible: () => AlertsOn() && _dailyBudgetToggle.Checked, suffix: "USD");
+        _dailyCapNumeric.DecimalPlaces = 2;
+        _weeklyBudgetToggle = AddToggleRow("Weekly budget alert (Mon–Sun)", indent: true, visible: AlertsOn);
+        _weeklyCapNumeric = AddNumericRow("Weekly cap", 1, 10_000,
+            indent: true, visible: () => AlertsOn() && _weeklyBudgetToggle.Checked, suffix: "USD");
+        _weeklyCapNumeric.DecimalPlaces = 2;
 
         // --- Taskbar tab ---
         _currentTab = 2;
@@ -395,6 +410,8 @@ public sealed class SettingsForm : Form
         _notificationsToggle.CheckedChanged += (_, _) => RelayoutLive();
         _checkForUpdatesToggle.CheckedChanged += (_, _) => RelayoutLive();
         _paceAlertsToggle.CheckedChanged += (_, _) => RelayoutLive();
+        _dailyBudgetToggle.CheckedChanged += (_, _) => RelayoutLive();
+        _weeklyBudgetToggle.CheckedChanged += (_, _) => RelayoutLive();
         _taskbarToggle.CheckedChanged += (_, _) =>
         {
             RelayoutLive();
@@ -475,6 +492,13 @@ public sealed class SettingsForm : Form
     private static decimal ClampToRange(NumericUpDown numeric, int value) =>
         Math.Clamp(value, (int)numeric.Minimum, (int)numeric.Maximum);
 
+    // Double overload for the dollar caps. NaN/infinity (a hand-edited config)
+    // coerces to the minimum rather than throwing in the decimal conversion.
+    private static decimal ClampToRange(NumericUpDown numeric, double value) =>
+        double.IsFinite(value)
+            ? Math.Clamp((decimal)Math.Clamp(value, -1e15, 1e15), numeric.Minimum, numeric.Maximum)
+            : numeric.Minimum;
+
     // Select the dropdown row whose paired enum value matches, falling back to the first.
     private static void SelectOption<T>(ComboBox combo, (string Text, T Value)[] options, T value)
     {
@@ -513,6 +537,10 @@ public sealed class SettingsForm : Form
         _nearCapNumeric.Value = ClampToRange(_nearCapNumeric, settings.AlertThresholds.NearCapWarning);
         _sevenDayWarningNumeric.Value = ClampToRange(_sevenDayWarningNumeric, settings.AlertThresholds.SevenDayWarning);
         _notifyOnResetToggle.Checked = settings.Notifications.NotifyOnReset;
+        _dailyBudgetToggle.Checked = settings.Budgets.DailyEnabled;
+        _dailyCapNumeric.Value = ClampToRange(_dailyCapNumeric, settings.Budgets.DailyCapUsd);
+        _weeklyBudgetToggle.Checked = settings.Budgets.WeeklyEnabled;
+        _weeklyCapNumeric.Value = ClampToRange(_weeklyCapNumeric, settings.Budgets.WeeklyCapUsd);
 
         _taskbarToggle.Checked = settings.TaskbarDisplay.Enabled;
         SelectOption(_styleCombo, StyleOptions, settings.TaskbarDisplay.Style);
@@ -559,10 +587,19 @@ public sealed class SettingsForm : Form
                 NearCapWarning = (int)_nearCapNumeric.Value,
                 SevenDayWarning = (int)_sevenDayWarningNumeric.Value,
             },
-            Notifications = new NotificationSettings
+            // `with` on the existing record, not `new` — a reconstruction would
+            // silently drop SnoozeUntil (an active snooze) on every settings save.
+            Notifications = _configManager.Settings.Notifications with
             {
                 Enabled = _notificationsToggle.Checked,
                 NotifyOnReset = _notifyOnResetToggle.Checked,
+            },
+            Budgets = new BudgetSettings
+            {
+                DailyEnabled = _dailyBudgetToggle.Checked,
+                DailyCapUsd = (double)_dailyCapNumeric.Value,
+                WeeklyEnabled = _weeklyBudgetToggle.Checked,
+                WeeklyCapUsd = (double)_weeklyCapNumeric.Value,
             },
             TaskbarDisplay = new TaskbarDisplaySettings
             {

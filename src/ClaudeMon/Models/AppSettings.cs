@@ -90,6 +90,20 @@ public record AppSettings
     [JsonPropertyName("notifications")]
     public NotificationSettings Notifications { get; init; } = new();
 
+    [JsonPropertyName("budgets")]
+    public BudgetSettings Budgets { get; init; } = new();
+
+    /// <summary>
+    /// The budget-alert latch: the highest ladder step already fired in the
+    /// current daily/weekly period, so each threshold alerts once per period
+    /// even across restarts. Internal state, not a user setting — kept
+    /// top-level (not inside <see cref="BudgetSettings"/>, which the Settings
+    /// dialog reconstructs on save) so the <c>with</c>-expression save
+    /// preserves it automatically.
+    /// </summary>
+    [JsonPropertyName("budgetAlertState")]
+    public BudgetAlertState? BudgetAlertState { get; init; }
+
     [JsonPropertyName("taskbarDisplay")]
     public TaskbarDisplaySettings TaskbarDisplay { get; init; } = new();
 
@@ -277,6 +291,38 @@ public record AlertThresholds
         _ => 1.5,
     };
 }
+
+/// <summary>
+/// Optional estimated-cost budgets (issue #74), checked against the local
+/// transcript aggregates. Caps stay configured while toggled off, so
+/// re-enabling doesn't lose the value. Daily = local calendar day; weekly =
+/// local calendar week, Monday through Sunday.
+/// </summary>
+public record BudgetSettings
+{
+    [JsonPropertyName("dailyEnabled")]
+    public bool DailyEnabled { get; init; }
+
+    [JsonPropertyName("dailyCapUsd")]
+    public double DailyCapUsd { get; init; } = 10.0;
+
+    [JsonPropertyName("weeklyEnabled")]
+    public bool WeeklyEnabled { get; init; }
+
+    [JsonPropertyName("weeklyCapUsd")]
+    public double WeeklyCapUsd { get; init; } = 50.0;
+}
+
+/// <summary>
+/// See <see cref="AppSettings.BudgetAlertState"/>. Period keys are
+/// "yyyy-MM-dd" (the day, and the week's Monday); FiredPct is the highest
+/// ladder step (0/50/80/95) already alerted in that period.
+/// </summary>
+public record BudgetAlertState(
+    [property: JsonPropertyName("day")] string? DailyPeriod,
+    [property: JsonPropertyName("dayPct")] int DailyFiredPct,
+    [property: JsonPropertyName("week")] string? WeeklyPeriod,
+    [property: JsonPropertyName("weekPct")] int WeeklyFiredPct);
 
 public record NotificationSettings
 {

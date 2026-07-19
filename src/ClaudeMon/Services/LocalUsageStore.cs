@@ -13,10 +13,12 @@ using ClaudeMon.Models;
 /// skipped without opening, so steady-state scans cost a directory walk plus
 /// whatever bytes were appended since the last tick.
 ///
-/// Memory is strictly bounded: per-day totals for the retention window, a
-/// ~48-hour dedupe-key map, one offset record per file, and an hour of
-/// burn-rate samples. Raw entries are never retained, and nothing beyond the
-/// usage numbers, model id, ids, and timestamp is materialized from a line.
+/// Memory is strictly bounded: per-(day, project, model) cells for the
+/// retention window, a ~48-hour dedupe-key map, one offset record per file,
+/// one learned path per live project, and an hour of burn-rate samples. Raw
+/// entries are never retained, and nothing beyond the usage numbers, model id,
+/// ids, timestamp, and the session's working-directory path (for the project
+/// display name) is materialized from a line — never message content.
 ///
 /// Thread-safe: scans run on a timer thread while the UI thread takes
 /// snapshots. When the transcript directory doesn't exist the store degrades
@@ -24,8 +26,14 @@ using ClaudeMon.Models;
 /// </summary>
 public sealed class LocalUsageStore
 {
-    /// <summary>How far back aggregates are kept (and old files fast-forwarded past).</summary>
-    internal static readonly TimeSpan AggregateRetention = TimeSpan.FromDays(7);
+    /// <summary>
+    /// How far back aggregates are kept (and old files fast-forwarded past).
+    /// 30 days so the breakdown window's longest timeframe is fully covered.
+    /// </summary>
+    internal static readonly TimeSpan AggregateRetention = TimeSpan.FromDays(30);
+
+    /// <summary>Project key for stray .jsonl files sitting directly in the projects root.</summary>
+    internal const string UnknownProject = "(unknown)";
 
     // Dedupe keys are only needed while their entries might be re-read (a
     // truncated file, a restart) — keeping ~2 days of ids protects everything
@@ -50,7 +58,11 @@ public sealed class LocalUsageStore
     private bool _available;
 
     private readonly Dictionary<string, FileScanState> _files = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, LocalDayTotals> _days = new(StringComparer.Ordinal);
+    // day "yyyy-MM-dd" (local) → cell "project|model" → totals. The flyout's
+    // today line sums a day's cells; the breakdown window slices them by axis.
+    private readonly Dictionary<string, Dictionary<string, LocalDayTotals>> _cells = new(StringComparer.Ordinal);
+    // project dir name → real cwd path learned from the transcripts (first seen wins).
+    private readonly Dictionary<string, string> _projectPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> _recentKeys = new(StringComparer.Ordinal);
     private readonly List<RecentCostSample> _recentCosts = new();
     private readonly HashSet<string> _loggedUnknownModels = new(StringComparer.OrdinalIgnoreCase);
@@ -88,8 +100,20 @@ public sealed class LocalUsageStore
                 if (cache is null)
                     return;
 
+                // Schema mismatch (including a phase-1 cache, which has no "v"
+                // field and deserializes as 0): discard and rebuild from the
+                // transcripts — old flat totals can't be split into cells.
+                if (cache.Version != LocalUsageCacheFile.CurrentVersion)
+                {
+                    _logger?.Info(
+                        $"Local usage cache is format v{cache.Version} (current v{LocalUsageCacheFile.CurrentVersion}) — rescanning transcripts.");
+                    return;
+                }
+
                 foreach (var (path, state) in cache.Files) _files[path] = state;
-                foreach (var (day, totals) in cache.Days) _days[day] = totals;
+                foreach (var (day, cells) in cache.Cells)
+                    _cells[day] = new Dictionary<string, LocalDayTotals>(cells, StringComparer.Ordinal);
+                foreach (var (project, cwd) in cache.ProjectPaths) _projectPaths[project] = cwd;
                 foreach (var (key, ts) in cache.RecentDedupeKeys) _recentKeys[key] = ts;
                 _recentCosts.AddRange(cache.RecentCosts);
             }
@@ -98,7 +122,8 @@ public sealed class LocalUsageStore
                 // Corrupt or unreadable cache is non-critical — start fresh and
                 // rebuild the retention window from the transcripts themselves.
                 _files.Clear();
-                _days.Clear();
+                _cells.Clear();
+                _projectPaths.Clear();
                 _recentKeys.Clear();
                 _recentCosts.Clear();
             }
@@ -140,7 +165,8 @@ public sealed class LocalUsageStore
                 return null;
 
             var now = _clock();
-            if (!_days.TryGetValue(DayKey(now), out var day) || day.TotalTokens == 0)
+            var day = SumDayLocked(DayKey(now));
+            if (day.TotalTokens == 0)
                 return null;
 
             // Deliberately divides by the full window even when activity only
@@ -170,6 +196,155 @@ public sealed class LocalUsageStore
                 day.CacheWriteTokens,
                 day.CacheReadTokens,
                 burnRate);
+        }
+    }
+
+    /// <summary>
+    /// Per-model and per-project tables for a timeframe ending today, or null
+    /// when the feature is unavailable. Empty tables (no usage in range) are
+    /// returned as empty lists — the UI shows its empty state.
+    /// </summary>
+    public LocalUsageBreakdown? Breakdown(BreakdownTimeframe timeframe)
+    {
+        lock (_lock)
+        {
+            if (!_available)
+                return null;
+
+            var today = DateOnly.FromDateTime(_clock().ToLocalTime().DateTime);
+            var days = timeframe switch
+            {
+                BreakdownTimeframe.Today => 1,
+                BreakdownTimeframe.SevenDays => 7,
+                _ => 30,
+            };
+            var from = today.AddDays(-(days - 1));
+
+            var byModel = new Dictionary<string, BreakdownRow>(StringComparer.OrdinalIgnoreCase);
+            var byProject = new Dictionary<string, BreakdownRow>(StringComparer.OrdinalIgnoreCase);
+            var totals = EmptyRow("total", "Total");
+
+            for (var date = from; date <= today; date = date.AddDays(1))
+            {
+                if (!_cells.TryGetValue(DayKeyOf(date), out var dayCells))
+                    continue;
+
+                foreach (var (cellKey, cell) in dayCells)
+                {
+                    // Split on the separator directly: cell keys come verbatim
+                    // from the persisted cache, and a malformed one must not be
+                    // able to throw on the UI thread — it degrades to the
+                    // unknown project with the whole key as the model.
+                    var sep = cellKey.IndexOf('|');
+                    var project = sep < 0 ? UnknownProject : cellKey[..sep];
+                    var model = sep < 0 ? cellKey : cellKey[(sep + 1)..];
+
+                    Fold(byModel, model, model, cell);
+                    Fold(byProject, project, ProjectDisplay.Resolve(project, _projectPaths), cell);
+                    totals = Add(totals, cell);
+                }
+            }
+
+            return new LocalUsageBreakdown(from, today, Sorted(byModel), Sorted(byProject), totals);
+        }
+    }
+
+    /// <summary>
+    /// The sums the budget alerts compare against their caps: today, and the
+    /// current local calendar week (Monday through today). Null when unavailable.
+    /// </summary>
+    public LocalBudgetTotals? BudgetTotals()
+    {
+        lock (_lock)
+        {
+            if (!_available)
+                return null;
+
+            var today = DateOnly.FromDateTime(_clock().ToLocalTime().DateTime);
+            // Monday-start week: DayOfWeek is Sunday=0, so shift to Monday=0.
+            var monday = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
+
+            var todayUsd = SumDayLocked(DayKeyOf(today)).CostUsd;
+            var weekUsd = 0.0;
+            for (var date = monday; date <= today; date = date.AddDays(1))
+                weekUsd += SumDayLocked(DayKeyOf(date)).CostUsd;
+
+            return new LocalBudgetTotals(today, todayUsd, monday, weekUsd);
+        }
+    }
+
+    // Caller holds _lock. One day's cells summed into a flat total (the
+    // phase-1 per-day shape the flyout snapshot still consumes).
+    private LocalDayTotals SumDayLocked(string dayKey)
+    {
+        var sum = new LocalDayTotals();
+        if (!_cells.TryGetValue(dayKey, out var dayCells))
+            return sum;
+
+        foreach (var cell in dayCells.Values)
+            sum = Add(sum, cell);
+        return sum;
+    }
+
+    private static LocalDayTotals Add(LocalDayTotals a, LocalDayTotals b) => a with
+    {
+        InputTokens = a.InputTokens + b.InputTokens,
+        OutputTokens = a.OutputTokens + b.OutputTokens,
+        CacheWriteTokens = a.CacheWriteTokens + b.CacheWriteTokens,
+        CacheReadTokens = a.CacheReadTokens + b.CacheReadTokens,
+        CostUsd = a.CostUsd + b.CostUsd,
+        HasUnpricedModels = a.HasUnpricedModels || b.HasUnpricedModels,
+    };
+
+    private static BreakdownRow EmptyRow(string key, string display) =>
+        new(key, display, 0, 0, 0, 0, 0.0, false);
+
+    private static BreakdownRow Add(BreakdownRow row, LocalDayTotals cell) => row with
+    {
+        InputTokens = row.InputTokens + cell.InputTokens,
+        OutputTokens = row.OutputTokens + cell.OutputTokens,
+        CacheWriteTokens = row.CacheWriteTokens + cell.CacheWriteTokens,
+        CacheReadTokens = row.CacheReadTokens + cell.CacheReadTokens,
+        CostUsd = row.CostUsd + cell.CostUsd,
+        HasUnpricedModels = row.HasUnpricedModels || cell.HasUnpricedModels,
+    };
+
+    private static void Fold(
+        Dictionary<string, BreakdownRow> rows, string key, string display, LocalDayTotals cell)
+    {
+        if (!rows.TryGetValue(key, out var row))
+            row = EmptyRow(key, display);
+        rows[key] = Add(row, cell);
+    }
+
+    private static IReadOnlyList<BreakdownRow> Sorted(Dictionary<string, BreakdownRow> rows) =>
+        rows.Values
+            .OrderByDescending(r => r.CostUsd)
+            .ThenByDescending(r => r.TotalTokens)
+            .ToList();
+
+    // "project|model" → "project". The model id can't contain '|', and the
+    // project half is everything before the LAST separator would be wrong if a
+    // directory name contained '|' — it can't on Windows, so first '|' is safe.
+    private static string ProjectOfCellKey(string cellKey)
+    {
+        var sep = cellKey.IndexOf('|');
+        return sep < 0 ? UnknownProject : cellKey[..sep];
+    }
+
+    // First path segment under the projects root, e.g. "c--Projects-ClaudeMon";
+    // files sitting directly in the root map to the unknown bucket.
+    private string ProjectKeyFor(string path)
+    {
+        try
+        {
+            var relative = Path.GetRelativePath(_projectsDir, path);
+            var sep = relative.IndexOfAny(['\\', '/']);
+            return sep > 0 ? relative[..sep] : UnknownProject;
+        }
+        catch (ArgumentException)
+        {
+            return UnknownProject;
         }
     }
 
@@ -292,10 +467,11 @@ public sealed class LocalUsageStore
             });
         }
 
+        var project = ProjectKeyFor(path);
         lock (_lock)
         {
             foreach (var entry in entries)
-                Ingest(entry, now);
+                Ingest(entry, project, now);
 
             // Only report a change when one happened. A file whose tail is a
             // permanently unterminated line is re-tailed every tick (cheap),
@@ -353,9 +529,10 @@ public sealed class LocalUsageStore
         return consumed;
     }
 
-    // Caller holds _lock. Dedupes, prices, and folds one entry into the
-    // aggregates. Entries outside the retention window are ignored entirely.
-    private void Ingest(LocalUsageEntry entry, DateTimeOffset now)
+    // Caller holds _lock. Dedupes, prices, and folds one entry into its
+    // (day, project, model) cell. Entries outside the retention window are
+    // ignored entirely.
+    private void Ingest(LocalUsageEntry entry, string project, DateTimeOffset now)
     {
         if (entry.Timestamp < now - AggregateRetention)
             return;
@@ -368,17 +545,26 @@ public sealed class LocalUsageStore
         if (pricing is null && _loggedUnknownModels.Add(entry.Model))
             _logger?.Info($"Local usage: no pricing for model '{entry.Model}' — tokens counted, cost shown as unavailable.");
 
+        if (entry.Cwd is { Length: > 0 } cwd)
+            _projectPaths.TryAdd(project, cwd);
+
         var dayKey = DayKey(entry.Timestamp);
-        _days.TryGetValue(dayKey, out var day);
-        day ??= new LocalDayTotals();
-        _days[dayKey] = day with
+        if (!_cells.TryGetValue(dayKey, out var dayCells))
+            _cells[dayKey] = dayCells = new Dictionary<string, LocalDayTotals>(StringComparer.Ordinal);
+
+        // Normalized model in the key so dated/decorated variants merge into
+        // one breakdown row. '|' can't appear in a directory name or model id.
+        var cellKey = $"{project}|{PricingTable.Normalize(entry.Model)}";
+        dayCells.TryGetValue(cellKey, out var cell);
+        cell ??= new LocalDayTotals();
+        dayCells[cellKey] = cell with
         {
-            InputTokens = day.InputTokens + entry.InputTokens,
-            OutputTokens = day.OutputTokens + entry.OutputTokens,
-            CacheWriteTokens = day.CacheWriteTokens + entry.CacheWrite5mTokens + entry.CacheWrite1hTokens,
-            CacheReadTokens = day.CacheReadTokens + entry.CacheReadTokens,
-            CostUsd = day.CostUsd + cost,
-            HasUnpricedModels = day.HasUnpricedModels || pricing is null,
+            InputTokens = cell.InputTokens + entry.InputTokens,
+            OutputTokens = cell.OutputTokens + entry.OutputTokens,
+            CacheWriteTokens = cell.CacheWriteTokens + entry.CacheWrite5mTokens + entry.CacheWrite1hTokens,
+            CacheReadTokens = cell.CacheReadTokens + entry.CacheReadTokens,
+            CostUsd = cell.CostUsd + cost,
+            HasUnpricedModels = cell.HasUnpricedModels || pricing is null,
         };
 
         if (entry.Timestamp >= now - RecentCostRetention)
@@ -392,13 +578,31 @@ public sealed class LocalUsageStore
         var changed = false;
 
         var minDayKey = DayKey(now - AggregateRetention);
-        var oldDays = _days.Keys
+        var oldDays = _cells.Keys
             .Where(k => string.CompareOrdinal(k, minDayKey) < 0)
             .ToList();
         foreach (var key in oldDays)
         {
-            _days.Remove(key);
+            _cells.Remove(key);
             changed = true;
+        }
+
+        // Drop learned paths for projects no longer present in any cell, so
+        // the map can't grow forever across long-dead projects. Paths only die
+        // when a day's cells are pruned, so this runs at most once a day.
+        if (oldDays.Count > 0)
+        {
+            var liveProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var dayCells in _cells.Values)
+                foreach (var cellKey in dayCells.Keys)
+                    liveProjects.Add(ProjectOfCellKey(cellKey));
+
+            var deadPaths = _projectPaths.Keys.Where(p => !liveProjects.Contains(p)).ToList();
+            foreach (var project in deadPaths)
+            {
+                _projectPaths.Remove(project);
+                changed = true;
+            }
         }
 
         var keyCutoff = now - DedupeKeyRetention;
@@ -431,8 +635,12 @@ public sealed class LocalUsageStore
 
             var cache = new LocalUsageCacheFile
             {
+                Version = LocalUsageCacheFile.CurrentVersion,
                 Files = new Dictionary<string, FileScanState>(_files),
-                Days = new Dictionary<string, LocalDayTotals>(_days),
+                Cells = _cells.ToDictionary(
+                    kv => kv.Key,
+                    kv => new Dictionary<string, LocalDayTotals>(kv.Value, StringComparer.Ordinal)),
+                ProjectPaths = new Dictionary<string, string>(_projectPaths),
                 RecentDedupeKeys = new Dictionary<string, DateTimeOffset>(_recentKeys),
                 RecentCosts = new List<RecentCostSample>(_recentCosts),
             };
@@ -453,6 +661,9 @@ public sealed class LocalUsageStore
     // the wall clock, not UTC.
     private static string DayKey(DateTimeOffset timestamp) =>
         timestamp.ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    private static string DayKeyOf(DateOnly date) =>
+        date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     private static string GetDefaultProjectsDir() =>
         Path.Combine(

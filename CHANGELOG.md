@@ -3,6 +3,27 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.21.0] - 2026-07-19
+
+### Added
+- **Usage & costs window** — a new tray-menu item opens per-model and per-project
+  cost/token breakdown tables for Today / last 7 days / last 30 days, computed locally
+  from the Claude Code transcripts (cache reads/writes shown separately, dated model
+  variants merged into one row, totals row included), with **CSV export**. Projects are
+  shown by their real working-directory path, read from the transcripts' `cwd` field and
+  cached locally alongside the usage aggregates — still nothing beyond usage numbers,
+  model ids, timestamps, and that path is ever read, and nothing leaves the machine. (#74)
+- **Budget alerts** — optional daily and weekly (Mon–Sun) estimated-cost caps in
+  Settings → Alerts, with graduated notifications at 50% / 80% / 95%. Each threshold
+  fires once per period (surviving restarts), a jump across several thresholds fires only
+  the highest, both budgets crossing at once combine into one balloon, and snoozed alerts
+  defer rather than vanish. Clearly labeled as estimates at API list prices — ClaudeMon
+  monitors, it never blocks anything. (#74)
+
+### Fixed
+- **Settings save no longer clears an active snooze** — saving any settings change while
+  notifications were snoozed silently discarded the snooze; it now survives. (#74)
+
 ## [0.20.0] - 2026-07-19
 
 ### Added

@@ -44,8 +44,21 @@ public sealed class LocalUsageMonitor : IDisposable
         _ = Task.Run(ScanSafely);
     }
 
+    /// <summary>
+    /// Raised on the scan thread after each successful scan pass — the budget
+    /// check hangs off this so it re-evaluates as soon as new usage lands.
+    /// Subscribers marshal to the UI thread themselves.
+    /// </summary>
+    public event EventHandler? ScanCompleted;
+
     /// <summary>Today's totals for the UI (null = nothing to show).</summary>
     public LocalUsageSnapshot? Snapshot() => _store.Snapshot();
+
+    /// <summary>The breakdown tables for the Usage &amp; costs window.</summary>
+    public LocalUsageBreakdown? Breakdown(BreakdownTimeframe timeframe) => _store.Breakdown(timeframe);
+
+    /// <summary>The sums the budget alerts compare against their caps.</summary>
+    public LocalBudgetTotals? BudgetTotals() => _store.BudgetTotals();
 
     // Timer/Task.Run entry point: nothing may escape a fire-and-forget callback.
     private void ScanSafely()
@@ -57,6 +70,18 @@ public sealed class LocalUsageMonitor : IDisposable
         catch (Exception ex)
         {
             _logger?.Warn($"Local usage scan failed: {ex.Message}");
+            return;
+        }
+
+        // Outside the scan's try so a subscriber fault isn't logged as a scan
+        // failure — and it still must not escape this fire-and-forget callback.
+        try
+        {
+            ScanCompleted?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            _logger?.Warn($"Local usage scan-completed handler failed: {ex.Message}");
         }
     }
 

@@ -164,6 +164,19 @@ public class JsonlUsageParserTests
     }
 
     [Fact]
+    public void ParseLine_Cwd_ExtractedWhenPresentNullWhenAbsent()
+    {
+        var withCwd = JsonlUsageParser.ParseLine(
+            """{"type":"assistant","requestId":"req_1","cwd":"C:\\Projects\\ClaudeMon","timestamp":"2026-07-19T14:30:00Z","message":{"id":"msg_1","model":"claude-fable-5","usage":{"input_tokens":5}}}""");
+        Assert.NotNull(withCwd);
+        Assert.Equal(@"C:\Projects\ClaudeMon", withCwd.Cwd);
+
+        var without = JsonlUsageParser.ParseLine(AssistantLine());
+        Assert.NotNull(without);
+        Assert.Null(without.Cwd);
+    }
+
+    [Fact]
     public void ParseLine_MissingTokenFields_DefaultToZero()
     {
         var line = """{"type":"assistant","requestId":"req_1","timestamp":"2026-07-19T14:30:00Z","message":{"id":"msg_1","model":"claude-fable-5","usage":{"output_tokens":7}}}""";

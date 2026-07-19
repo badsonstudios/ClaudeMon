@@ -35,9 +35,13 @@ ClaudeMon/
   http(s)-only gate for opening URLs in the browser; `Logger` writes the daily logs;
   `LocalUsageStore` + `JsonlUsageParser` incrementally scan Claude Code's transcripts
   (`~/.claude/projects/**/*.jsonl`, per-file byte offsets, dedupe by message/request id)
-  into per-day cost/token aggregates cached at `%LocalAppData%\ClaudeMon\local-usage.json`;
-  `PricingTable` resolves model ids against the embedded `Resources/model-pricing.json`
-  (list prices; unknown models stay unpriced rather than guessing).
+  into per-(day, project, model) cost/token cells (30-day retention, versioned cache at
+  `%LocalAppData%\ClaudeMon\local-usage.json`) serving the flyout snapshot, the breakdown
+  queries, and the budget totals; `PricingTable` resolves model ids against the embedded
+  `Resources/model-pricing.json` (list prices; unknown models stay unpriced rather than
+  guessing); `BreakdownCsv`/`ProjectDisplay` are pure helpers for the Usage & costs
+  window; `Monitoring/BudgetAlerts` is the pure 50/80/95% once-per-period alert ladder
+  (state persisted in `AppSettings.BudgetAlertState`).
 - **Configuration** (`Configuration/`) — `ConfigManager` persists `AppSettings` as JSON and
   manages the "Start with Windows" registry entry.
 - **Models** (`Models/`) — immutable `record` types for settings and API payloads.

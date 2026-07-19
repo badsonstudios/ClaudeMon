@@ -35,6 +35,9 @@ public sealed class TrayApplication : IDisposable
     private readonly CancellationTokenSource _updateCts = new();
     private readonly ToolStripMenuItem _downloadUpdateItem =
         new("Download update...") { Visible = false };
+    private readonly ToolStripMenuItem _snoozeMenu = new("Snooze notifications");
+    private readonly ToolStripMenuItem _resumeAlertsItem = new("Resume alerts") { Visible = false };
+    private readonly ToolStripSeparator _resumeSeparator = new() { Visible = false };
     private string? _updateUrl;
     private string? _latestVersion;
     private string? _installerUrl;
@@ -307,6 +310,20 @@ public sealed class TrayApplication : IDisposable
         var menu = new ContextMenuStrip();
         menu.Items.Add("Refresh Now", null, async (_, _) => await _monitor.RefreshNowAsync());
         menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
+
+        // Snooze (issue #14): quiet the alert balloons for a while; polling and the
+        // tray/taskbar readouts keep updating. The submenu's header doubles as the snoozed
+        // indicator ("Alerts snoozed — 42m left"), refreshed each time the menu opens.
+        _snoozeMenu.DropDownItems.Add("For 30 minutes", null, (_, _) => Snooze(TimeSpan.FromMinutes(30)));
+        _snoozeMenu.DropDownItems.Add("For 1 hour", null, (_, _) => Snooze(TimeSpan.FromHours(1)));
+        _snoozeMenu.DropDownItems.Add("For 3 hours", null, (_, _) => Snooze(TimeSpan.FromHours(3)));
+        _snoozeMenu.DropDownItems.Add("Until next 5-hour reset", null, (_, _) => SnoozeUntilReset());
+        _snoozeMenu.DropDownItems.Add(_resumeSeparator);
+        _resumeAlertsItem.Click += (_, _) => ResumeAlerts();
+        _snoozeMenu.DropDownItems.Add(_resumeAlertsItem);
+        menu.Items.Add(_snoozeMenu);
+        menu.Opening += (_, _) => UpdateSnoozeMenu();
+
         menu.Items.Add(new ToolStripSeparator());
 
         // Hidden until a check finds a newer release; clicking downloads + installs it silently
@@ -714,6 +731,50 @@ public sealed class TrayApplication : IDisposable
         {
             _settingsOpen = false;
         }
+    }
+
+    /// <summary>Snoozes alert notifications for <paramref name="duration"/> from now.</summary>
+    private void Snooze(TimeSpan duration) => SetSnooze(DateTimeOffset.UtcNow + duration);
+
+    /// <summary>
+    /// Snoozes until the 5-hour window resets. When the reset time is unknown or already past
+    /// (idle window), falls back to 5 hours from now. For an idle window that's a floor, not
+    /// exact — the next window starts on first API use, so the real reset can be later and
+    /// the snooze simply expires early (#61 made idle a first-class state).
+    /// </summary>
+    private void SnoozeUntilReset()
+    {
+        var resetAt = _monitor.LastUsage?.FiveHour?.ResetAt;
+        var now = DateTimeOffset.UtcNow;
+        SetSnooze(resetAt is { } r && r > now ? r : now + TimeSpan.FromHours(5));
+    }
+
+    private void ResumeAlerts() => SetSnooze(null);
+
+    // Menu clicks run on the UI thread (the _configManager.Update contract).
+    private void SetSnooze(DateTimeOffset? until)
+    {
+        _configManager.Update(_configManager.Settings with
+        {
+            Notifications = _configManager.Settings.Notifications with { SnoozeUntil = until },
+        });
+        _logger.Info(until is { } u
+            ? $"Alerts snoozed until {u:u}."
+            : "Alerts resumed.");
+    }
+
+    // The submenu header doubles as the snoozed-state indicator; recomputed on each menu
+    // open (no timer needed — the text only matters while the menu is visible).
+    private void UpdateSnoozeMenu()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var until = _configManager.Settings.Notifications.SnoozeUntil;
+        var snoozed = _configManager.Settings.Notifications.IsSnoozed(now);
+        _snoozeMenu.Text = snoozed
+            ? $"Alerts snoozed — {IconRenderer.FormatTaskbarCountdown(until - now)} left"
+            : "Snooze notifications";
+        _resumeAlertsItem.Visible = snoozed;
+        _resumeSeparator.Visible = snoozed;
     }
 
     private void ShowAbout()

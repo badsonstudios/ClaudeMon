@@ -3,6 +3,16 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.19.0] - 2026-07-19
+
+### Added
+- **Snooze notifications** — a new tray-menu item quiets alert balloons for 30 minutes,
+  1 hour, 3 hours, or until the next 5-hour reset, for when you're deliberately burning
+  quota and don't need reminding. Polling and the tray/taskbar readouts keep updating; the
+  menu shows the active snooze ("Alerts snoozed — 42m left") with a **Resume alerts** item;
+  the snooze survives an app restart. Alerts aren't lost, just held: if you're still past a
+  threshold when the snooze ends, that alert fires on the next poll. (#14)
+
 ## [0.18.1] - 2026-07-18
 
 ### Fixed

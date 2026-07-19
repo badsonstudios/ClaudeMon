@@ -1,6 +1,7 @@
 namespace ClaudeMon.UI;
 
 using System.Drawing;
+using ClaudeMon.Services;
 
 /// <summary>The user's choice in <see cref="UpdateAvailableDialog"/>.</summary>
 internal enum UpdateDialogChoice
@@ -32,7 +33,8 @@ internal sealed class UpdateAvailableDialog : Form
     private const int ContentRight = ClientWidth - Pad;
     private const int HeadingTop = 20;
     private const int VersionsTop = 52;
-    private const int ButtonsTop = 94;
+    private const int NotesTop = 76;
+    private const int ButtonsTop = 118;
     private const int ButtonHeight = 30;
     private const int ButtonGap = 8;
     private const int GetButtonWidth = 118;
@@ -48,6 +50,7 @@ internal sealed class UpdateAvailableDialog : Form
 
     private readonly Label _heading;
     private readonly Label _versions;
+    private readonly LinkLabel _releaseNotesLink;
     private readonly Button _getButton;
     private readonly Button _ignoreButton;
     private readonly Button _skipButton;
@@ -56,7 +59,12 @@ internal sealed class UpdateAvailableDialog : Form
 
     /// <param name="currentVersion">The running version, already formatted (e.g. "0.11.0").</param>
     /// <param name="latestVersion">The newer release's version, already formatted.</param>
-    public UpdateAvailableDialog(string currentVersion, string latestVersion)
+    /// <param name="releaseNotesUrl">
+    /// The offered release's GitHub page (callers pass their already-fallbacked URL). The
+    /// "View release notes" link opens it without closing the dialog; a null/non-http(s)
+    /// value hides the link rather than leaving a dead control.
+    /// </param>
+    public UpdateAvailableDialog(string currentVersion, string latestVersion, string? releaseNotesUrl)
     {
         Text = "ClaudeMon update";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -90,6 +98,20 @@ internal sealed class UpdateAvailableDialog : Form
         };
         Controls.Add(_versions);
 
+        _releaseNotesLink = new LinkLabel
+        {
+            Text = "View release notes",
+            AutoSize = true,
+            LinkBehavior = LinkBehavior.HoverUnderline,
+            LinkColor = _theme.HeaderAccent,
+            ActiveLinkColor = _theme.HeaderAccent,
+            Visible = BrowserLauncher.IsSafeHttpUrl(releaseNotesUrl, out _),
+        };
+        // Opens the browser but deliberately leaves the dialog up (no DialogResult), so the
+        // user can read what changed and then still choose Get / Ignore / Skip.
+        _releaseNotesLink.LinkClicked += (_, _) => BrowserLauncher.TryOpenHttp(releaseNotesUrl);
+        Controls.Add(_releaseNotesLink);
+
         _getButton = MakeButton("Get the update", UpdateDialogChoice.GetUpdate);
         _ignoreButton = MakeButton("Ignore", UpdateDialogChoice.Ignore);
         _skipButton = MakeButton("Skip this version", UpdateDialogChoice.SkipVersion);
@@ -97,6 +119,16 @@ internal sealed class UpdateAvailableDialog : Form
         AcceptButton = _getButton;
         // Esc / the close box mean "not now", never "skip": Choice already defaults to Ignore.
         CancelButton = _ignoreButton;
+
+        // The link was added to Controls first, which would make it the initial focus; keep
+        // the tab order (and therefore first focus) on the action buttons, as before the link
+        // existed. The link stays mouse-only in practice: with an AcceptButton set, Enter is
+        // claimed by the form before a focused LinkLabel ever sees it (inherent WinForms
+        // AcceptButton + LinkLabel interaction).
+        _getButton.TabIndex = 0;
+        _ignoreButton.TabIndex = 1;
+        _skipButton.TabIndex = 2;
+        _releaseNotesLink.TabIndex = 3;
 
         Relayout();
     }
@@ -126,6 +158,7 @@ internal sealed class UpdateAvailableDialog : Form
     {
         _heading.Location = new Point(Sc(Pad), Sc(HeadingTop));
         _versions.Location = new Point(Sc(Pad), Sc(VersionsTop));
+        _releaseNotesLink.Location = new Point(Sc(Pad), Sc(NotesTop));
 
         var buttonsTop = Sc(ButtonsTop);
         _skipButton.SetBounds(Sc(Pad), buttonsTop, Sc(SkipButtonWidth), Sc(ButtonHeight));

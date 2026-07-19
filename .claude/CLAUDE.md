@@ -193,6 +193,9 @@ Add new hooks here as the project needs them.
   `<Version>`) — bump it with `.claude/scripts/bump-version`, not by editing the `.iss`.
 - **Releases:** notes live in `CHANGELOG.md` (one section per `vX.Y.Z`, newest first).
   Release flow: `bump-version <X.Y.Z>` → add a `CHANGELOG.md` entry → commit/push/PR →
-  **after merge** `bash installer/build.sh` → `.claude/scripts/publish-release` (creates
-  the GitHub release from the changelog and attaches the installer). Done at the end of
-  `/commit-push-pr` when the version changed.
+  **after merge, and only if the user explicitly says yes when asked**:
+  `bash installer/build.sh` → `.claude/scripts/publish-release` (creates the GitHub
+  release from the changelog and attaches the installer). **Releases are never
+  automatic** — a "do everything" approval covers commit/push/PR/merge only; ask about
+  publishing as its own question every time. Unpublished versions are fine;
+  `publish-release` rolls up skipped versions' notes when it eventually runs.

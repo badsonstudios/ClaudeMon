@@ -196,6 +196,13 @@ public record TaskbarDisplaySettings
     public bool ShowTimeToReset { get; init; }
 
     /// <summary>
+    /// Render the percentage elements with a trailing <c>%</c> (<c>42% · 17%</c> instead of
+    /// <c>42 · 17</c>). Off by default so the compact original look is unchanged.
+    /// </summary>
+    [JsonPropertyName("showPercentSign")]
+    public bool ShowPercentSign { get; init; }
+
+    /// <summary>
     /// The pre-0.11 "Also show 7-day usage" toggle, kept only so configs written by 0.10.x can
     /// be migrated: <c>true</c> maps to <see cref="ShowWeeklyUsage"/> in
     /// <see cref="Configuration.ConfigManager.Load"/>, which then clears this so the next save

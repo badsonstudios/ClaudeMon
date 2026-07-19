@@ -103,7 +103,8 @@ public sealed class TrayApplication : IDisposable
         _taskbarOverlay.SetDisplay(
             _configManager.Settings.TaskbarDisplay.ShowSessionUsage,
             _configManager.Settings.TaskbarDisplay.ShowWeeklyUsage,
-            _configManager.Settings.TaskbarDisplay.ShowTimeToReset);
+            _configManager.Settings.TaskbarDisplay.ShowTimeToReset,
+            _configManager.Settings.TaskbarDisplay.ShowPercentSign);
         _taskbarOverlay.SetHorizontalOffsets(
             _configManager.Settings.TaskbarDisplay.PrimaryHorizontalOffset,
             _configManager.Settings.TaskbarDisplay.HorizontalOffset);
@@ -692,7 +693,8 @@ public sealed class TrayApplication : IDisposable
                 _taskbarOverlay.SetDisplay(
                     _configManager.Settings.TaskbarDisplay.ShowSessionUsage,
                     _configManager.Settings.TaskbarDisplay.ShowWeeklyUsage,
-                    _configManager.Settings.TaskbarDisplay.ShowTimeToReset);
+                    _configManager.Settings.TaskbarDisplay.ShowTimeToReset,
+                    _configManager.Settings.TaskbarDisplay.ShowPercentSign);
                 _taskbarOverlay.SetHorizontalOffsets(
                     _configManager.Settings.TaskbarDisplay.PrimaryHorizontalOffset,
                     _configManager.Settings.TaskbarDisplay.HorizontalOffset);

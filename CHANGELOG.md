@@ -3,6 +3,16 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.16.0] - 2026-07-18
+
+### Added
+- **Optional % sign on the taskbar readout** — a new "Show % sign after percentages"
+  setting renders the taskbar percentages as `42% · 17%` instead of the compact default
+  `42 · 17`, so the readout is self-explanatory at a glance. Off by default (the current
+  look is unchanged); Numbers style only, with the live overlay preview reflecting the
+  toggle immediately. The waiting/sign-in markers and the reset countdown are unaffected.
+  (#80)
+
 ## [0.15.0] - 2026-07-18
 
 ### Added

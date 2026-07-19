@@ -45,6 +45,10 @@ public sealed class TrayApplication : IDisposable
     private bool _settingsOpen;
     private bool _updateDialogOpen;
     private bool _aboutOpen;
+
+    // The download/install dialog while it's showing — WatchInstallerProcess closes it if
+    // the installer aborts without installing, so an "Installing…" window can't linger.
+    private UpdateDownloadDialog? _openDownloadDialog;
     private bool _updateInstallInProgress;
     private volatile bool _disposed;
 
@@ -480,30 +484,36 @@ public sealed class TrayApplication : IDisposable
             return;
         }
 
+        // The dialog launches the installer itself (issue #94: it stays open through the
+        // install for continuous feedback — normally the installer kills this process and
+        // ShowDialog never returns). The version is captured for the callback because
+        // ShowDialog pumps messages: a check could complete mid-download and overwrite
+        // _latestVersion.
+        var version = _latestVersion;
+        using var dialog = new UpdateDownloadDialog(
+            _updateInstaller, _installerUrl, _checksumUrl, version,
+            path => LaunchDownloadedInstaller(path, version));
+        _openDownloadDialog = dialog;
+
         // Claim the flag for the whole dialog + launch: ShowDialog pumps messages, so a 24h
-        // timer tick can fire mid-download and must see the install as in progress.
+        // timer tick can fire mid-download and must see the install as in progress. Set
+        // AFTER construction — the ctor doesn't pump, and claiming before it would leak the
+        // claim if the ctor threw (it's outside the try so `using` can reach the finally).
         _updateInstallInProgress = true;
-        var installerRunning = false;
         try
         {
-            using var dialog = new UpdateDownloadDialog(
-                _updateInstaller, _installerUrl, _checksumUrl, _latestVersion);
             dialog.ShowDialog();
 
-            switch (dialog.Outcome)
-            {
-                case UpdateDownloadOutcome.Downloaded:
-                    installerRunning = LaunchDownloadedInstaller(dialog.InstallerPath!, _latestVersion);
-                    break;
-                case UpdateDownloadOutcome.OpenReleasePage:
-                    OpenUpdatePage();
-                    break;
-            }
+            if (dialog.Outcome == UpdateDownloadOutcome.OpenReleasePage)
+                OpenUpdatePage();
         }
         finally
         {
-            // Keep the claim only while an installer is actually running.
-            _updateInstallInProgress = installerRunning;
+            // Reaching here at all means the installer did NOT kill us: keep the claim only
+            // when it's still presumed running (safety-timeout / user-dismissed exits).
+            // Aborted, cancelled, and failed exits — and a ShowDialog exception — release it.
+            _updateInstallInProgress = dialog.Outcome == UpdateDownloadOutcome.Installing;
+            _openDownloadDialog = null;
         }
     }
 
@@ -605,6 +615,11 @@ public sealed class TrayApplication : IDisposable
                 _updateInstallInProgress = false;
                 if (_configManager.Settings.PendingUpdateVersion == version)
                     _configManager.Update(_configManager.Settings with { PendingUpdateVersion = null });
+
+                // If the interactive "Installing…" window is still up, take it down with the
+                // failure balloon (flipping its outcome so the modal caller releases the
+                // in-progress claim rather than re-asserting it).
+                _openDownloadDialog?.InstallerExited();
 
                 _logger.Warn($"Update installer exited (code {exitCode}) without installing.");
                 _notifyIcon.ShowBalloonTip(

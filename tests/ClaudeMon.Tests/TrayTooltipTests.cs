@@ -98,6 +98,36 @@ public class TrayTooltipTests
         }
     }
 
+    // Expired-and-idle 5-hour window (past resets_at, issue #61): the tooltip shows the
+    // distinct idle state instead of a perpetual "resetting...".
+    [Fact]
+    public void Compose_ExpiredIdleWindow_ShowsIdleState()
+    {
+        var usage = new UsageResponse(
+            new UsageBucket(50.0, DateTimeOffset.UtcNow.AddHours(-3)),
+            new UsageBucket(45.0, WeeklyReset));
+
+        var text = TrayTooltip.Compose(usage, MonitorStatus.Connected);
+
+        Assert.Contains("5hr: 50% (resets on next use)", text);
+        Assert.DoesNotContain("resetting", text);
+    }
+
+    // The scoped line strips the "resets " prefix from countdowns, so the idle text renders
+    // as "(on next use)" — pin that coupling to the exact idle string.
+    [Fact]
+    public void Compose_ExpiredScopedWeekly_StripsPrefixFromIdleState()
+    {
+        var expired = new UsageLimit(
+            "weekly_scoped", "seven_day", 84, "normal",
+            DateTimeOffset.UtcNow.AddHours(-3), false,
+            new LimitScope(new LimitScopeModel("Fable")));
+
+        var text = TrayTooltip.Compose(Usage(expired), MonitorStatus.Connected);
+
+        Assert.Contains("Fable wk: 84% (on next use)", text);
+    }
+
     [Fact]
     public void Compose_MissingLegacyBuckets_OmitsThoseLines()
     {

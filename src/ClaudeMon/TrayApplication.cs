@@ -245,7 +245,7 @@ public sealed class TrayApplication : IDisposable
         // The latest history sample is recorded from the same poll that set
         // LastUsage, so this current pct and the slope's newest point agree.
         // Pass a null reset when ResetAt is unknown (TimeUntilReset returns Zero
-        // for both "unknown" and "already resetting" — only the latter should
+        // for both "unknown" and "expired/idle" — only the latter should
         // suppress the estimate).
         TimeSpan? timeToLimit = null;
         var fiveHour = _monitor.LastUsage?.FiveHour;

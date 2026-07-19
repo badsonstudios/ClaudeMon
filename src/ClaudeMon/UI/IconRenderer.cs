@@ -194,8 +194,10 @@ public static class IconRenderer
 
     /// <summary>
     /// Compact countdown for the time-left-to-reset element: <c>1h 23m</c>, <c>45m</c> under an
-    /// hour, <c>now</c> once the reset is due, and the neutral <c>—</c> when the reset time is
-    /// unknown (null). Minute-granular so the overlay repaints at most once a minute.
+    /// hour, <c>idle</c> once the reset time is past (the window ended and no new one has
+    /// started — see <see cref="Models.UsageBucket.IsExpired"/>), and the neutral <c>—</c> when
+    /// the reset time is unknown (null). Minute-granular so the overlay repaints at most once
+    /// a minute.
     /// </summary>
     internal static string FormatTaskbarCountdown(TimeSpan? remaining)
     {
@@ -204,7 +206,7 @@ public static class IconRenderer
 
         var r = remaining.Value;
         if (r <= TimeSpan.Zero)
-            return "now";
+            return "idle";
 
         // Ceiling on minutes so the display doesn't read "0m"/"1h 0m" for most of a minute and
         // agrees with intuition ("59m 30s left" reads as 1h).

@@ -3,6 +3,19 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.14.1] - 2026-07-18
+
+### Fixed
+- **Idle 5-hour window no longer shows "resetting..." indefinitely** — when the 5-hour
+  window expires and no new Claude usage starts, the API keeps reporting the old, past reset
+  time; ClaudeMon rendered that as a perpetual "resetting..." (tooltip/flyout) and "now"
+  (taskbar countdown), looking broken for hours. An expired idle window is now shown as a
+  distinct state: **"resets on next use"** in the tooltip and flyout, **"idle"** in the
+  taskbar countdown. The pace coloring and the bar's time tick no longer treat an idle
+  window as 100% elapsed (they fall back to absolute-level coloring with no tick), and pace
+  alerts don't fire on the stale reading. A genuine reset moment may briefly show the same
+  state and recovers on the next poll. (#61)
+
 ## [0.14.0] - 2026-07-18
 
 ### Added

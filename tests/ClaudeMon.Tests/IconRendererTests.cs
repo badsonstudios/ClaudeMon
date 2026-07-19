@@ -206,8 +206,8 @@ public class IconRendererTests
     [InlineData(45, "45m")]        // under an hour drops the hour part
     [InlineData(0.5, "1m")]        // sub-minute remainders round up, never "0m"
     [InlineData(59.5, "1h 0m")]    // ceiling can roll into the next hour
-    [InlineData(0, "now")]         // due
-    [InlineData(-5, "now")]        // past due (clock skew) reads as due, not negative
+    [InlineData(0, "idle")]        // due: window over, no new one started yet
+    [InlineData(-5, "idle")]       // past due: expired-and-idle, not a perpetual "now"
     public void FormatTaskbarCountdown_FormatsCompactly(double minutes, string expected)
     {
         Assert.Equal(expected, IconRenderer.FormatTaskbarCountdown(TimeSpan.FromMinutes(minutes)));

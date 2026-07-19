@@ -88,24 +88,41 @@ public record UsageBucket(
     }
 
     /// <summary>
+    /// True when the window has ended and no new one has started: the API keeps returning the
+    /// old, past <c>resets_at</c> until new usage opens a window, so a past reset time means
+    /// "no active window" (idle), not "reset imminent". A null reset time is unknown, not expired.
+    /// </summary>
+    public bool IsExpired => ResetAt is { } resetAt && resetAt <= DateTimeOffset.UtcNow;
+
+    /// <summary>
     /// How far through a fixed reset window of length <paramref name="window"/> this bucket is:
-    /// 0 (just reset) → 1 (about to reset), or null when the reset time is unknown. Used to show
-    /// time-in-window against usage and to colour by pace.
+    /// 0 (just reset) → 1 (about to reset), or null when the reset time is unknown or the window
+    /// has expired (an idle window must not read as 100% elapsed). Used to show time-in-window
+    /// against usage and to colour by pace.
     /// </summary>
     public double? ElapsedFraction(TimeSpan window)
     {
         if (ResetAt is null || window <= TimeSpan.Zero)
             return null;
 
-        var elapsed = 1.0 - TimeUntilReset.TotalSeconds / window.TotalSeconds;
+        // Single clock sample (via TimeUntilReset) for both the expiry check and the fraction,
+        // so a reset landing between two reads can't slip an expired window through as 1.0.
+        var remaining = TimeUntilReset;
+        if (remaining <= TimeSpan.Zero)
+            return null;
+
+        var elapsed = 1.0 - remaining.TotalSeconds / window.TotalSeconds;
         return Math.Clamp(elapsed, 0.0, 1.0);
     }
 
     public string FormatResetCountdown()
     {
+        if (ResetAt is null)
+            return "—"; // unknown reset time
+
         var remaining = TimeUntilReset;
-        if (remaining == TimeSpan.Zero)
-            return "resetting...";
+        if (remaining <= TimeSpan.Zero)
+            return "resets on next use";
 
         if (remaining.TotalDays >= 1)
             return $"resets {(int)remaining.TotalDays}d {remaining.Hours}h";

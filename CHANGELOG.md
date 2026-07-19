@@ -3,6 +3,25 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.22.0] - 2026-07-19
+
+### Added
+- **Per-model weekly alerts** — the weekly warning now covers **every** weekly bucket the API
+  reports, not just the overall 7-day one. Max plans carry a separate weekly cap per model
+  (e.g. "Weekly (Fable)") that can run out *before* the overall weekly; until now ClaudeMon
+  showed those caps in the flyout but never alerted on them, so a model could lock out with no
+  warning. Each bucket is tracked independently — one alert never masks another, each fires
+  once per window and re-arms when that bucket resets — and escalates to a critical alert past
+  the near-cap percentage or when Anthropic itself flags the bucket critical. Reuses the
+  existing **Weekly (7-day) warning at** and **Critical alert near the limit at** settings; no
+  new options. (#98)
+
+### Fixed
+- **Simultaneous alerts are no longer lost** — Windows shows one balloon at a time, so when two
+  alerts fired on the same poll (say the pace warning and a weekly warning) only the last was
+  ever seen, while both were marked as already-alerted and never repeated. Alerts raised
+  together are now combined into a single notification. (#98)
+
 ## [0.21.0] - 2026-07-19
 
 ### Added

@@ -23,9 +23,12 @@ ClaudeMon/
   `FlyoutPanel` shows usage details, `SettingsForm` edits `AppSettings`.
 - **Monitoring** (`Monitoring/`) — `UsageMonitor` polls on an interval and surfaces usage;
   `LocalUsageMonitor` drives the local-transcript scanner on its own timer (same
-  Start/Pause/Resume shape); `AlertManager` decides when to notify (threshold vs.
-  progressive modes); `LimitDisplay` turns the API's `limits[]` buckets into display rows
-  (legacy 5h/7d fallback included), `TrayTooltip` composes the tray hover text under the
+  Start/Pause/Resume shape); `AlertManager` decides when to notify (pace-aware 5-hour alerts
+  plus per-bucket weekly alerts — overall and per-model — each with its own fired/hysteresis
+  state, all coalesced into one balloon per poll since `NotifyIcon` shows only one);
+  `LimitDisplay` turns the API's `limits[]` buckets into display rows and, via
+  `WeeklyAlertTargets`, into the weekly buckets `AlertManager` alerts on — one source for
+  both, so they can't disagree (legacy 5h/7d fallback included); `TrayTooltip` composes the tray hover text under the
   127-char `NotifyIcon` cap, and `LocalCostText` composes the flyout's "Today: ~$…" cost
   line — all pure and unit-tested, consumed by the UI layer.
 - **Services** (`Services/`) — `ClaudeApiClient` calls the Anthropic usage API;

@@ -59,37 +59,314 @@ public class AlertManagerTests : IDisposable
     private static UsageResponse Both(double fiveHourPct, double sevenDayPct, double elapsedFraction = 0.4) =>
         new(FiveHourBucket(fiveHourPct, elapsedFraction), new UsageBucket(sevenDayPct, DateTimeOffset.UtcNow.AddDays(3)));
 
+    // --- limits[] helpers (per-model weekly caps, issue #98) ---
+
+    private static UsageLimit WeeklyAll(double pct, string? severity = null, bool? isActive = true) =>
+        new("weekly_all", "weekly", pct, severity, DateTimeOffset.UtcNow.AddDays(3), isActive, null);
+
+    private static UsageLimit WeeklyScoped(
+        string? model, double? pct, string? severity = null, bool? isActive = true) =>
+        new("weekly_scoped", "weekly", pct, severity, DateTimeOffset.UtcNow.AddDays(2), isActive,
+            model is null ? null : new LimitScope(new LimitScopeModel(model)));
+
+    // A realistic multi-bucket response: the top-level fields the API always sends (the 5-hour
+    // at a quiet level so only weekly alerts fire) plus the limits[] array under test. Note the
+    // overall weekly is deliberately present BOTH as seven_day and as a weekly_all limit —
+    // that's the real payload shape, and the source of the double-alert risk #98 had to solve.
+    private static UsageResponse WithLimits(params UsageLimit[] limits) =>
+        new(FiveHourBucket(10, 0.4), new UsageBucket(60, DateTimeOffset.UtcNow.AddDays(3)), limits);
+
     // ================================================================
-    // limits[] must not change alerting (issue #67: display-only)
+    // Per-model weekly alerts (issue #98)
     // ================================================================
 
     [Fact]
-    public void Check_LimitsArrayPresent_FiresSameAlertsAsLegacyOnlyResponse()
+    public void Weekly_ScopedBucketOverThreshold_FiresWarningNamingTheModel()
     {
-        // A response carrying limits[] — including a critical scoped weekly — must fire exactly
-        // the alerts the equivalent legacy-only response fires. Per-bucket alerts are a separate
-        // ticket; severity is a display input only.
-        var legacy = Both(95, 50);
-        var withLimits = legacy with
+        _alertManager.Check(WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 84)), DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Equal("Weekly Usage Warning", alert.Title);
+        Assert.Equal(ToolTipIcon.Warning, alert.Icon);
+        Assert.Contains("Fable weekly", alert.Text);
+        Assert.Contains("84%", alert.Text);
+        Assert.Contains("resets", alert.Text); // countdown included
+    }
+
+    [Fact]
+    public void Weekly_MultipleBucketsCrossTogether_CombineIntoOneBalloon()
+    {
+        // NotifyIcon shows one balloon at a time, so buckets crossing on the same poll must be
+        // combined — firing them separately would show only the last while latching all three,
+        // silently losing the rest.
+        var response = WithLimits(WeeklyAll(55), WeeklyScoped("Fable", 84), WeeklyScoped("Opus", 60));
+
+        _alertManager.Check(response, DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Equal("Usage alerts", alert.Title);
+        Assert.Contains("Fable weekly", alert.Text);
+        Assert.Contains("Opus weekly", alert.Text);
+        Assert.Contains("7-day usage", alert.Text);
+
+        // A second identical poll adds nothing — each bucket latches independently.
+        _alertManager.Check(response, DefaultSettings());
+        Assert.Single(_notifications);
+    }
+
+    [Fact]
+    public void Weekly_CombinedBalloon_UsesTheMostSevereIcon()
+    {
+        _alertManager.Check(
+            WithLimits(WeeklyAll(55), WeeklyScoped("Fable", 95)), DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Equal(ToolTipIcon.Error, alert.Icon); // critical outranks the warning
+    }
+
+    [Fact]
+    public void Weekly_OneBucketLatched_DoesNotMaskAnother()
+    {
+        // The overall weekly alerts first; a model cap crossing later must still fire.
+        _alertManager.Check(WithLimits(WeeklyAll(55), WeeklyScoped("Fable", 20)), DefaultSettings());
+        Assert.Single(_notifications);
+
+        _alertManager.Check(WithLimits(WeeklyAll(56), WeeklyScoped("Fable", 70)), DefaultSettings());
+
+        Assert.Equal(2, _notifications.Count);
+        Assert.Contains("Fable weekly", _notifications[1].Text);
+    }
+
+    [Fact]
+    public void Weekly_ScopedAtNearCap_FiresCritical()
+    {
+        _alertManager.Check(WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 92)), DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Equal("Weekly Limit Critical", alert.Title);
+        Assert.Equal(ToolTipIcon.Error, alert.Icon);
+        Assert.Contains("Fable weekly", alert.Text);
+    }
+
+    [Fact]
+    public void Weekly_ApiCriticalSeverityBelowNearCap_EscalatesToError()
+    {
+        // Anthropic flags the bucket critical at 60% — below our 90% near-cap. Its judgment is
+        // an escalation floor, so this fires the critical alert rather than a plain warning.
+        _alertManager.Check(
+            WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 60, severity: "critical")),
+            DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Equal("Weekly Limit Critical", alert.Title);
+        Assert.Equal(ToolTipIcon.Error, alert.Icon);
+    }
+
+    [Fact]
+    public void Weekly_ApiCriticalSeverity_DoesNotRefireWhileHeld()
+    {
+        var response = WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 60, severity: "critical"));
+
+        _alertManager.Check(response, DefaultSettings());
+        _alertManager.Check(response, DefaultSettings());
+        _alertManager.Check(response, DefaultSettings());
+
+        Assert.Single(_notifications);
+    }
+
+    [Fact]
+    public void Weekly_ApiSeverityOscillating_DoesNotFlapCriticalEveryOtherPoll()
+    {
+        // Severity flipping between warning and critical at a steady percentage must not
+        // produce an Error balloon on every other poll — the critical only re-arms once the
+        // bucket drops below the level where severity could escalate it again.
+        for (var i = 0; i < 4; i++)
         {
-            Limits = new[]
+            var severity = i % 2 == 0 ? "critical" : "warning";
+            _alertManager.Check(
+                WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 60, severity: severity)),
+                DefaultSettings());
+        }
+
+        Assert.Single(_notifications);
+        Assert.Equal("Weekly Limit Critical", _notifications[0].Title);
+    }
+
+    [Fact]
+    public void Weekly_ApiCriticalWellBelowWarningLevel_DoesNotAlert()
+    {
+        // A severity blip on a barely-used bucket must not produce "critical at 10%".
+        _alertManager.Check(
+            WithLimits(WeeklyAll(5), WeeklyScoped("Fable", 10, severity: "critical")),
+            DefaultSettings());
+
+        Assert.Empty(_notifications);
+    }
+
+    [Fact]
+    public void Weekly_ApiCriticalBlipThenGenuineWarningCrossing_StillAlerts()
+    {
+        // The blip must not latch the warning off: when the bucket later genuinely crosses the
+        // warning threshold, the user still hears about it.
+        _alertManager.Check(
+            WithLimits(WeeklyAll(5), WeeklyScoped("Fable", 10, severity: "critical")),
+            DefaultSettings());
+        Assert.Empty(_notifications);
+
+        _alertManager.Check(WithLimits(WeeklyAll(5), WeeklyScoped("Fable", 60)), DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Equal("Weekly Usage Warning", alert.Title);
+        Assert.Contains("Fable weekly usage at 60%", alert.Text);
+    }
+
+    [Fact]
+    public void Weekly_ScopedResets_RearmsThatBucketOnly()
+    {
+        _alertManager.Check(WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 60)), DefaultSettings());
+        Assert.Single(_notifications);
+
+        // Fable's weekly window resets (drops below the warning level), then climbs again.
+        _alertManager.Check(WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 5)), DefaultSettings());
+        _alertManager.Check(WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 60)), DefaultSettings());
+
+        Assert.Equal(2, _notifications.Count);
+        Assert.All(_notifications, n => Assert.Contains("Fable weekly", n.Text));
+    }
+
+    [Fact]
+    public void Weekly_BucketBlinksOutAndReturns_DoesNotRefire()
+    {
+        // A bucket missing from one poll is far more often a partial response than a cap that
+        // genuinely vanished, so its state is kept: the same still-latched alert must not fire
+        // again when it reappears unchanged.
+        _alertManager.Check(WithLimits(WeeklyAll(55), WeeklyScoped("Fable", 60)), DefaultSettings());
+        Assert.Single(_notifications);
+
+        _alertManager.Check(WithLimits(WeeklyAll(55)), DefaultSettings());
+        _alertManager.Check(WithLimits(WeeklyAll(55), WeeklyScoped("Fable", 60)), DefaultSettings());
+
+        Assert.Single(_notifications);
+    }
+
+    [Fact]
+    public void Weekly_BucketReturnsAfterItsWindowReset_FiresFresh()
+    {
+        // The legitimate re-alert path: the cap comes back genuinely reset (below the warning
+        // level), which re-arms it, then climbs again.
+        _alertManager.Check(WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 60)), DefaultSettings());
+        Assert.Single(_notifications);
+
+        _alertManager.Check(WithLimits(WeeklyAll(10)), DefaultSettings());
+        _alertManager.Check(WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 4)), DefaultSettings());
+        _alertManager.Check(WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 60)), DefaultSettings());
+
+        Assert.Equal(2, _notifications.Count);
+        Assert.All(_notifications, n => Assert.Contains("Fable weekly", n.Text));
+    }
+
+    [Fact]
+    public void Weekly_OverallBucket_FiresOnceWhenPresentInBothSevenDayAndLimits()
+    {
+        // The real payload carries the overall weekly twice (top-level seven_day AND weekly_all).
+        // Alerts must come from one source only, or every overall weekly warning would double.
+        var response = new UsageResponse(
+            FiveHourBucket(10, 0.4),
+            new UsageBucket(60, DateTimeOffset.UtcNow.AddDays(3)),
+            new[] { WeeklyAll(60) });
+
+        _alertManager.Check(response, DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Equal("Weekly Usage Warning", alert.Title);
+        Assert.StartsWith("7-day usage", alert.Text);
+    }
+
+    [Fact]
+    public void Weekly_InactiveCap_StillAlerts()
+    {
+        // is_active does NOT mean "in force": the live API reports the overall weekly as
+        // inactive while it plainly is in force, so gating on the flag would silence the
+        // weekly alert this app has always had. Verified against the real payload.
+        _alertManager.Check(
+            WithLimits(WeeklyAll(60, isActive: false), WeeklyScoped("Fable", 95, isActive: false)),
+            DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Contains("7-day usage at 60%", alert.Text);
+        Assert.Contains("Fable weekly usage at 95%", alert.Text);
+    }
+
+    [Fact]
+    public void Weekly_LivePayloadShape_AlertsOnTheModelCap()
+    {
+        // The exact shape the usage API returns today (group "weekly", overall marked
+        // inactive, the model cap carrying the API's own "warning" severity).
+        var response = new UsageResponse(
+            FiveHourBucket(52, 0.4),
+            new UsageBucket(44, DateTimeOffset.UtcNow.AddDays(3)),
+            new[]
             {
-                new UsageLimit("weekly_scoped", "seven_day", 99, "critical",
+                new UsageLimit("session", "session", 52, "normal",
+                    DateTimeOffset.UtcNow.AddHours(2), false, null),
+                new UsageLimit("weekly_all", "weekly", 44, "normal",
+                    DateTimeOffset.UtcNow.AddDays(3), false, null),
+                new UsageLimit("weekly_scoped", "weekly", 79, "warning",
                     DateTimeOffset.UtcNow.AddDays(2), true,
                     new LimitScope(new LimitScopeModel("Fable"))),
-            },
-        };
+            });
 
-        _alertManager.Check(withLimits, DefaultSettings());
-        var fired = _notifications.ToList();
+        _alertManager.Check(response, DefaultSettings());
 
-        // Fresh manager, legacy-only equivalent.
-        var baselineNotifications = new List<(string Title, string Text, ToolTipIcon Icon)>();
-        var baselineManager = new AlertManager(_notifyIcon, (title, text, icon) =>
-            baselineNotifications.Add((title, text, icon)));
-        baselineManager.Check(legacy, DefaultSettings());
+        var alert = Assert.Single(_notifications);
+        Assert.Equal("Weekly Usage Warning", alert.Title);
+        Assert.Contains("Fable weekly usage at 79%", alert.Text);
+    }
 
-        Assert.Equal(baselineNotifications.Select(n => n.Title), fired.Select(n => n.Title));
+    [Fact]
+    public void Weekly_NullPercentBucket_DoesNotAlertOrThrow()
+    {
+        var ex = Record.Exception(() =>
+            _alertManager.Check(WithLimits(WeeklyAll(10), WeeklyScoped("Fable", null)), DefaultSettings()));
+
+        Assert.Null(ex);
+        Assert.Empty(_notifications);
+    }
+
+    [Fact]
+    public void Weekly_ScopedWithoutModelName_StillAlerts()
+    {
+        _alertManager.Check(WithLimits(WeeklyAll(10), WeeklyScoped(null, 60)), DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Contains("model weekly", alert.Text);
+    }
+
+    [Fact]
+    public void Weekly_Snoozed_ScopedAlertIsDeferredNotDropped()
+    {
+        var response = WithLimits(WeeklyAll(10), WeeklyScoped("Fable", 60));
+
+        _alertManager.Check(response, SnoozedSettings(TimeSpan.FromHours(1)));
+        Assert.Empty(_notifications);
+
+        _alertManager.Check(response, DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Contains("Fable weekly", alert.Text);
+    }
+
+    [Fact]
+    public void Weekly_SessionLimitInLimitsArray_DoesNotDriveWeeklyAlerts()
+    {
+        // The session bucket also appears in limits[]; the 5-hour alerts own it, so it must not
+        // produce a weekly alert on top (nor be treated as a weekly cap at all).
+        var session = new UsageLimit("session", "session", 95, "critical",
+            DateTimeOffset.UtcNow.AddHours(2), true, null);
+
+        _alertManager.Check(WithLimits(session, WeeklyAll(10)), DefaultSettings());
+
+        Assert.Empty(_notifications);
     }
 
     // ================================================================
@@ -311,13 +588,27 @@ public class AlertManagerTests : IDisposable
     }
 
     [Fact]
-    public void BothBucketsRisky_FiresPaceAndWeekly()
+    public void BothBucketsRisky_CombinesPaceAndWeeklyIntoOneBalloon()
     {
         _alertManager.Check(Both(65, 55, elapsedFraction: 0.4), DefaultSettings());
 
-        Assert.Equal(2, _notifications.Count);
-        Assert.Contains(_notifications, n => n.Title == "On Track to Run Out");
-        Assert.Contains(_notifications, n => n.Title == "Weekly Usage Warning");
+        // One balloon carrying both — separate ones would leave the user seeing only the last.
+        var alert = Assert.Single(_notifications);
+        Assert.Equal("Usage alerts", alert.Title);
+        Assert.Contains("through the window", alert.Text); // the pace warning
+        Assert.Contains("7-day usage at 55%", alert.Text);
+    }
+
+    [Fact]
+    public void SevenDay_AtNearCap_FiresCritical()
+    {
+        // The legacy (limits[]-absent) path gained the critical tier the per-model buckets use.
+        _alertManager.Check(SevenDay(95), DefaultSettings());
+
+        var alert = Assert.Single(_notifications);
+        Assert.Equal("Weekly Limit Critical", alert.Title);
+        Assert.Equal(ToolTipIcon.Error, alert.Icon);
+        Assert.Contains("7-day usage at 95%", alert.Text);
     }
 
     // ================================================================

@@ -31,7 +31,7 @@ public class UsageLimitsParsingTests
                 },
                 {
                     "kind": "weekly_all",
-                    "group": "seven_day",
+                    "group": "weekly",
                     "percent": 4.0,
                     "severity": "normal",
                     "resets_at": "2026-07-23T00:00:00Z",
@@ -39,7 +39,7 @@ public class UsageLimitsParsingTests
                 },
                 {
                     "kind": "weekly_scoped",
-                    "group": "seven_day",
+                    "group": "weekly",
                     "percent": 7.0,
                     "severity": "warning",
                     "resets_at": "2026-07-23T00:00:00Z",
@@ -55,7 +55,9 @@ public class UsageLimitsParsingTests
 
         var scoped = response.Limits[2];
         Assert.Equal("weekly_scoped", scoped.Kind);
-        Assert.Equal("seven_day", scoped.Group);
+        // "weekly" is the group the live API sends; older payloads used "seven_day" and both
+        // are still recognized (see LimitDisplay.WeeklyGroups).
+        Assert.Equal("weekly", scoped.Group);
         Assert.Equal(7.0, scoped.Percent);
         Assert.Equal("warning", scoped.Severity);
         Assert.Equal(LimitSeverity.Warning, scoped.SeverityLevel);

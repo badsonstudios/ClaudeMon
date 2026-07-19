@@ -180,6 +180,26 @@ public class ConfigManagerTests : IDisposable
         Assert.True(manager2.Settings.TaskbarDisplay.ShowPercentSign);
     }
 
+    [Fact]
+    public void Notifications_SnoozeUntil_RoundTrips_AndDefaultsNull()
+    {
+        Assert.Null(new AppSettings().Notifications.SnoozeUntil);
+
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        var until = new DateTimeOffset(2026, 7, 19, 3, 30, 0, TimeSpan.Zero);
+
+        manager.Update(new AppSettings
+        {
+            Notifications = new NotificationSettings { SnoozeUntil = until },
+        });
+
+        var manager2 = new ConfigManager(path);
+        manager2.Load();
+
+        Assert.Equal(until, manager2.Settings.Notifications.SnoozeUntil);
+    }
+
     [Theory]
     [InlineData("true", true)]
     [InlineData("false", false)]

@@ -454,4 +454,91 @@ public class AlertManagerTests : IDisposable
         _alertManager.Check(FiveHour(0, 0.4), DefaultSettings());
         Assert.Empty(_notifications);
     }
+
+    // ================================================================
+    // Snooze (issue #14)
+    // ================================================================
+
+    private static AppSettings SnoozedSettings(TimeSpan fromNow, bool notifyOnReset = false) => new()
+    {
+        Notifications = new NotificationSettings
+        {
+            NotifyOnReset = notifyOnReset,
+            SnoozeUntil = DateTimeOffset.UtcNow + fromNow,
+        },
+    };
+
+    [Fact]
+    public void Check_Snoozed_NearCap_SuppressesNotification()
+    {
+        _alertManager.Check(FiveHour(95), SnoozedSettings(TimeSpan.FromHours(1)));
+        Assert.Empty(_notifications);
+    }
+
+    [Fact]
+    public void Check_Snoozed_PaceWarning_SuppressedThenDeferred()
+    {
+        // 60% used at 40% elapsed is past pace; suppressed while snoozed, fires after.
+        _alertManager.Check(FiveHour(60, 0.4), SnoozedSettings(TimeSpan.FromHours(1)));
+        Assert.Empty(_notifications);
+
+        _alertManager.Check(FiveHour(62, 0.4), DefaultSettings());
+        Assert.Single(_notifications);
+        Assert.Equal("On Track to Run Out", _notifications[0].Title);
+    }
+
+    [Fact]
+    public void Check_Snoozed_SevenDay_SuppressesNotification()
+    {
+        _alertManager.Check(SevenDay(95), SnoozedSettings(TimeSpan.FromHours(1)));
+        Assert.Empty(_notifications);
+    }
+
+    [Fact]
+    public void Check_SnoozeExpiresWithConditionStillTrue_DeferredAlertFires()
+    {
+        // Alarm-clock semantics: the alert suppressed during the snooze is deferred, not
+        // swallowed — the same still-true condition fires on the first unsnoozed poll.
+        _alertManager.Check(FiveHour(95), SnoozedSettings(TimeSpan.FromHours(1)));
+        Assert.Empty(_notifications);
+
+        _alertManager.Check(FiveHour(96), DefaultSettings());
+
+        Assert.Single(_notifications);
+        Assert.Equal("Almost Out", _notifications[0].Title);
+    }
+
+    [Fact]
+    public void Check_ExpiredSnooze_FiresNormally()
+    {
+        // A stale SnoozeUntil in the past is simply not a snooze.
+        var settings = new AppSettings
+        {
+            Notifications = new NotificationSettings
+            {
+                SnoozeUntil = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(5),
+            },
+        };
+
+        _alertManager.Check(FiveHour(95), settings);
+
+        Assert.Single(_notifications);
+    }
+
+    [Fact]
+    public void Check_Snoozed_ResetStillRearms_AlertsFireAfterResume()
+    {
+        var snoozed = SnoozedSettings(TimeSpan.FromHours(1), notifyOnReset: true);
+
+        // Near-cap reached while snoozed (suppressed), then the window resets while still
+        // snoozed (reset notice suppressed too, but the re-arm must still happen)...
+        _alertManager.Check(FiveHour(95), snoozed);
+        _alertManager.Check(FiveHour(10, 0.1), snoozed);
+        Assert.Empty(_notifications);
+
+        // ...so after resuming, climbing near the cap again fires exactly one fresh alert.
+        _alertManager.Check(FiveHour(95), DefaultSettings());
+        Assert.Single(_notifications);
+        Assert.Equal("Almost Out", _notifications[0].Title);
+    }
 }

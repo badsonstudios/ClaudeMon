@@ -285,4 +285,15 @@ public record NotificationSettings
 
     [JsonPropertyName("notifyOnReset")]
     public bool NotifyOnReset { get; init; }
+
+    /// <summary>
+    /// Alerts are suppressed until this instant (issue #14). Null or in the past means not
+    /// snoozed — expired values are simply ignored, so nothing needs to clean them up.
+    /// Persisted so a snooze survives an app restart.
+    /// </summary>
+    [JsonPropertyName("snoozeUntil")]
+    public DateTimeOffset? SnoozeUntil { get; init; }
+
+    /// <summary>True while <see cref="SnoozeUntil"/> is in the future.</summary>
+    public bool IsSnoozed(DateTimeOffset now) => SnoozeUntil is { } until && until > now;
 }

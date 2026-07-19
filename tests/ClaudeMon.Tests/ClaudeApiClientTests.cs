@@ -125,12 +125,48 @@ public class ClaudeApiClientTests : IDisposable
         Assert.Contains("3d", text);
     }
 
+    // A past resets_at means the window ended and the user went idle — the API keeps
+    // returning the old reset time until new usage opens a window (issue #61). This must
+    // read as a distinct idle state, never a perpetual "resetting...".
     [Fact]
-    public void UsageBucket_FormatResetCountdown_PastReset()
+    public void UsageBucket_FormatResetCountdown_PastReset_ShowsIdleState()
     {
         var bucket = new UsageBucket(50.0, DateTimeOffset.UtcNow.AddMinutes(-5));
         var text = bucket.FormatResetCountdown();
-        Assert.Equal("resetting...", text);
+        Assert.Equal("resets on next use", text);
+    }
+
+    [Fact]
+    public void UsageBucket_FormatResetCountdown_UnknownReset_ShowsNeutralMarker()
+    {
+        var bucket = new UsageBucket(50.0, null);
+        Assert.Equal("—", bucket.FormatResetCountdown());
+    }
+
+    [Fact]
+    public void UsageBucket_IsExpired_TracksResetTime()
+    {
+        Assert.True(new UsageBucket(50.0, DateTimeOffset.UtcNow.AddMinutes(-5)).IsExpired);
+        Assert.False(new UsageBucket(50.0, DateTimeOffset.UtcNow.AddMinutes(5)).IsExpired);
+        Assert.False(new UsageBucket(50.0, null).IsExpired);
+    }
+
+    // An expired idle window must not read as "100% of the window elapsed" — that would skew
+    // the pace colouring and pin the time tick at the end of the bar (issue #61).
+    [Fact]
+    public void UsageBucket_ElapsedFraction_PastReset_IsNull()
+    {
+        var bucket = new UsageBucket(50.0, DateTimeOffset.UtcNow.AddMinutes(-5));
+        Assert.Null(bucket.ElapsedFraction(TimeSpan.FromHours(5)));
+    }
+
+    [Fact]
+    public void UsageBucket_ElapsedFraction_LiveWindow_Unchanged()
+    {
+        var bucket = new UsageBucket(50.0, DateTimeOffset.UtcNow.AddHours(2.5));
+        var fraction = bucket.ElapsedFraction(TimeSpan.FromHours(5));
+        Assert.NotNull(fraction);
+        Assert.InRange(fraction.Value, 0.49, 0.51);
     }
 
     private sealed class MockHttpHandler : HttpMessageHandler

@@ -358,8 +358,9 @@ public sealed class TaskbarOverlayWindow : Form
     private double? WeeklyForDisplay => _showWeekly ? _sevenDayPercentage : null;
 
     /// <summary>
-    /// The countdown element's current text: minute-granular time until the 5-hour reset, or
-    /// the neutral "—" when the reset time is unknown.
+    /// The countdown element's current text: minute-granular time until the 5-hour reset,
+    /// "idle" when the window has expired with no new one started, or the neutral "—" when
+    /// the reset time is unknown.
     /// </summary>
     private string CountdownText() =>
         IconRenderer.FormatTaskbarCountdown(

@@ -77,7 +77,8 @@ public static class TrayTooltip
         var line = $"{name} wk: {scoped.Percent ?? 0:F0}%";
         if (includeCountdown)
         {
-            // "resets 2d 3h" → "2d 3h" ("resetting..." has no prefix and passes through).
+            // "resets 2d 3h" → "2d 3h" (the idle "resets on next use" → "on next use", which
+            // still reads fine in the parens; "—" has no prefix and passes through).
             var countdown = scoped.ToBucket().FormatResetCountdown();
             const string prefix = "resets ";
             if (countdown.StartsWith(prefix, StringComparison.Ordinal))

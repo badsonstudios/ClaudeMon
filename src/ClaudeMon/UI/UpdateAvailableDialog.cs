@@ -70,7 +70,9 @@ internal sealed class UpdateAvailableDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        StartPosition = FormStartPosition.CenterScreen;
+        // Manual + CenterOnPrimary in OnLoad: CenterScreen would follow the mouse cursor's
+        // monitor, which for this timer-popped dialog means a random side monitor (#88).
+        StartPosition = FormStartPosition.Manual;
         // The automatic check opens this with no owner window from a background timer, where
         // the foreground lock would otherwise leave it buried behind (and unfocusable under)
         // whatever the user is working in — the very failure mode of the balloon it replaced.
@@ -177,6 +179,7 @@ internal sealed class UpdateAvailableDialog : Form
         // DeviceDpi is only reliable once the handle exists; the constructor's Relayout ran at
         // the default DPI, so redo it here (before first paint) at the real monitor DPI.
         Relayout();
+        DialogPlacement.CenterOnPrimary(this);
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)

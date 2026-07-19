@@ -146,7 +146,8 @@ public sealed class SettingsForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        StartPosition = FormStartPosition.CenterScreen;
+        // Manual + CenterOnPrimary in OnLoad — all app dialogs open on the primary monitor (#88).
+        StartPosition = FormStartPosition.Manual;
         // This form is laid out manually (a vertical cursor + collapsing rows), so WinForms' own
         // auto-scaling can't help — it would fight our repeated Relayout(). We take full control and
         // scale every metric by the monitor DPI ourselves (see Sc/Relayout). Point-sized fonts still
@@ -364,6 +365,7 @@ public sealed class SettingsForm : Form
         // DeviceDpi is only reliable once the handle exists; the constructor's Relayout ran at the
         // default DPI, so redo it here (before first paint) at the real monitor DPI.
         Relayout();
+        DialogPlacement.CenterOnPrimary(this);
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)

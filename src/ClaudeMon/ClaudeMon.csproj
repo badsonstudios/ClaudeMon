@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>0.17.0</Version>
+    <Version>0.18.0</Version>
     <AssemblyTitle>ClaudeMon</AssemblyTitle>
     <Description>Windows system tray monitor for Claude AI usage</Description>
     <!-- Per-Monitor-V2 DPI awareness: coordinates are real (physical) pixels on every monitor

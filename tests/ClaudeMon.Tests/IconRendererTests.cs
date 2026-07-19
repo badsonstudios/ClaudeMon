@@ -144,6 +144,37 @@ public class IconRendererTests
     private static IconRenderer.TaskbarSegment[] Segments(params (string Text, Color Color)[] elements) =>
         IconRenderer.JoinSegments(elements.Select(e => new IconRenderer.TaskbarSegment(e.Text, e.Color)).ToArray());
 
+    [Theory]
+    [InlineData(42.0, "42")]
+    [InlineData(42.9, "42")]   // truncated, not rounded — matches the tray icon
+    [InlineData(0.0, "0")]
+    [InlineData(100.0, "100")]
+    public void TaskbarSegmentPercent_Default_BareNumber(double pct, string expected)
+    {
+        Assert.Equal(expected, IconRenderer.TaskbarSegment.Percent(pct, Color.White).Text);
+    }
+
+    [Theory]
+    [InlineData(42.0, "42%")]
+    [InlineData(42.9, "42%")]  // truncation is preserved with the sign
+    [InlineData(0.0, "0%")]
+    [InlineData(100.0, "100%")]
+    public void TaskbarSegmentPercent_WithSign_AppendsPercent(double pct, string expected)
+    {
+        Assert.Equal(expected, IconRenderer.TaskbarSegment.Percent(pct, Color.White, percentSign: true).Text);
+    }
+
+    [Fact]
+    public void MeasureTaskbarSegmentsWidth_PercentSign_WidensTheRow()
+    {
+        // The measured width must track the extra % glyphs, or the readout would clip.
+        var bare = IconRenderer.MeasureTaskbarSegmentsWidth(
+            Segments(("100", Color.White), ("100", Color.White)), 40);
+        var signed = IconRenderer.MeasureTaskbarSegmentsWidth(
+            Segments(("100%", Color.White), ("100%", Color.White)), 40);
+        Assert.True(signed > bare, $"signed {signed} should exceed bare {bare}");
+    }
+
     [Fact]
     public void MeasureTaskbarSegmentsWidth_SingleNumber_IsAtLeastMinimum()
     {

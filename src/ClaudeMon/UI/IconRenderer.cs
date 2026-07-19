@@ -170,7 +170,8 @@ public static class IconRenderer
     {
         public static TaskbarSegment Separator => new(NumberSeparatorText, default);
 
-        public static TaskbarSegment Percent(double pct, Color color) => new(FormatPct(pct), color);
+        public static TaskbarSegment Percent(double pct, Color color, bool percentSign = false) =>
+            new(percentSign ? FormatPct(pct) + "%" : FormatPct(pct), color);
     }
 
     /// <summary>
@@ -563,7 +564,9 @@ public static class IconRenderer
     /// <summary>
     /// Renders the taskbar usage readout onto a transparent bitmap of the given size,
     /// using the default colours (white label, usage-level number). Primarily a testable
-    /// wrapper around <see cref="DrawTaskbarUsage"/>.
+    /// wrapper around <see cref="DrawTaskbarUsage"/>. Always renders the default bare-number
+    /// look — the ShowPercentSign setting is applied where the live overlay composes its
+    /// segments (TaskbarOverlayWindow.BuildNumberSegments), not here.
     /// </summary>
     public static Bitmap RenderTaskbarImage(double percentage, int width, int height)
     {

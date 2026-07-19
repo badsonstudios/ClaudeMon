@@ -72,6 +72,7 @@ public sealed class TaskbarOverlayWindow : Form
     private bool _showSession = true;
     private bool _showWeekly;
     private bool _showTimeToReset;
+    private bool _showPercentSign;
 
     private TaskbarOverlayMarker _marker;
     private TaskbarTextColor _labelColor = TaskbarTextColor.White;
@@ -332,11 +333,12 @@ public sealed class TaskbarOverlayWindow : Form
     /// and the reset countdown (Numbers style only; the bar keeps its time tick). Re-measures
     /// the overlay width and repaints live (no restart). All-off falls back to session-only.
     /// </summary>
-    public void SetDisplay(bool session, bool weekly, bool timeToReset)
+    public void SetDisplay(bool session, bool weekly, bool timeToReset, bool percentSign)
     {
         _showSession = session;
         _showWeekly = weekly;
         _showTimeToReset = timeToReset;
+        _showPercentSign = percentSign;
         _contentDirty = true;
         if (Visible) Reposition();
     }
@@ -380,16 +382,16 @@ public sealed class TaskbarOverlayWindow : Form
         var elements = new List<IconRenderer.TaskbarSegment>(3);
 
         if (_showSession)
-            elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct, light)));
+            elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct, light), _showPercentSign));
 
         if (WeeklyForDisplay is { } weekly)
-            elements.Add(IconRenderer.TaskbarSegment.Percent(weekly, IconRenderer.GetTextColor(_numberColor, weekly, light)));
+            elements.Add(IconRenderer.TaskbarSegment.Percent(weekly, IconRenderer.GetTextColor(_numberColor, weekly, light), _showPercentSign));
 
         if (_showTimeToReset)
             elements.Add(new IconRenderer.TaskbarSegment(CountdownText(), IconRenderer.GetTextColor(_labelColor, pct, light)));
 
         if (elements.Count == 0)
-            elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct, light)));
+            elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct, light), _showPercentSign));
 
         return IconRenderer.JoinSegments(elements);
     }

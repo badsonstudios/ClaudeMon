@@ -63,6 +63,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     private bool _showSession = true;
     private bool _showWeekly;
     private bool _showTimeToReset;
+    private bool _showPercentSign;
     private bool _allMonitors;
     private int _primaryHorizontalOffset;
     private int _secondaryHorizontalOffset;
@@ -125,14 +126,18 @@ public sealed class TaskbarOverlayManager : IDisposable
             overlay.SetColorMode(colorMode);
     }
 
-    /// <summary>Choose the readout elements (session/weekly/countdown) on every overlay.</summary>
-    public void SetDisplay(bool session, bool weekly, bool timeToReset)
+    /// <summary>
+    /// Choose the readout elements (session/weekly/countdown) and whether percentages carry
+    /// a trailing % sign, on every overlay.
+    /// </summary>
+    public void SetDisplay(bool session, bool weekly, bool timeToReset, bool percentSign)
     {
         _showSession = session;
         _showWeekly = weekly;
         _showTimeToReset = timeToReset;
+        _showPercentSign = percentSign;
         foreach (var overlay in _overlays.Values)
-            overlay.SetDisplay(session, weekly, timeToReset);
+            overlay.SetDisplay(session, weekly, timeToReset, percentSign);
     }
 
     /// <summary>
@@ -342,7 +347,7 @@ public sealed class TaskbarOverlayManager : IDisposable
         overlay.SetBarWidth(_barWidth);
         overlay.SetSize(_sizePercent);
         overlay.SetColorMode(_colorMode);
-        overlay.SetDisplay(_showSession, _showWeekly, _showTimeToReset);
+        overlay.SetDisplay(_showSession, _showWeekly, _showTimeToReset, _showPercentSign);
         overlay.SetHorizontalOffsets(_primaryHorizontalOffset, _secondaryHorizontalOffset);
 
         switch (_reading.Marker)

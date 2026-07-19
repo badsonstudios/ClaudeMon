@@ -150,6 +150,7 @@ public class ConfigManagerTests : IDisposable
         Assert.True(settings.TaskbarDisplay.ShowSessionUsage);
         Assert.False(settings.TaskbarDisplay.ShowWeeklyUsage);
         Assert.False(settings.TaskbarDisplay.ShowTimeToReset);
+        Assert.False(settings.TaskbarDisplay.ShowPercentSign);
     }
 
     [Fact]
@@ -166,6 +167,7 @@ public class ConfigManagerTests : IDisposable
                 ShowSessionUsage = false,
                 ShowWeeklyUsage = true,
                 ShowTimeToReset = true,
+                ShowPercentSign = true,
             },
         });
 
@@ -175,6 +177,7 @@ public class ConfigManagerTests : IDisposable
         Assert.False(manager2.Settings.TaskbarDisplay.ShowSessionUsage);
         Assert.True(manager2.Settings.TaskbarDisplay.ShowWeeklyUsage);
         Assert.True(manager2.Settings.TaskbarDisplay.ShowTimeToReset);
+        Assert.True(manager2.Settings.TaskbarDisplay.ShowPercentSign);
     }
 
     [Theory]

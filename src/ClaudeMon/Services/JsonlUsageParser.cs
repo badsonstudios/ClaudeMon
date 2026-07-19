@@ -68,6 +68,11 @@ internal static class JsonlUsageParser
                 ? $"{messageId}:{requestId}"
                 : messageId ?? requestId;
 
+            // The session's working directory — the human-readable identity of
+            // the project this transcript belongs to (the directory name under
+            // ~/.claude/projects is a lossy encoding of it).
+            var cwd = StringOrNull(root, "cwd");
+
             // Only the top-level usage numbers — usage.iterations mirrors these
             // totals per internal iteration and must never be summed on top.
             var input = TokenCount(usage, "input_tokens");
@@ -91,7 +96,7 @@ internal static class JsonlUsageParser
             }
 
             return new LocalUsageEntry(
-                timestamp, model, dedupeKey, input, output, cache5m, cache1h, cacheRead);
+                timestamp, model, dedupeKey, input, output, cache5m, cache1h, cacheRead, cwd);
         }
         catch (JsonException)
         {

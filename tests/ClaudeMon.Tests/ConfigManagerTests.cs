@@ -20,6 +20,40 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void Budgets_RoundTrip_AndDefaultOffOnUpgrade()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        manager.Load();
+
+        // Absent keys (an upgraded config) → budgets exist but are off.
+        Assert.False(manager.Settings.Budgets.DailyEnabled);
+        Assert.False(manager.Settings.Budgets.WeeklyEnabled);
+        Assert.Null(manager.Settings.BudgetAlertState);
+
+        manager.Update(manager.Settings with
+        {
+            Budgets = new BudgetSettings
+            {
+                DailyEnabled = true,
+                DailyCapUsd = 12.5,
+                WeeklyEnabled = true,
+                WeeklyCapUsd = 62.75,
+            },
+            BudgetAlertState = new BudgetAlertState("2026-07-19", 80, "2026-07-13", 50),
+        });
+
+        var reloaded = new ConfigManager(path);
+        reloaded.Load();
+
+        Assert.True(reloaded.Settings.Budgets.DailyEnabled);
+        Assert.Equal(12.5, reloaded.Settings.Budgets.DailyCapUsd);
+        Assert.Equal(62.75, reloaded.Settings.Budgets.WeeklyCapUsd);
+        Assert.Equal(new BudgetAlertState("2026-07-19", 80, "2026-07-13", 50),
+            reloaded.Settings.BudgetAlertState);
+    }
+
+    [Fact]
     public void Load_NoConfigFile_CreatesDefaults()
     {
         var path = Path.Combine(_tempDir, "config.json");

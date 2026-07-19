@@ -412,8 +412,12 @@ public sealed class TrayApplication : IDisposable
         _updateDialogOpen = true;
         try
         {
+            // The notes link goes to the releases INDEX, not the offered release's own page:
+            // several versions can ship between updates, and the index shows everything the
+            // user is about to get, newest-first (#89). "Get the update"'s no-installer
+            // fallback still opens the specific release page via _updateUrl.
             using var dialog = new UpdateAvailableDialog(
-                FormatVersion(CurrentVersion), version, _updateUrl);
+                FormatVersion(CurrentVersion), version, ReleasesFallbackUrl);
             dialog.ShowDialog();
 
             switch (dialog.Choice)

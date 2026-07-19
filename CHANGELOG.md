@@ -3,6 +3,23 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.20.0] - 2026-07-19
+
+### Added
+- **Local cost & burn-rate estimates in the flyout** — a new line shows what today's Claude
+  Code usage would cost at API list prices, e.g. `Today: ~$4.20 · 1.8M tokens · ~$1.10/hr
+  (est.)`, with the `$/hr` figure computed over the last 30 minutes so a heavy session's
+  burn is visible while it happens. Computed entirely on your machine from Claude Code's
+  own transcript files (`~/.claude/projects/**/*.jsonl`) — the same source tools like
+  ccusage use — read incrementally (only new bytes per pass; a large existing history is
+  skipped past on first scan), with cache reads/writes priced at their separate rates and
+  duplicate streaming entries deduplicated. Only token counts, model ids, and timestamps
+  are read — never conversation content — and nothing leaves the machine. Costs are
+  clearly marked as estimates: local transcripts can't see usage from claude.ai or other
+  devices, so these totals are intentionally separate from the rate-limit percentages. A
+  model the bundled pricing table doesn't know shows tokens with cost as `—` instead of
+  guessing. The line appears only when transcripts exist. (#73)
+
 ## [0.19.1] - 2026-07-19
 
 ### Fixed

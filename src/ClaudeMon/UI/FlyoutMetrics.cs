@@ -33,6 +33,8 @@ public sealed class FlyoutMetrics
     internal const int BaseSparklineHeight = 26;
     internal const int BaseForecastGap = 6;
     internal const int BaseForecastHeight = 16;
+    internal const int BaseLocalCostGap = 6;
+    internal const int BaseLocalCostHeight = 16;
 
     public int LeftInset { get; }
     public int TopPadding { get; }
@@ -51,6 +53,8 @@ public sealed class FlyoutMetrics
     public int SparklineHeight { get; }
     public int ForecastGap { get; }
     public int ForecastHeight { get; }
+    public int LocalCostGap { get; }
+    public int LocalCostHeight { get; }
 
     private FlyoutMetrics(int dpi)
     {
@@ -74,6 +78,8 @@ public sealed class FlyoutMetrics
         SparklineHeight = S(BaseSparklineHeight);
         ForecastGap = S(BaseForecastGap);
         ForecastHeight = S(BaseForecastHeight);
+        LocalCostGap = S(BaseLocalCostGap);
+        LocalCostHeight = S(BaseLocalCostHeight);
     }
 
     /// <summary>Builds the scaled metrics for the given device DPI (96 = 100%).</summary>
@@ -84,7 +90,9 @@ public sealed class FlyoutMetrics
     /// clipping or overlap. The form is sized to this so the box can never be
     /// shorter than what the paint code draws.
     /// </summary>
-    public Size ContentSize(bool isAuthError, int usageRows, bool hasForecast = false, bool hasHistory = false)
+    public Size ContentSize(
+        bool isAuthError, int usageRows,
+        bool hasForecast = false, bool hasHistory = false, bool hasLocalCost = false)
     {
         int body;
         if (isAuthError)
@@ -104,6 +112,10 @@ public sealed class FlyoutMetrics
         // The burn-rate forecast line accompanies the 5-hour usage display.
         if (hasForecast && !isAuthError)
             body += ForecastGap + ForecastHeight;
+
+        // The local cost line ("Today: ~$…"), fed from the Claude Code transcripts.
+        if (hasLocalCost && !isAuthError)
+            body += LocalCostGap + LocalCostHeight;
 
         var height = TopPadding + TitleAdvance + body + StatusGap + StatusLineHeight + BottomPadding;
         return new Size(Width, height);

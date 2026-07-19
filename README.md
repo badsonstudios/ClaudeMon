@@ -21,6 +21,7 @@ The usage percentage can also be shown directly on the taskbar:
 - **Smart polling while locked** - Pauses API polling (and the daily update check) while the workstation is locked, then refreshes immediately on unlock so the readout is fresh within seconds of returning — no wasted API calls overnight, no stale numbers when you sit back down
 - **Usage trend sparkline** - The flyout draws a compact sparkline of recent 5-hour usage so you can see whether you're climbing fast or leveling off; history is recorded locally and survives restarts
 - **Time-to-limit estimate** - When 5-hour usage is rising, the flyout projects how long until you hit 100% at the current rate (e.g. "~35m to limit"); shows "—" when usage is flat/declining or there isn't enough recent history
+- **Local cost & burn-rate estimates** - The flyout shows what today's Claude Code usage would cost at API list prices — `Today: ~$4.20 · 1.8M tokens · ~$1.10/hr (est.)` — computed **entirely on your machine** from Claude Code's own transcript files, with cache reads/writes priced at their separate rates. The `$/hr` figure covers the last 30 minutes, so you can see what a heavy session is burning while it happens. These are estimates for insight, not billing — see [Local cost estimates](#local-cost-estimates-from-claude-code-logs) for the caveats
 - **Stays signed in on its own** - When the on-disk access token goes stale (common if you only use the Claude Code VS Code extension), ClaudeMon refreshes it automatically using your saved refresh token, so it keeps showing usage instead of falsely reporting a sign-in problem
 - **Sign-in-expired guidance** - When your Claude Code sign-in genuinely can't be refreshed, the tooltip, flyout, and About dialog show a clear "run Claude Code to refresh" message instead of stale usage numbers (the taskbar display shows a neutral "—"); normal display returns automatically after you re-authenticate
 - **In-app updates** - Checks GitHub for newer releases (daily and on demand); a small in-app window offers **Get the update**, **Ignore**, or **Skip this version**, with a **View release notes** link so you can see what changed before deciding. **Get the update** downloads the installer in-app, verifies it (SHA-256), and installs it silently — no installer wizard, no SmartScreen popup — then relaunches on the new version. An optional **Install updates automatically** setting does the whole thing hands-free
@@ -50,6 +51,18 @@ ClaudeMon writes diagnostics to a per-day file, `%LocalAppData%\ClaudeMon\logs\c
 ### Usage history
 
 Recent usage samples are recorded to `%LocalAppData%\ClaudeMon\history.json` to power the flyout's trend sparkline. The file is a rolling window (pruned by age and count, so it never grows without bound) and survives restarts. It contains only utilization percentages and timestamps — no account or token data.
+
+### Local cost estimates (from Claude Code logs)
+
+The flyout's `Today: ~$… · … tokens · ~$…/hr (est.)` line is computed from **Claude Code's own local transcripts** in `~/.claude/projects/**/*.jsonl` — the same source popular tools like ccusage read. ClaudeMon tails these files incrementally (only new bytes are read on each pass, so even a large history costs almost nothing after the first scan) and keeps small per-day totals in `%LocalAppData%\ClaudeMon\local-usage.json`.
+
+**These numbers are estimates, not billing.** Keep in mind:
+
+- Costs are computed from a **bundled table of Anthropic API list prices** per model (input, output, cache-write, and cache-read rates). On a Max subscription you don't actually pay per token — the figure shows what the usage *would* cost at API rates, a useful intensity gauge.
+- The transcripts only record what happens **on this machine in Claude Code**. Usage from claude.ai chats, the mobile apps, or other machines never appears here — so these totals are **not** the same thing as (and won't match) the rate-limit percentages above them, which the API computes server-side.
+- A model the bundled table doesn't know yet shows its tokens with cost as `—` (or the known portion as `≥$…`) rather than guessing at a possibly wrong rate.
+
+**Privacy:** only token counts, model ids, message ids, and timestamps are ever read into memory — never your prompts or Claude's replies — and nothing leaves your machine. If `~/.claude/projects` doesn't exist, the line simply doesn't appear.
 
 ## Settings
 

@@ -194,6 +194,28 @@ public class FlyoutMetricsTests
     }
 
     [Fact]
+    public void ContentSize_WithLocalCost_AddsLocalCostBand()
+    {
+        var m = FlyoutMetrics.ForDpi(96);
+
+        var without = m.ContentSize(false, usageRows: 2, hasForecast: true, hasHistory: true).Height;
+        var with = m.ContentSize(false, usageRows: 2, hasForecast: true, hasHistory: true, hasLocalCost: true).Height;
+
+        Assert.Equal(m.LocalCostGap + m.LocalCostHeight, with - without);
+    }
+
+    [Fact]
+    public void ContentSize_AuthError_HasNoLocalCostBand()
+    {
+        var m = FlyoutMetrics.ForDpi(96);
+
+        var without = m.ContentSize(isAuthError: true, 0).Height;
+        var with = m.ContentSize(isAuthError: true, 0, hasLocalCost: true).Height;
+
+        Assert.Equal(without, with);
+    }
+
+    [Fact]
     public void ForDpi_NonPositiveDpi_FallsBackTo96()
     {
         var fallback = FlyoutMetrics.ForDpi(0);

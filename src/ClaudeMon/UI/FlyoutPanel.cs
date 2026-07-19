@@ -20,6 +20,8 @@ public sealed class FlyoutPanel : Form
     private IReadOnlyList<double> _history = Array.Empty<double>();
     private TimeSpan? _timeToLimit;
     private UsageColorMode _colorMode = UsageColorMode.Pace;
+    // Composed once per data update; null = no local cost data, line not drawn.
+    private string? _localCostLine;
 
     /// <summary>Raised when the flyout's settings button is clicked.</summary>
     public event EventHandler? SettingsRequested;
@@ -84,7 +86,8 @@ public sealed class FlyoutPanel : Form
         DateTimeOffset? lastUpdated,
         IReadOnlyList<double>? history = null,
         TimeSpan? timeToLimit = null,
-        UsageColorMode colorMode = UsageColorMode.Pace)
+        UsageColorMode colorMode = UsageColorMode.Pace,
+        LocalUsageSnapshot? localUsage = null)
     {
         _usage = usage;
         _rows = usage is null ? Array.Empty<LimitRow>() : LimitDisplay.BuildRows(usage);
@@ -93,6 +96,7 @@ public sealed class FlyoutPanel : Form
         _history = history ?? Array.Empty<double>();
         _timeToLimit = timeToLimit;
         _colorMode = colorMode;
+        _localCostLine = LocalCostText.Compose(localUsage);
         Relayout();
     }
 
@@ -108,7 +112,8 @@ public sealed class FlyoutPanel : Form
             _status == MonitorStatus.AuthError,
             _rows.Count,
             hasForecast: _usage?.FiveHour is not null,
-            hasHistory: HasHistory);
+            hasHistory: HasHistory,
+            hasLocalCost: _localCostLine is not null);
 
         // Gear in the right corner, vertically centred on the status line (the bottom-left text)
         // so it reads as part of that row. The point-size glyph scales with DPI on its own; only
@@ -286,6 +291,15 @@ public sealed class FlyoutPanel : Form
                 using var forecastBrush = new SolidBrush(color);
                 g.DrawString(FormatForecast(fh.UtilizationPct, wf), labelFont, forecastBrush, left, y);
                 y += m.ForecastHeight;
+            }
+
+            // Local cost estimate from the Claude Code transcripts — secondary
+            // info, so it draws dim like the status line.
+            if (_localCostLine is not null)
+            {
+                y += m.LocalCostGap;
+                g.DrawString(_localCostLine, labelFont, dimBrush, left, y);
+                y += m.LocalCostHeight;
             }
         }
 

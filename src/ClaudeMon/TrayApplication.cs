@@ -23,6 +23,7 @@ public sealed class TrayApplication : IDisposable
     private readonly TokenRefresher _tokenRefresher;
     private readonly Logger _logger;
     private readonly UsageHistoryStore _history;
+    private readonly LocalUsageMonitor _localUsage;
     private readonly ConfigManager _configManager;
     private readonly SynchronizationContext _syncContext;
     private readonly FlyoutPanel _flyout;
@@ -83,6 +84,13 @@ public sealed class TrayApplication : IDisposable
 
         _history = new UsageHistoryStore();
         _history.Load();
+
+        // Local cost estimates from the Claude Code transcripts (issue #73).
+        // Active only when ~/.claude/projects exists; degrades silently otherwise.
+        var localUsageStore = new LocalUsageStore(
+            pricing: PricingTable.LoadEmbedded(_logger), logger: _logger);
+        localUsageStore.Load();
+        _localUsage = new LocalUsageMonitor(localUsageStore, _logger);
 
         _apiClient = new ClaudeApiClient();
         _tokenRefresher = new TokenRefresher();
@@ -151,11 +159,13 @@ public sealed class TrayApplication : IDisposable
         _sessionWatcher.Locked += (_, _) =>
         {
             _monitor.Pause();
+            _localUsage.Pause();
             _updateTimer.Stop();
         };
         _sessionWatcher.Unlocked += (_, _) =>
         {
             _monitor.Resume();
+            _localUsage.Resume();
             if (_configManager.Settings.CheckForUpdates)
             {
                 // Stop()/Start() resets the 24h countdown, so on a machine that locks at
@@ -175,6 +185,7 @@ public sealed class TrayApplication : IDisposable
         UpdateInstaller.CleanUpStaleDownloads();
 
         _monitor.Start();
+        _localUsage.Start();
 
         if (_configManager.Settings.CheckForUpdates)
         {
@@ -302,7 +313,7 @@ public sealed class TrayApplication : IDisposable
 
         _flyout.UpdateData(
             _monitor.LastUsage, _monitor.Status, _monitor.LastUpdated, fiveHourTrend, timeToLimit,
-            _configManager.Settings.ColorMode);
+            _configManager.Settings.ColorMode, _localUsage.Snapshot());
         _flyout.ShowNear(anchor);
     }
 
@@ -825,6 +836,7 @@ public sealed class TrayApplication : IDisposable
         _updateChecker.Dispose();
         _updateInstaller.Dispose();
         _monitor.Dispose();
+        _localUsage.Dispose();
         _apiClient.Dispose();
         _tokenRefresher.Dispose();
         _notifyIcon.Visible = false;

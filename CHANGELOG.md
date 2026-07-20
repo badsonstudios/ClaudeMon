@@ -3,6 +3,18 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.22.1] - 2026-07-19
+
+### Fixed
+- **Crash when opening the usage flyout** — clicking the taskbar readout or the tray icon could
+  kill the app outright with a `TimeSpan overflowed` error instead of showing usage. The
+  time-to-limit projection divides the remaining headroom by the recent usage trend, and on a
+  quiet machine that trend is flat to within floating-point error — a slope so close to zero
+  that the projection came out as a number too large to represent, which threw. Such a
+  projection carries no information anyway, so it is now reported as "no estimate" (`—`) like
+  any other case where the trend can't support one. Most likely to have hit a fresh install on
+  a lightly-used machine. (#100)
+
 ## [0.22.0] - 2026-07-19
 
 ### Added

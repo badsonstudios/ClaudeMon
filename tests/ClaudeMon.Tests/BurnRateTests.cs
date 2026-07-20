@@ -122,6 +122,115 @@ public class BurnRateTests
         Assert.Equal(100, eta.Value.TotalMinutes, 1);
     }
 
+    // ================================================================
+    // Degenerate slopes (issue #100)
+    // ================================================================
+
+    [Fact]
+    public void NearlyFlatRisingTrend_ReturnsNullInsteadOfOverflowing()
+    {
+        // Usage that is flat to within floating-point noise still yields a *positive*
+        // least-squares slope (here ~1e-14 %/min), and 50 points of headroom divided by that
+        // is ~5e15 minutes — a finite number far outside TimeSpan's ~1.5e10-minute range.
+        // TimeSpan.FromMinutes threw, taking the whole app down when the flyout opened (#100).
+        var samples = Series(50, 50, 50.0000000000001);
+
+        var ex = Record.Exception(() =>
+            BurnRate.EstimateTimeToLimit(samples, currentPct: 50, timeUntilReset: null));
+
+        Assert.Null(ex); // no throw...
+        Assert.Null(BurnRate.EstimateTimeToLimit(samples, currentPct: 50, timeUntilReset: null)); // ...and no estimate
+    }
+
+    [Theory]
+    // The larger two are finite and convertible — they only exercise the ceiling. The
+    // smaller two are the ones that threw before the fix. Both regimes matter: the guard
+    // has to reject "absurd" as well as "unrepresentable".
+    [InlineData(1e-3)]
+    [InlineData(1e-6)]
+    [InlineData(1e-9)]
+    [InlineData(1e-13)] // about the smallest delta that survives being added to 50
+    public void ImperceptibleSlopes_ProjectTooFarToBeUseful_ReturnNull(double delta)
+    {
+        var samples = Series(50, 50 + delta, 50 + (2 * delta));
+
+        // Guard against a vacuous case: if the delta were annihilated by the addition the
+        // samples would be identical, the slope exactly zero, and this would pass without
+        // ever reaching the projection math (as double.Epsilon did).
+        Assert.NotEqual(samples[0].FiveHourPct, samples[2].FiveHourPct);
+
+        Assert.Null(BurnRate.EstimateTimeToLimit(samples, currentPct: 50, timeUntilReset: null));
+    }
+
+    [Fact]
+    public void ProjectionInsideTheCeiling_WithUnknownReset_StillEstimates()
+    {
+        // +0.05 points per 5-minute sample = 0.01 pct/min ⇒ 10 points of headroom is 1000
+        // minutes (~16.7h), inside the 24h ceiling. Pins the bound from below: without this,
+        // the ceiling could be tightened to minutes and every other test would still pass.
+        var samples = Series(89.90, 89.95, 90.00);
+
+        var eta = BurnRate.EstimateTimeToLimit(samples, currentPct: 90, timeUntilReset: null);
+
+        Assert.NotNull(eta);
+        Assert.Equal(1000, eta.Value.TotalMinutes, 1);
+    }
+
+    [Fact]
+    public void ProjectionBeyondTheCeiling_WithUnknownReset_ReturnsNull()
+    {
+        // Same shape, shallower: 0.006 pct/min ⇒ ~1667 minutes (~27.8h), past the ceiling.
+        var samples = Series(89.94, 89.97, 90.00);
+
+        Assert.Null(BurnRate.EstimateTimeToLimit(samples, currentPct: 90, timeUntilReset: null));
+    }
+
+    [Fact]
+    public void HugeTimeGapBetweenSamples_DoesNotOverflow()
+    {
+        // A machine asleep for months between samples: tiny slope over an enormous span.
+        var samples = new List<UsageSample>
+        {
+            new(T0, 50, null),
+            new(T0.AddDays(200), 50.000001, null),
+            new(T0.AddDays(400), 50.000002, null),
+        };
+
+        var ex = Record.Exception(() =>
+            BurnRate.EstimateTimeToLimit(samples, currentPct: 50, timeUntilReset: null));
+
+        Assert.Null(ex);
+        // Not merely "didn't throw": a bogus TimeSpan.Zero would render as "at limit".
+        Assert.Null(BurnRate.EstimateTimeToLimit(samples, currentPct: 50, timeUntilReset: null));
+    }
+
+    [Fact]
+    public void JustUnderTheLimitWithTinySlope_DoesNotOverflow()
+    {
+        // Minimal headroom shrinks the numerator, but a small enough slope still overflows —
+        // the guard must be on the projection, not on the headroom.
+        var samples = Series(99.99, 99.99, 99.990000000001);
+
+        var ex = Record.Exception(() =>
+            BurnRate.EstimateTimeToLimit(samples, currentPct: 99.99, timeUntilReset: null));
+
+        Assert.Null(ex);
+        Assert.Null(BurnRate.EstimateTimeToLimit(samples, currentPct: 99.99, timeUntilReset: null));
+    }
+
+    [Fact]
+    public void LegitimateSlowClimb_StillProjects()
+    {
+        // The ceiling must not swallow real, usable projections: +0.25 points per 5-minute
+        // sample = 0.05 pct/min, so 10 points of headroom ⇒ 200 minutes, inside the window.
+        var samples = Series(89.5, 89.75, 90.0);
+
+        var eta = BurnRate.EstimateTimeToLimit(samples, currentPct: 90, timeUntilReset: TimeSpan.FromHours(4));
+
+        Assert.NotNull(eta);
+        Assert.Equal(200, eta.Value.TotalMinutes, 1);
+    }
+
     [Theory]
     [InlineData(35, "~35m to limit")]
     [InlineData(90, "~1h 30m to limit")]

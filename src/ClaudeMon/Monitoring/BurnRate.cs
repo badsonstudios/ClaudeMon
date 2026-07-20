@@ -12,10 +12,26 @@ public static class BurnRate
     private const double LimitPct = 100.0;
 
     /// <summary>
+    /// Ceiling on a projection before it stops being an estimate and starts being noise.
+    /// A trend that is flat to within floating-point error still produces a minuscule
+    /// *positive* slope, and dividing the remaining headroom by it yields a finite but
+    /// enormous number of minutes — one that <see cref="TimeSpan.FromMinutes"/> cannot
+    /// represent, which crashed the app when the flyout opened (issue #100).
+    ///
+    /// 24 hours: nearly five times the window being projected, so it can't discard an
+    /// estimate anyone would act on, while still being six orders of magnitude inside
+    /// TimeSpan's range. It only ever applies when the reset time is unknown — a known
+    /// reset is a tighter bound already (see the caller-supplied check below) — and there
+    /// a multi-day "~144h to limit" readout would be noise wearing an estimate's clothes.
+    /// </summary>
+    private const double MaxProjectionMinutes = 24 * 60;
+
+    /// <summary>
     /// Estimates the time until the 5-hour window hits 100%, or <c>null</c> when no
     /// meaningful estimate can be made: fewer than two samples, no time span,
-    /// a flat/declining rate, or a projection that lands after the window resets
-    /// (you won't reach the cap this window).
+    /// a flat/declining rate, a projection so distant it carries no information
+    /// (see <see cref="MaxProjectionMinutes"/>), or one that lands after the window
+    /// resets (you won't reach the cap this window).
     /// </summary>
     /// <param name="recent">Recent samples (oldest first) over the burn window.</param>
     /// <param name="currentPct">The latest 5-hour utilization percentage.</param>
@@ -37,7 +53,11 @@ public static class BurnRate
             return null;
 
         var minutesToLimit = (LimitPct - currentPct) / slopePerMinute.Value;
-        if (double.IsNaN(minutesToLimit) || double.IsInfinity(minutesToLimit) || minutesToLimit < 0)
+
+        // NaN first — it compares false against everything, so it has to be excluded
+        // explicitly. The upper bound covers infinity as well as the finite-but-absurd
+        // projections a near-zero slope produces (see MaxProjectionMinutes).
+        if (double.IsNaN(minutesToLimit) || minutesToLimit < 0 || minutesToLimit > MaxProjectionMinutes)
             return null;
 
         var eta = TimeSpan.FromMinutes(minutesToLimit);

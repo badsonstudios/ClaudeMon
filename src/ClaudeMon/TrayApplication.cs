@@ -129,11 +129,11 @@ public sealed class TrayApplication : IDisposable
             _configManager.Settings.TaskbarDisplay.HorizontalOffset);
         _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
         _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
-        // Clicking any monitor's readout opens the detail flyout at the PRIMARY monitor's tray
-        // corner (a deliberate, consistent anchor). Under Per-Monitor-V2 the flyout is crisp and
-        // interactive on any monitor, so opening it over the clicked readout is a possible future
-        // refinement; for now every readout opens the flyout in the same place.
-        _taskbarOverlay.OverlayClicked += (_, _) => ToggleFlyout(PrimaryTrayAnchor());
+        // Clicking a monitor's readout opens the detail flyout on THAT monitor (issue #104),
+        // anchored at the readout's top-centre — a pixel guaranteed inside the clicked monitor,
+        // so Screen.FromPoint resolves to it and the flyout stays there.
+        _taskbarOverlay.OverlayClicked += (_, bounds) =>
+            ToggleFlyout(new Point(bounds.Left + bounds.Width / 2, bounds.Top));
 
         _contextMenu = CreateContextMenu();
         _notifyIcon = new NotifyIcon
@@ -270,20 +270,11 @@ public sealed class TrayApplication : IDisposable
     }
 
     /// <summary>
-    /// Anchor at the primary monitor's notification-area corner, where the detail flyout opens.
-    /// A click on any taskbar readout opens the flyout here (rather than over the clicked readout)
-    /// so it always lands in a single, predictable spot — see the OverlayClicked wiring.
-    /// </summary>
-    private static Point PrimaryTrayAnchor()
-    {
-        var workingArea = (Screen.PrimaryScreen ?? Screen.AllScreens[0]).WorkingArea;
-        return new Point(workingArea.Right - 40, workingArea.Bottom);
-    }
-
-    /// <summary>
     /// Opens the detail flyout anchored above <paramref name="anchor"/> (or hides it if already
     /// open). Shared by the tray-icon left-click (anchored at the cursor) and a click on a
-    /// taskbar readout (anchored at the primary tray corner), so both behave identically.
+    /// taskbar readout (anchored at that readout's top-centre), so both open the flyout on the
+    /// monitor that was clicked. With the flyout open on one monitor, a click on another
+    /// monitor's readout hides it (plain toggle); the next click opens it there.
     /// </summary>
     private void ToggleFlyout(Point anchor)
     {

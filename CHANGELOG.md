@@ -3,6 +3,22 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.23.0] - 2026-07-22
+
+### Fixed
+- **Flyout no longer straddles two monitors** — on multi-monitor setups the usage flyout could
+  be drawn half on one monitor and half on the next, especially when the monitors run different
+  scale factors (moving onto a differently-scaled monitor resizes the flyout *after* its
+  position was computed, pushing it past the edge). Placement is now re-clamped with the final
+  size, and the flip-below path — used when the taskbar is at the top — clamps to the bottom
+  edge instead of spilling onto the monitor below. The flyout always renders entirely on one
+  monitor. (#104)
+
+### Changed
+- **Taskbar readout clicks open the flyout on that monitor** — clicking the usage readout on a
+  secondary monitor's taskbar now opens the flyout right above that readout, instead of always
+  jumping to the primary monitor's tray corner. (#104)
+
 ## [0.22.1] - 2026-07-19
 
 ### Fixed

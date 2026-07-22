@@ -38,6 +38,11 @@ public sealed class FlyoutPanel : Form
     // At least two points are needed to draw a line between samples.
     private bool HasHistory => _history.Count >= 2;
 
+    // True while ShowNear is placing/showing the flyout. A DPI change during that sequence is
+    // the expected move-onto-another-monitor resize — ShowNear re-clamps with the final size —
+    // not a live monitor-settings change that should dismiss the flyout.
+    private bool _placing;
+
     public FlyoutPanel(Logger? logger = null)
     {
         _logger = logger;
@@ -138,28 +143,38 @@ public sealed class FlyoutPanel : Form
     {
         base.OnDpiChanged(e);
         // Re-fit the hand-drawn layout for the new DPI. If the popup is open, dismiss it too: it's
-        // positioned once at open time (ShowNear), so a live DPI change would leave it sized for the
+        // positioned at open time (ShowNear), so a live DPI change would leave it sized for the
         // new DPI but anchored at the old-DPI coordinates — the next open re-fits and re-anchors.
+        // During ShowNear's own show sequence the resize is expected and re-clamped there, so the
+        // flyout being opened is not dismissed.
         Relayout();
-        if (Visible)
+        if (Visible && !_placing)
             Hide();
     }
 
     public void ShowNear(Point anchor)
     {
-        var screen = Screen.FromPoint(anchor).WorkingArea;
+        // Resolve the target monitor from the click anchor once; every placement below clamps
+        // against this working area so the flyout can never straddle onto a neighbour.
+        var area = Screen.FromPoint(anchor).WorkingArea;
 
-        // Position above and to the left of the anchor (typical for tray popups)
-        var x = anchor.X - Width / 2;
-        var y = anchor.Y - Height - 4;
+        _placing = true;
+        try
+        {
+            Location = FlyoutPlacement.Compute(area, anchor, Size);
+            Show();
+            // Landing on a differently-scaled monitor fires DpiChanged → Relayout resizes the
+            // form after the placement above was computed — re-clamp with the final size so
+            // the resized flyout still sits entirely inside the target monitor (issue #104).
+            var placed = FlyoutPlacement.Compute(area, anchor, Size);
+            if (Location != placed)
+                Location = placed;
+        }
+        finally
+        {
+            _placing = false;
+        }
 
-        // Keep on screen
-        if (x + Width > screen.Right) x = screen.Right - Width;
-        if (x < screen.Left) x = screen.Left;
-        if (y < screen.Top) y = anchor.Y + 4; // flip below if no room above
-
-        Location = new Point(x, y);
-        Show();
         ForceForeground();
     }
 

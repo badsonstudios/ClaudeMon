@@ -226,7 +226,9 @@ public sealed class SettingsForm : Form
         _numberColorCombo = AddComboRow("Percentage color", NumberColorOptions.Select(o => o.Text),
             indent: true, visible: () => TaskbarOn() && !IsBar());
         _allMonitorsToggle = AddToggleRow("Show on secondary monitors", indent: true, visible: TaskbarOn);
-        _secondaryOffsetNumeric = AddNumericRow("Secondary position (− left / + right)", -300, 300,
+        // Named like the primary row — this one only shows indented under "Show on secondary
+        // monitors", so that context carries the "secondary" meaning (#105).
+        _secondaryOffsetNumeric = AddNumericRow("Position (− left / + right)", -300, 300,
             indent: true, visible: () => TaskbarOn() && _allMonitorsToggle.Checked, suffix: null);
         _secondaryOffsetNumeric.Increment = 2;
 
@@ -294,14 +296,26 @@ public sealed class SettingsForm : Form
     private NumericUpDown AddNumericRow(
         string label, int min, int max, bool indent = false, Func<bool>? visible = null, string? suffix = "%")
     {
-        var lbl = new Label { Text = label, AutoSize = true };
+        // Fixed width capped short of the numeric's left edge, with AutoEllipsis — a label the
+        // font renders wider than the column truncates with "…" instead of running under the
+        // spinner (#105). MiddleLeft in a fixed-height label keeps the text on the numeric's
+        // vertical centre, where the AutoSize baseline used to sit.
+        var left = indent ? Pad + 16 : Pad;
+        var lbl = new Label
+        {
+            Text = label,
+            AutoEllipsis = true,
+            TextAlign = ContentAlignment.MiddleLeft,
+        };
         var numeric = new ThemedNumericUpDown { Minimum = min, Maximum = max };
         Controls.Add(lbl);
         Controls.Add(numeric);
-        _hspec.Add((lbl, indent ? Pad + 16 : Pad, 0, 0));
+        // 24 high (not the ~18 the font needs) so text scaled up without a DPI change — the same
+        // accessibility setting that causes the overflow — has vertical headroom too.
+        _hspec.Add((lbl, left, ControlLeft - left - 8, 24));
         _hspec.Add((numeric, ControlLeft, NumericWidth, 0));
 
-        var items = new List<(Control, int)> { (lbl, 6), (numeric, 3) };
+        var items = new List<(Control, int)> { (lbl, 2), (numeric, 3) };
         if (suffix is not null)
         {
             var sfx = new Label

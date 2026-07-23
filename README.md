@@ -111,7 +111,7 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | **Show % sign after percentages** | Render the readout's percentages with an explicit percent sign (`42% · 17%` instead of `42 · 17`). Numbers style only (off by default, keeping the compact original look) |
 | **Taskbar text colors** | Color of the "Claude" label and the percentage number. Fixed presets, plus **Auto (match taskbar)** — light text on a dark taskbar, dark on a light one, following theme changes live; the number can also stay **Auto (usage level)** (green/yellow/orange/red) |
 | **Show on secondary monitors** | Also show the readout on secondary monitors' taskbars, not just the primary (off by default; needs Windows set to show the taskbar on all displays) |
-| **Secondary position** (under *Show on secondary monitors*) | Nudge the readout left (−) or right (+) on secondary monitors to fine-tune the gap from the clock; previews live as you change it (0 by default). Independent of the primary **Position** nudge |
+| **Position** (under *Show on secondary monitors*) | Nudge the readout left (−) or right (+) on secondary monitors to fine-tune the gap from the clock; previews live as you change it (0 by default). Independent of the primary **Position** nudge |
 
 ### Updates
 

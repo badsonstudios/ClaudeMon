@@ -13,6 +13,12 @@ GitHub release; the release notes are taken from these entries.
   size, and the flip-below path — used when the taskbar is at the top — clamps to the bottom
   edge instead of spilling onto the monitor below. The flyout always renders entirely on one
   monitor. (#104)
+- **Settings label no longer overlaps its spinner** — on the Taskbar tab, the secondary
+  monitor's position label could run underneath its numeric control when Windows renders text
+  larger than usual (e.g. the "Make text bigger" accessibility setting). The row is now named
+  **Position**, matching the primary row — it only appears under *Show on secondary monitors*,
+  which carries the context — and numeric-row labels truncate with "…" instead of ever
+  overlapping their control. (#105)
 
 ### Changed
 - **Taskbar readout clicks open the flyout on that monitor** — clicking the usage readout on a

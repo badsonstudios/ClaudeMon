@@ -37,6 +37,12 @@ OutputBaseFilename=ClaudeMon-Setup-{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+; The app icon (#108), shared with the executable itself via <ApplicationIcon> in
+; ClaudeMon.csproj. Regenerate the asset with tools\icon\generate-claudemon-icon.ps1.
+; The [Icons] shortcut entries deliberately set no IconFilename: they point at the exe,
+; which already carries this icon embedded.
+SetupIconFile=..\src\ClaudeMon\Resources\ClaudeMon.ico
+UninstallDisplayIcon={app}\{#MyAppExeName}
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 ; ClaudeMon is a windowless tray app. The Windows Restart Manager (which

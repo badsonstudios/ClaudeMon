@@ -57,6 +57,37 @@ internal sealed class UpdateAvailableDialog : Form
 
     public UpdateDialogChoice Choice { get; private set; } = UpdateDialogChoice.Ignore;
 
+    // Placement (#108). The area is resolved once in OnLoad and reused if a DPI change arrives
+    // before the window is visible; _shown then freezes it, so dragging the dialog to another
+    // monitor afterwards never re-centers it.
+    private readonly Rectangle? _requestedArea;
+    private Rectangle? _placementArea;
+    private bool _shown;
+    private bool _placing;
+
+    /// <summary>
+    /// Centers on <paramref name="area"/>, ignoring re-entrant calls. Moving the window can make
+    /// Windows deliver <c>WM_DPICHANGED</c> synchronously, which lands back in
+    /// <see cref="OnDpiChanged"/> and would call straight back in here.
+    /// <c>PlaceStable</c> already re-measures after its own move, so the nested call has nothing
+    /// to add and would only risk a loop.
+    /// </summary>
+    private void PlaceOn(Rectangle area)
+    {
+        if (_placing)
+            return;
+
+        _placing = true;
+        try
+        {
+            DialogPlacement.CenterOn(this, area);
+        }
+        finally
+        {
+            _placing = false;
+        }
+    }
+
     /// <param name="currentVersion">The running version, already formatted (e.g. "0.11.0").</param>
     /// <param name="latestVersion">The newer release's version, already formatted.</param>
     /// <param name="releaseNotesUrl">
@@ -64,20 +95,36 @@ internal sealed class UpdateAvailableDialog : Form
     /// "View release notes" link opens it without closing the dialog; a null/non-http(s)
     /// value hides the link rather than leaving a dead control.
     /// </param>
-    public UpdateAvailableDialog(string currentVersion, string latestVersion, string? releaseNotesUrl)
+    /// <param name="placementArea">
+    /// Working area to center on, or null to resolve the foreground window's monitor here.
+    /// Callers that show more than one dialog in a flow pass the same area to each so a later
+    /// dialog can't land on a different monitor than the one the user just clicked on (#108).
+    /// </param>
+    public UpdateAvailableDialog(
+        string currentVersion, string latestVersion, string? releaseNotesUrl,
+        Rectangle? placementArea = null)
     {
+        _requestedArea = placementArea;
+
         Text = "ClaudeMon update";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        // Manual + CenterOnPrimary in OnLoad: CenterScreen would follow the mouse cursor's
-        // monitor, which for this timer-popped dialog means a random side monitor (#88).
+        // Manual + PlaceOn(foreground monitor) in OnLoad: CenterScreen would follow the mouse
+        // cursor's monitor, which for this timer-popped dialog means a random side monitor
+        // (#88), while always centering on the primary left the dialog unnoticed on another
+        // screen when the user was working elsewhere (#108).
         StartPosition = FormStartPosition.Manual;
         // The automatic check opens this with no owner window from a background timer, where
         // the foreground lock would otherwise leave it buried behind (and unfocusable under)
         // whatever the user is working in — the very failure mode of the balloon it replaced.
         // Ignore is one Esc away, so staying on top is the lesser evil.
         TopMost = true;
+        // Explicit even though it is the WinForms default: the taskbar button is the recovery
+        // path when TopMost loses — to another always-on-top window, to a fullscreen exclusive
+        // app, or to the foreground lock swallowing the Activate() below (#108). Stating it
+        // keeps that dependency visible and survives a future move to ShowDialog(owner).
+        ShowInTaskbar = true;
         // Manual layout, like the other hand-scaled windows: WinForms auto-scaling would fight
         // the Sc()-based Relayout, so we own all scaling (point-sized fonts scale on their own).
         AutoScaleMode = AutoScaleMode.None;
@@ -179,7 +226,8 @@ internal sealed class UpdateAvailableDialog : Form
         // DeviceDpi is only reliable once the handle exists; the constructor's Relayout ran at
         // the default DPI, so redo it here (before first paint) at the real monitor DPI.
         Relayout();
-        DialogPlacement.CenterOnPrimary(this);
+        _placementArea = DialogPlacement.ResolveArea(_requestedArea);
+        PlaceOn(_placementArea.Value);
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -187,11 +235,20 @@ internal sealed class UpdateAvailableDialog : Form
         base.OnDpiChanged(e);
         // Re-fit if the dialog is dragged to a monitor with a different scale.
         Relayout();
+
+        // Still part of the initial placement: if Windows deferred the DPI transition from the
+        // OnLoad move until the window was shown, the relayout above has just resized the
+        // dialog around a position computed for the old size — re-center rather than leave it
+        // off-center or straddling the edge (#104's failure mode, #108's placement). Once
+        // shown, never re-center: that would yank a dialog the user is dragging.
+        if (!_shown && _placementArea is { } area)
+            PlaceOn(area);
     }
 
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        _shown = true;
         // Ask for keyboard focus so Enter/Esc work immediately. If another app holds the
         // foreground lock Windows may only flash the taskbar button — TopMost still keeps the
         // dialog visible either way.

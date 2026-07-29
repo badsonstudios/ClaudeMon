@@ -445,14 +445,20 @@ public sealed class TrayApplication : IDisposable
             // several versions can ship between updates, and the index shows everything the
             // user is about to get, newest-first (#89). "Get the update"'s no-installer
             // fallback still opens the specific release page via _updateUrl.
+            // Resolved once for the whole flow: by the time the download dialog opens, this
+            // dialog has closed and the foreground window may be something else (or nothing),
+            // which would send the progress window to a different monitor than the one the
+            // user just clicked "Get the update" on (#108).
+            var placementArea = DialogPlacement.ForegroundWorkingArea();
+
             using var dialog = new UpdateAvailableDialog(
-                FormatVersion(CurrentVersion), version, ReleasesFallbackUrl);
+                FormatVersion(CurrentVersion), version, ReleasesFallbackUrl, placementArea);
             dialog.ShowDialog();
 
             switch (dialog.Choice)
             {
                 case UpdateDialogChoice.GetUpdate:
-                    StartInteractiveUpdateInstall();
+                    StartInteractiveUpdateInstall(placementArea);
                     break;
                 case UpdateDialogChoice.SkipVersion:
                     // All _configManager.Update calls run on the UI thread (this dialog and
@@ -475,7 +481,12 @@ public sealed class TrayApplication : IDisposable
     /// (no installer, or no checksum to verify it against) opens the release page instead, as
     /// does the dialog's failure fallback. Runs on the UI thread.
     /// </summary>
-    private void StartInteractiveUpdateInstall()
+    /// <param name="placementArea">
+    /// The monitor working area the calling flow already resolved, so a chained prompt →
+    /// download sequence stays on one monitor. Null (the tray "Download update" entry point,
+    /// which has no preceding dialog) resolves it fresh.
+    /// </param>
+    private void StartInteractiveUpdateInstall(Rectangle? placementArea = null)
     {
         if (_latestVersion is null || _installerUrl is null || _checksumUrl is null)
         {
@@ -500,7 +511,7 @@ public sealed class TrayApplication : IDisposable
         var version = _latestVersion;
         using var dialog = new UpdateDownloadDialog(
             _updateInstaller, _installerUrl, _checksumUrl, version,
-            path => LaunchDownloadedInstaller(path, version));
+            path => LaunchDownloadedInstaller(path, version), placementArea);
         _openDownloadDialog = dialog;
 
         // Claim the flag for the whole dialog + launch: ShowDialog pumps messages, so a 24h

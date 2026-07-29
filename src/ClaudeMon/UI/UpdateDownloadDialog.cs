@@ -88,16 +88,48 @@ internal sealed class UpdateDownloadDialog : Form
 
     public UpdateDownloadOutcome Outcome { get; private set; } = UpdateDownloadOutcome.Cancelled;
 
+    // Placement (#108) — see UpdateAvailableDialog for the reasoning.
+    private readonly Rectangle? _requestedArea;
+    private Rectangle? _placementArea;
+    private bool _shown;
+    private bool _placing;
+
+    /// <summary>
+    /// Centers on <paramref name="area"/>, ignoring re-entrant calls — see
+    /// <see cref="UpdateAvailableDialog"/> for why moving the window can call back into this.
+    /// </summary>
+    private void PlaceOn(Rectangle area)
+    {
+        if (_placing)
+            return;
+
+        _placing = true;
+        try
+        {
+            DialogPlacement.CenterOn(this, area);
+        }
+        finally
+        {
+            _placing = false;
+        }
+    }
+
     /// <param name="version">The version being downloaded, already formatted (e.g. "0.13.0").</param>
     /// <param name="launchInstaller">
     /// Launches the verified installer at the given path, returning whether the process
     /// started (TrayApplication.LaunchDownloadedInstaller). Invoked on the UI thread from
     /// inside the modal pump when the download succeeds.
     /// </param>
+    /// <param name="placementArea">
+    /// Working area to center on, or null to resolve the foreground window's monitor here. The
+    /// update flow passes the area the "A new version is available" dialog used, so the
+    /// progress window opens on the same monitor the user just clicked on (#108).
+    /// </param>
     public UpdateDownloadDialog(
         UpdateInstaller installer, string installerUrl, string checksumUrl, string version,
-        Func<string, bool> launchInstaller)
+        Func<string, bool> launchInstaller, Rectangle? placementArea = null)
     {
+        _requestedArea = placementArea;
         _installer = installer;
         _installerUrl = installerUrl;
         _checksumUrl = checksumUrl;
@@ -108,11 +140,16 @@ internal sealed class UpdateDownloadDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        // Manual + CenterOnPrimary in OnLoad — all app dialogs open on the primary monitor (#88).
+        // Manual + PlaceOn(foreground monitor) in OnLoad — opens on the monitor the user is
+        // working on, without ever following the mouse cursor (#88, #108).
         StartPosition = FormStartPosition.Manual;
         // Same reasoning as UpdateAvailableDialog: this can open from a background check with no
         // owner window, where the foreground lock would bury it. Cancel is one Esc away.
         TopMost = true;
+        // Explicit default, same reasoning as UpdateAvailableDialog: the taskbar button is the
+        // recovery path when TopMost loses (#108). It matters more here — this dialog can sit
+        // in its "Installing…" state for a while with nothing else to signal it.
+        ShowInTaskbar = true;
         AutoScaleMode = AutoScaleMode.None;
         Font = _baseFont;
 
@@ -189,13 +226,19 @@ internal sealed class UpdateDownloadDialog : Form
         base.OnLoad(e);
         // DeviceDpi is only reliable once the handle exists (see UpdateAvailableDialog.OnLoad).
         Relayout();
-        DialogPlacement.CenterOnPrimary(this);
+        _placementArea = DialogPlacement.ResolveArea(_requestedArea);
+        PlaceOn(_placementArea.Value);
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
     {
         base.OnDpiChanged(e);
         Relayout();
+
+        // Initial placement is not finished until the window is shown — see
+        // UpdateAvailableDialog.OnDpiChanged for why this re-center is guarded by _shown.
+        if (!_shown && _placementArea is { } area)
+            PlaceOn(area);
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -207,6 +250,7 @@ internal sealed class UpdateDownloadDialog : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        _shown = true;
         Activate();
         _ = RunDownloadAsync();
     }

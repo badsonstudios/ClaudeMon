@@ -3,6 +3,33 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.24.0] - 2026-07-29
+
+### Added
+- **ClaudeMon now has its own app icon** — a clay tile with a white "C". It appears on the
+  taskbar button and in Alt-Tab for every ClaudeMon window (update prompts, Settings, About,
+  the usage breakdown), on the installer, on the Start-menu shortcut, and in Add/Remove
+  Programs. Previously all of these showed the generic Windows placeholder icon, which made an
+  open ClaudeMon window impossible to pick out of a crowded taskbar. The tray icon itself is
+  unchanged — it's still drawn live from your usage. (#108)
+
+### Fixed
+- **The update window no longer hides on a monitor you aren't using** — it now opens centred on
+  the monitor holding the window you were last working in, instead of always on the primary
+  monitor. On a multi-monitor setup an update prompt could appear on a screen you weren't
+  looking at and simply go unnoticed. Placement still never follows the mouse cursor, so the
+  behaviour fixed in #88 is preserved; when the foreground window can't be identified (the
+  desktop is focused, the window is minimised, or it's one of ClaudeMon's own) it falls back to
+  the primary monitor as before. (#108)
+- **The update prompt and its download window stay on the same monitor** — clicking "Get the
+  update" no longer sends the progress window to a different screen than the prompt you clicked
+  it on. (#108)
+- **The update window is centred correctly on mixed-DPI multi-monitor setups** — a window moved
+  onto a monitor with a different scale factor is resized by Windows *after* its position was
+  worked out, which could leave the dialog off-centre or straddling the monitor edge. Placement
+  is now re-run until the window is observed to actually be centred where it should be. Same
+  class of bug as the flyout fix in #104. (#108)
+
 ## [0.23.0] - 2026-07-22
 
 ### Fixed

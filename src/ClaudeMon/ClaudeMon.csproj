@@ -6,9 +6,19 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>0.23.0</Version>
+    <Version>0.24.0</Version>
     <AssemblyTitle>ClaudeMon</AssemblyTitle>
     <Description>Windows system tray monitor for Claude AI usage</Description>
+    <!-- The app icon for every window's taskbar button and Alt-Tab entry (#108). WinForms sets
+         no per-window icon on these dialogs (WM_GETICON returns 0 for all three icon sizes, as
+         they are FormBorderStyle.FixedDialog with no explicit Form.Icon), so Windows
+         synthesizes those from the executable's own icon resource — which is what this embeds.
+         No per-Form Icon assignment is needed. Title bars stay icon-less, which is both the
+         existing behaviour and the Windows convention for fixed dialogs. Also used by the
+         installer (SetupIconFile) and inherited by the Start-menu shortcut, which points at the
+         exe. Regenerate the asset with tools\icon\generate-claudemon-icon.ps1 — it is a
+         committed artifact, not built automatically. -->
+    <ApplicationIcon>Resources\ClaudeMon.ico</ApplicationIcon>
     <!-- Per-Monitor-V2 DPI awareness: coordinates are real (physical) pixels on every monitor
          (so the taskbar overlay positions correctly on mixed-DPI setups) and each window scales
          crisply for the monitor it's on rather than being bitmap-stretched. Consumed by

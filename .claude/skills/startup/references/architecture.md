@@ -11,16 +11,25 @@ ClaudeMon/
 │   ├── Services/                   #   CredentialReader, ClaudeApiClient (Anthropic API)
 │   ├── Monitoring/                 #   UsageMonitor (polling), AlertManager, LimitDisplay, TrayTooltip
 │   ├── Configuration/              #   ConfigManager (load/save settings, startup registry)
+│   ├── Resources/                  #   embedded/committed assets (model-pricing.json, ClaudeMon.ico)
 │   └── UI/                         #   IconRenderer, FlyoutPanel, SettingsForm
 ├── tests/ClaudeMon.Tests/          # xUnit tests (mirrors src; uses InternalsVisibleTo)
 ├── installer/                      # Inno Setup script + build.sh
+├── tools/                          # one-off dev utilities, NOT part of the build
+│   └── icon/                       #   generate-claudemon-icon.ps1 → Resources/ClaudeMon.ico
 └── .claude/                        # Claude config (context, skills, agents)
 ```
 
 ## Layers & responsibilities
 
 - **UI** (`UI/`) — `IconRenderer` draws the 16×16 tray icon (number + threshold color),
-  `FlyoutPanel` shows usage details, `SettingsForm` edits `AppSettings`.
+  `FlyoutPanel` shows usage details, `SettingsForm` edits `AppSettings`. `DialogPlacement`
+  owns where windows open — pure `CenterIn` math plus `PlaceStable`, which re-centers until
+  the window is observed to actually be centered (a move onto a differently-scaled monitor
+  resizes it afterwards under Per-Monitor-V2); `ForegroundMonitor` resolves which monitor the
+  user is working on from the foreground window, never the mouse cursor (#88, #108). The
+  static app icon is a committed asset (`Resources/ClaudeMon.ico`, wired via
+  `<ApplicationIcon>`), distinct from the live tray icon `IconRenderer` draws.
 - **Monitoring** (`Monitoring/`) — `UsageMonitor` polls on an interval and surfaces usage;
   `LocalUsageMonitor` drives the local-transcript scanner on its own timer (same
   Start/Pause/Resume shape); `AlertManager` decides when to notify (pace-aware 5-hour alerts

@@ -23,4 +23,13 @@
     <ProjectReference Include="..\..\src\ClaudeMon\ClaudeMon.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The shipped app icon, copied next to the tests so AppIconTests can check the .ico
+         container structure. It is a hand-written multi-resolution container (see
+         tools\icon\generate-claudemon-icon.ps1), so a botched regeneration should fail CI
+         rather than ship. -->
+    <None Include="..\..\src\ClaudeMon\Resources\ClaudeMon.ico" Link="ClaudeMon.ico"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -120,6 +120,11 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | **Check for updates automatically** | Periodically check GitHub for a newer ClaudeMon release and offer it in the update window (on by default). Skipped versions stay quiet until something newer ships; a manual **Check for updates** from the tray menu always asks |
 | **Install updates automatically** (under *Check for updates*) | When the automatic check finds a newer release, download and install it silently — no prompts, no wizard — and relaunch on the new version, with a tray notification afterward (off by default). Your **run at Windows startup** choice is always preserved across updates |
 
+The update window opens centred on the monitor holding whatever you were last working in, and
+has its own taskbar button and Alt-Tab entry — so if it ends up behind another window you can
+switch straight back to it. It never follows the mouse cursor; when the foreground window can't
+be identified it opens on the primary monitor.
+
 ## Building from Source
 
 ```bash
@@ -136,6 +141,18 @@ dotnet run --project src/ClaudeMon
 # Run tests
 dotnet test
 ```
+
+### Regenerating the app icon
+
+`src/ClaudeMon/Resources/ClaudeMon.ico` is a committed asset, embedded in the executable via
+`<ApplicationIcon>` and reused by the installer. It is **not** built automatically — regenerate
+it only when the artwork itself changes:
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/icon/generate-claudemon-icon.ps1
+```
+
+(The live tray icon is separate: `UI/IconRenderer` draws it from your current usage at runtime.)
 
 ### Building the Installer
 

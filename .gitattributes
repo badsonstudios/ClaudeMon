@@ -1,0 +1,6 @@
+# Binary assets — never line-ending-normalised. The app icon is a hand-written
+# multi-resolution container (tools/icon/generate-claudemon-icon.ps1); CRLF translation
+# would corrupt it. Git already detects it as binary, this makes it explicit.
+*.ico binary
+*.png binary
+*.exe binary

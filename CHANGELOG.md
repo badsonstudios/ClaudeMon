@@ -38,6 +38,10 @@ GitHub release; the release notes are taken from these entries.
   across several projects meant scrolling a small box on an otherwise empty screen. The window
   can't be dragged smaller than the point where the table headers and buttons stop being
   usable, and it doesn't yet remember its size between sessions. (#110)
+- **Development only — CI now measures code coverage.** Every push and pull request publishes a
+  per-class coverage summary, uploads the full HTML report, and fails the build if the logic
+  layer (everything except the desktop-bound WinForms code, which can't run headless) drops
+  below 85% line / 84% branch. Nothing about the app itself changed. (#102)
 
 ## [0.23.0] - 2026-07-22
 

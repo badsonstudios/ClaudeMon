@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Coverage settings for the collector run documented in
+  .claude/skills/startup/references/testing.md (pass this file with the `settings` option of
+  `dotnet test`, alongside `collect:"XPlat Code Coverage"`).
+
+  The point of the exclusions is to make the number mean something. ClaudeMon is a WinForms tray
+  app, so a large slice of it is desktop-bound: Forms, Controls, NativeWindow hosts, Win32/registry
+  interop and the process entry points. None of that can run in a headless test host, so leaving it
+  in produces a headline percentage that is dominated by code nobody can ever cover — and a
+  regression in the logic layer disappears into the noise.
+
+  What is left after the exclusions is the "logic layer" the CI gate protects: Configuration,
+  Models, Monitoring, Services, plus the pure UI helpers that were deliberately extracted out of
+  the forms so they *are* testable (the *Layout / *Metrics / *Placement / *Text classes,
+  IconRenderer, Sparkline, Theme, DpiScale, ForegroundMonitor).
+
+  Rule of thumb when adding a class here: exclude it only if it genuinely cannot run without a
+  live Windows desktop or a message loop. "It has no tests yet" is not a reason — that is exactly
+  what the gate is meant to notice.
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <Exclude>
+            [ClaudeMon]ApplicationConfiguration,
+            [ClaudeMon]ClaudeMon.Program,
+            [ClaudeMon]ClaudeMon.TrayApplication,
+            [ClaudeMon]ClaudeMon.Services.SystemSessionEvents,
+            [ClaudeMon]ClaudeMon.UI.AboutDialog,
+            [ClaudeMon]ClaudeMon.UI.FlyoutPanel,
+            [ClaudeMon]ClaudeMon.UI.SettingsForm,
+            [ClaudeMon]ClaudeMon.UI.SystemTheme,
+            [ClaudeMon]ClaudeMon.UI.TabStrip,
+            [ClaudeMon]ClaudeMon.UI.TabStrip/*,
+            [ClaudeMon]ClaudeMon.UI.TaskbarEnumerator,
+            [ClaudeMon]ClaudeMon.UI.TaskbarInfo,
+            [ClaudeMon]ClaudeMon.UI.TaskbarOverlayManager,
+            [ClaudeMon]ClaudeMon.UI.TaskbarOverlayManager/*,
+            [ClaudeMon]ClaudeMon.UI.TaskbarOverlayWindow,
+            [ClaudeMon]ClaudeMon.UI.ThemedNumericUpDown,
+            [ClaudeMon]ClaudeMon.UI.ToggleSwitch,
+            [ClaudeMon]ClaudeMon.UI.UpdateAvailableDialog,
+            [ClaudeMon]ClaudeMon.UI.UpdateDownloadDialog,
+            [ClaudeMon]ClaudeMon.UI.UsageBreakdownForm
+          </Exclude>
+          <!-- ExcludeByAttribute is deliberately left at coverlet's default. Adding
+               CompilerGeneratedAttribute here also drops record members and async state machines,
+               which shifts per-class numbers in both directions and makes the gate hard to reason
+               about; keeping the default means the gate number is just "the usual coverlet number,
+               minus the desktop-bound classes above". -->
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

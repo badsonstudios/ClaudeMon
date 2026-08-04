@@ -11,7 +11,8 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Least privilege: the job only reads the repo.
+# Least privilege: the job only reads the repo. (Writing the job summary and uploading
+# artifacts need no extra permissions.)
 permissions:
   contents: read
 
@@ -24,6 +25,13 @@ jobs:
     env:
       # Test project references src/ClaudeMon, so building it builds both.
       TEST_PROJECT: tests/ClaudeMon.Tests/ClaudeMon.Tests.csproj
+      # Coverage gate for the logic layer only — see coverage.runsettings for what that means
+      # and .claude/skills/startup/references/testing.md for how to reproduce it locally.
+      # Measured at 87.0% line / 86.2% branch on 2026-08-04 (Release, as built below); the gate
+      # sits just below so it catches real regressions without tripping on rounding, a Debug
+      # build, or an unrelated refactor.
+      COVERAGE_MIN_LINE: '85'
+      COVERAGE_MIN_BRANCH: '84'
 
     steps:
       - name: Checkout
@@ -38,8 +46,61 @@ jobs:
       - name: Restore
         run: dotnet restore $env:TEST_PROJECT
 
+      # ReportGenerator is pinned by .config/dotnet-tools.json, so CI and a local run use the
+      # exact same version — no separate action to keep in step with the manifest.
+      - name: Restore .NET tools
+        run: dotnet tool restore
+
       - name: Build
         run: dotnet build $env:TEST_PROJECT -c Release --no-restore
 
-      - name: Test
-        run: dotnet test $env:TEST_PROJECT -c Release --no-build --verbosity normal
+      - name: Test with coverage
+        run: >
+          dotnet test $env:TEST_PROJECT -c Release --no-build --verbosity normal
+          --collect:"XPlat Code Coverage"
+          --settings coverage.runsettings
+          --results-directory coverage/raw
+
+      # Quoting matters: PowerShell would otherwise read the semicolons in -reporttypes as
+      # statement separators and try to run "Cobertura" as a command.
+      - name: Generate coverage report
+        run: >
+          dotnet reportgenerator
+          "-reports:coverage/raw/**/coverage.cobertura.xml"
+          "-targetdir:coverage/report"
+          "-reporttypes:Html;Cobertura;MarkdownSummaryGithub;JsonSummary"
+          "-title:ClaudeMon logic layer"
+
+      - name: Publish coverage to job summary
+        run: Get-Content coverage/report/SummaryGithub.md -Raw | Add-Content $env:GITHUB_STEP_SUMMARY -Encoding utf8
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/report
+          if-no-files-found: error
+
+      # Runs after the upload so a failed gate still leaves the report attached to the run —
+      # otherwise you'd have a red build and no way to see which class dropped.
+      - name: Check coverage threshold
+        run: |
+          $summary = (Get-Content coverage/report/Summary.json -Raw | ConvertFrom-Json).summary
+          $line = [double]$summary.linecoverage
+          $branch = [double]$summary.branchcoverage
+          $minLine = [double]$env:COVERAGE_MIN_LINE
+          $minBranch = [double]$env:COVERAGE_MIN_BRANCH
+          Write-Host "Logic-layer coverage: $line% line (min $minLine%), $branch% branch (min $minBranch%)"
+          $failed = $false
+          if ($line -lt $minLine) {
+            Write-Host "::error::Line coverage $line% is below the $minLine% gate."
+            $failed = $true
+          }
+          if ($branch -lt $minBranch) {
+            Write-Host "::error::Branch coverage $branch% is below the $minBranch% gate."
+            $failed = $true
+          }
+          if ($failed) {
+            Write-Host "Download the 'coverage-report' artifact to see which classes regressed."
+            exit 1
+          }

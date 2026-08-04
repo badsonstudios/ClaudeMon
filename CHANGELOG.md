@@ -6,6 +6,15 @@ GitHub release; the release notes are taken from these entries.
 ## [0.24.0] - 2026-07-29
 
 ### Added
+- **Drill into a model or a project in the Usage & costs window** — select a row in *By model* and
+  the project table becomes "Projects using claude-fable-5", showing how that model's spend splits
+  across your projects; select a row in *By project* and the model table becomes "Models used in
+  C:\Projects\ClaudeMon". Previously the two tables were independent lists: you could see that one
+  model cost $12 and one project cost $8, but never how much of the model's spend came from which
+  project. The drill-down follows the timeframe you picked, sorts by any column like the main
+  tables, and its Total row sums to exactly the row you selected. Selecting the Total row (or
+  clicking "Show all", which appears next to the heading) goes back to the full picture. It reads
+  the usage data ClaudeMon already keeps, so nothing is rescanned and no numbers change. (#112)
 - **Sort the Usage & costs tables by clicking a column header** — click any header to sort by that
   column and click it again to reverse, so you can finally ask "which project burns the most
   cache-write tokens?" or read the list alphabetically instead of always by cost. The two tables

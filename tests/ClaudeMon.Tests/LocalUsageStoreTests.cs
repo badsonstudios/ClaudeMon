@@ -490,6 +490,166 @@ public class LocalUsageStoreTests : IDisposable
         Assert.Equal(0, today.Totals.TotalTokens);
     }
 
+    // Two projects sharing one model, one of them also using a second (unpriced) model — enough
+    // to prove both drill directions, the sums, and the unpriced flag carrying through (#112).
+    private LocalUsageStore CrossProductStore()
+    {
+        WriteTranscriptTo("proj-a", "s1.jsonl",
+            Line(_now.AddMinutes(-90), "msg_1", "req_1", input: 0, output: 100_000, model: "claude-fable-5"),
+            Line(_now.AddMinutes(-80), "msg_2", "req_2", input: 0, output: 200_000, model: "claude-other-1"));
+        WriteTranscriptTo("proj-b", "s2.jsonl",
+            Line(_now.AddMinutes(-70), "msg_3", "req_3", input: 0, output: 400_000, model: "claude-fable-5"));
+
+        var store = Store();
+        store.ScanOnce();
+        return store;
+    }
+
+    [Fact]
+    public void DrillDown_ByModel_IsThatModelSplitAcrossProjects()
+    {
+        var store = CrossProductStore();
+
+        var drill = store.DrillDown(BreakdownTimeframe.Today, BreakdownAxis.Model, "claude-fable-5");
+        Assert.NotNull(drill);
+        Assert.Equal(BreakdownAxis.Model, drill.Axis);
+
+        // Only the projects that ran fable, each with just its fable usage — proj-a's 200K of the
+        // other model belongs to the other model's drill-down, not this one.
+        Assert.Equal(2, drill.Rows.Count);
+        Assert.Equal(100_000, Assert.Single(drill.Rows, r => r.Key == "proj-a").OutputTokens);
+        Assert.Equal(400_000, Assert.Single(drill.Rows, r => r.Key == "proj-b").OutputTokens);
+
+        // The rows sum to exactly the model row the user selected.
+        var selected = Assert.Single(store.Breakdown(BreakdownTimeframe.Today)!.ByModel, r => r.Key == "claude-fable-5");
+        Assert.Equal(selected.TotalTokens, drill.Rows.Sum(r => r.TotalTokens));
+        Assert.Equal(selected.TotalTokens, drill.Totals.TotalTokens);
+        Assert.Equal(selected.CostUsd, drill.Totals.CostUsd, precision: 10);
+        Assert.False(drill.Totals.HasUnpricedModels);
+    }
+
+    [Fact]
+    public void DrillDown_ByProject_IsThatProjectSplitAcrossModels()
+    {
+        var store = CrossProductStore();
+
+        var drill = store.DrillDown(BreakdownTimeframe.Today, BreakdownAxis.Project, "proj-a");
+        Assert.NotNull(drill);
+        Assert.Equal(BreakdownAxis.Project, drill.Axis);
+
+        Assert.Equal(2, drill.Rows.Count);
+        Assert.Equal(100_000, Assert.Single(drill.Rows, r => r.Key == "claude-fable-5").OutputTokens);
+        var other = Assert.Single(drill.Rows, r => r.Key == "claude-other-1");
+        Assert.Equal(200_000, other.OutputTokens);
+        Assert.True(other.HasUnpricedModels);
+
+        var selected = Assert.Single(store.Breakdown(BreakdownTimeframe.Today)!.ByProject, r => r.Key == "proj-a");
+        Assert.Equal(selected.TotalTokens, drill.Totals.TotalTokens);
+        Assert.Equal(selected.CostUsd, drill.Totals.CostUsd, precision: 10);
+        Assert.True(drill.Totals.HasUnpricedModels);
+
+        // Cost order, like the tables the rows are shown in.
+        Assert.True(drill.Rows[0].CostUsd >= drill.Rows[^1].CostUsd);
+    }
+
+    [Fact]
+    public void DrillDown_SingleCounterpart_StillRenders()
+    {
+        var store = CrossProductStore();
+
+        // proj-b only ever ran one model, and that model is the whole project.
+        var drill = store.DrillDown(BreakdownTimeframe.Today, BreakdownAxis.Project, "proj-b");
+        var row = Assert.Single(drill!.Rows);
+        Assert.Equal("claude-fable-5", row.Key);
+        Assert.Equal(row.TotalTokens, drill.Totals.TotalTokens);
+    }
+
+    [Fact]
+    public void DrillDown_ProjectRows_UseTheDisplayNameFromCwd()
+    {
+        WriteTranscriptTo("c--Projects-ClaudeMon", "s1.jsonl",
+            Line(_now.AddMinutes(-30), "msg_1", "req_1", cwd: @"C:\Projects\ClaudeMon"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var drill = store.DrillDown(BreakdownTimeframe.Today, BreakdownAxis.Model, "claude-fable-5");
+        var row = Assert.Single(drill!.Rows);
+        Assert.Equal("c--Projects-ClaudeMon", row.Key);
+        Assert.Equal(@"C:\Projects\ClaudeMon", row.DisplayName);
+    }
+
+    [Fact]
+    public void DrillDown_RespectsTimeframe()
+    {
+        WriteTranscriptTo("proj-a", "s1.jsonl",
+            Line(_now.AddHours(-1), "msg_1", "req_1", input: 1, output: 0));
+        WriteTranscriptTo("proj-b", "s2.jsonl",
+            Line(_now.AddDays(-3), "msg_2", "req_2", input: 10, output: 0));
+
+        var store = Store();
+        store.ScanOnce();
+
+        // proj-b's usage is three days old, so only the wider window sees it.
+        var today = store.DrillDown(BreakdownTimeframe.Today, BreakdownAxis.Model, "claude-fable-5");
+        Assert.Equal("proj-a", Assert.Single(today!.Rows).Key);
+        Assert.Equal(1, today.Totals.TotalTokens);
+
+        var week = store.DrillDown(BreakdownTimeframe.SevenDays, BreakdownAxis.Model, "claude-fable-5");
+        Assert.Equal(2, week!.Rows.Count);
+        Assert.Equal(11, week.Totals.TotalTokens);
+    }
+
+    [Fact]
+    public void DrillDown_ModelIdVariants_MergeLikeTheTables()
+    {
+        WriteTranscriptTo("proj-a", "s1.jsonl",
+            Line(_now.AddMinutes(-30), "msg_1", "req_1", input: 100, output: 0, model: "claude-fable-5"),
+            Line(_now.AddMinutes(-20), "msg_2", "req_2", input: 50, output: 0, model: "claude-fable-5-20260101"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        // The dated variant is normalized into the same key the ByModel row uses, so drilling that
+        // row must pick up both entries.
+        var drill = store.DrillDown(BreakdownTimeframe.Today, BreakdownAxis.Model, "claude-fable-5");
+        Assert.Equal(150, Assert.Single(drill!.Rows).InputTokens);
+
+        // And the model rows of a project drill-down merge the same way.
+        var byProject = store.DrillDown(BreakdownTimeframe.Today, BreakdownAxis.Project, "proj-a");
+        Assert.Equal("claude-fable-5", Assert.Single(byProject!.Rows).Key);
+    }
+
+    [Fact]
+    public void DrillDown_KeyMatchIsCaseInsensitive()
+    {
+        var store = CrossProductStore();
+
+        var drill = store.DrillDown(BreakdownTimeframe.Today, BreakdownAxis.Project, "PROJ-A");
+        Assert.Equal(2, drill!.Rows.Count);
+    }
+
+    [Fact]
+    public void DrillDown_UnknownKey_EmptyRowsZeroTotals()
+    {
+        var store = CrossProductStore();
+
+        // Not null: a key can legitimately fall out of range when the timeframe narrows, and the
+        // window drops the drill-down rather than showing an error.
+        var drill = store.DrillDown(BreakdownTimeframe.Today, BreakdownAxis.Model, "claude-not-used");
+        Assert.NotNull(drill);
+        Assert.Empty(drill.Rows);
+        Assert.Equal(0, drill.Totals.TotalTokens);
+    }
+
+    [Fact]
+    public void DrillDown_MissingProjectsDir_ReturnsNull()
+    {
+        var store = Store(projectsDir: Path.Combine(_tempDir, "nope"));
+        store.ScanOnce();
+        Assert.Null(store.DrillDown(BreakdownTimeframe.Today, BreakdownAxis.Model, "claude-fable-5"));
+    }
+
     [Fact]
     public void BudgetTotals_WeekIsMondayThroughToday()
     {

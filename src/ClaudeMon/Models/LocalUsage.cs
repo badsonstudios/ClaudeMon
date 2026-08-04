@@ -135,6 +135,28 @@ public record LocalUsageBreakdown(
     IReadOnlyList<BreakdownRow> ByProject,
     BreakdownRow Totals);
 
+/// <summary>Which axis of the usage cells a breakdown row belongs to.</summary>
+public enum BreakdownAxis
+{
+    Model,
+    Project,
+}
+
+/// <summary>
+/// One side of the model × project cross-product for a single key (#112): the
+/// projects a model ran in, or the models a project used. <see cref="Rows"/> is
+/// always the <em>other</em> axis to <see cref="Axis"/>, sorted the same way the
+/// main tables are (cost, then tokens, descending), and <see cref="Totals"/> is
+/// their sum — which is exactly the totals of the selected row it drills into.
+/// </summary>
+public record LocalUsageDrillDown(
+    DateOnly FromDate,
+    DateOnly ToDate,
+    BreakdownAxis Axis,
+    string Key,
+    IReadOnlyList<BreakdownRow> Rows,
+    BreakdownRow Totals);
+
 /// <summary>
 /// The two sums the budget alerts compare against their caps: today (local
 /// calendar day) and the current local calendar week (Monday through today).

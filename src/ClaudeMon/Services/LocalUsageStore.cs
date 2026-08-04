@@ -211,33 +211,20 @@ public sealed class LocalUsageStore
             if (!_available)
                 return null;
 
-            var today = DateOnly.FromDateTime(_clock().ToLocalTime().DateTime);
-            var days = timeframe switch
-            {
-                BreakdownTimeframe.Today => 1,
-                BreakdownTimeframe.SevenDays => 7,
-                _ => 30,
-            };
-            var from = today.AddDays(-(days - 1));
+            var (from, to) = RangeOf(timeframe);
 
             var byModel = new Dictionary<string, BreakdownRow>(StringComparer.OrdinalIgnoreCase);
             var byProject = new Dictionary<string, BreakdownRow>(StringComparer.OrdinalIgnoreCase);
             var totals = EmptyRow("total", "Total");
 
-            for (var date = from; date <= today; date = date.AddDays(1))
+            for (var date = from; date <= to; date = date.AddDays(1))
             {
                 if (!_cells.TryGetValue(DayKeyOf(date), out var dayCells))
                     continue;
 
                 foreach (var (cellKey, cell) in dayCells)
                 {
-                    // Split on the separator directly: cell keys come verbatim
-                    // from the persisted cache, and a malformed one must not be
-                    // able to throw on the UI thread — it degrades to the
-                    // unknown project with the whole key as the model.
-                    var sep = cellKey.IndexOf('|');
-                    var project = sep < 0 ? UnknownProject : cellKey[..sep];
-                    var model = sep < 0 ? cellKey : cellKey[(sep + 1)..];
+                    var (project, model) = SplitCellKey(cellKey);
 
                     Fold(byModel, model, model, cell);
                     Fold(byProject, project, ProjectDisplay.Resolve(project, _projectPaths), cell);
@@ -245,8 +232,70 @@ public sealed class LocalUsageStore
                 }
             }
 
-            return new LocalUsageBreakdown(from, today, Sorted(byModel), Sorted(byProject), totals);
+            return new LocalUsageBreakdown(from, to, Sorted(byModel), Sorted(byProject), totals);
         }
+    }
+
+    /// <summary>
+    /// The other half of one breakdown row (#112): the projects a model ran in
+    /// (<see cref="BreakdownAxis.Model"/>), or the models a project used
+    /// (<see cref="BreakdownAxis.Project"/>) — the same cells
+    /// <see cref="Breakdown"/> walks, but keeping the pairing it folds away
+    /// instead of aggregating each axis on its own. Null when the feature is
+    /// unavailable; a key with no usage in range comes back with no rows and
+    /// zero totals rather than null, since a key can legitimately drop out of
+    /// the data when the timeframe narrows.
+    /// </summary>
+    public LocalUsageDrillDown? DrillDown(BreakdownTimeframe timeframe, BreakdownAxis axis, string key)
+    {
+        lock (_lock)
+        {
+            if (!_available)
+                return null;
+
+            var (from, to) = RangeOf(timeframe);
+
+            var rows = new Dictionary<string, BreakdownRow>(StringComparer.OrdinalIgnoreCase);
+            var totals = EmptyRow("total", "Total");
+
+            for (var date = from; date <= to; date = date.AddDays(1))
+            {
+                if (!_cells.TryGetValue(DayKeyOf(date), out var dayCells))
+                    continue;
+
+                foreach (var (cellKey, cell) in dayCells)
+                {
+                    var (project, model) = SplitCellKey(cellKey);
+                    // Case-insensitively, because that is how Breakdown's own
+                    // dictionaries merge keys — the row the caller selected may
+                    // differ from a cell's key only in case.
+                    var selected = axis == BreakdownAxis.Model ? model : project;
+                    if (!string.Equals(selected, key, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (axis == BreakdownAxis.Model)
+                        Fold(rows, project, ProjectDisplay.Resolve(project, _projectPaths), cell);
+                    else
+                        Fold(rows, model, model, cell);
+                    totals = Add(totals, cell);
+                }
+            }
+
+            return new LocalUsageDrillDown(from, to, axis, key, Sorted(rows), totals);
+        }
+    }
+
+    // The local date range a timeframe covers, ending today.
+    private (DateOnly From, DateOnly To) RangeOf(BreakdownTimeframe timeframe)
+    {
+        var today = DateOnly.FromDateTime(_clock().ToLocalTime().DateTime);
+        var days = timeframe switch
+        {
+            BreakdownTimeframe.Today => 1,
+            BreakdownTimeframe.SevenDays => 7,
+            _ => 30,
+        };
+        return (today.AddDays(-(days - 1)), today);
     }
 
     /// <summary>
@@ -323,13 +372,16 @@ public sealed class LocalUsageStore
             .ThenByDescending(r => r.TotalTokens)
             .ToList();
 
-    // "project|model" → "project". The model id can't contain '|', and the
-    // project half is everything before the LAST separator would be wrong if a
-    // directory name contained '|' — it can't on Windows, so first '|' is safe.
-    private static string ProjectOfCellKey(string cellKey)
+    // "project|model" → its two halves. The model id can't contain '|', and
+    // splitting on the LAST separator would be wrong if a directory name
+    // contained one — it can't on Windows, so the first '|' is safe. Cell keys
+    // come verbatim from the persisted cache and a malformed one must not be
+    // able to throw on the UI thread, so a key with no separator degrades to
+    // the unknown project with the whole key as the model.
+    private static (string Project, string Model) SplitCellKey(string cellKey)
     {
         var sep = cellKey.IndexOf('|');
-        return sep < 0 ? UnknownProject : cellKey[..sep];
+        return sep < 0 ? (UnknownProject, cellKey) : (cellKey[..sep], cellKey[(sep + 1)..]);
     }
 
     // First path segment under the projects root, e.g. "c--Projects-ClaudeMon";
@@ -595,7 +647,7 @@ public sealed class LocalUsageStore
             var liveProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var dayCells in _cells.Values)
                 foreach (var cellKey in dayCells.Keys)
-                    liveProjects.Add(ProjectOfCellKey(cellKey));
+                    liveProjects.Add(SplitCellKey(cellKey).Project);
 
             var deadPaths = _projectPaths.Keys.Where(p => !liveProjects.Contains(p)).ToList();
             foreach (var project in deadPaths)

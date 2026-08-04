@@ -22,6 +22,14 @@ using ClaudeMon.Services;
 /// the pure <see cref="BreakdownSort"/>, which sorts the <see cref="BreakdownRow"/> numbers rather
 /// than the formatted cell text and keeps the totals row pinned to the bottom.
 ///
+/// Selecting a row drills into it (#112): the two tables are the two axes of the same cells, so a
+/// selected model turns the project table into "the projects that model ran in" (and a selected
+/// project turns the model table into "the models that project used") — one
+/// <see cref="LocalUsageMonitor.DrillDown"/> query, the axes swapped. The selection lives in one
+/// table at a time; the other table's heading says what it is showing and grows a "Show all"
+/// button to get back. Deliberately no third table: the window is already two tables tall, and a
+/// tab strip is coming above them (#113).
+///
 /// Unlike the app's other windows this one is <b>resizable</b> (#110): a month of
 /// usage across several projects doesn't fit a fixed 700×150 viewport. The
 /// hand-scaled convention is kept — no <c>AutoScaleMode</c>, no anchors — but
@@ -46,6 +54,9 @@ internal sealed class UsageBreakdownForm : Form
     private const int ButtonGap = 8;
     private const int CloseButtonWidth = 82;
     private const int ComboWidth = 140;
+    /// <summary>The "Show all" button that ends a drill-down, right-aligned in a section heading.</summary>
+    private const int ShowAllWidth = 84;
+    private const int ShowAllHeight = 22;
     private const int NumericColumn = 62;
     private const int CostColumn = 78;
     private const int MinFirstColumn = 120;
@@ -69,10 +80,13 @@ internal sealed class UsageBreakdownForm : Form
     private readonly Label _heading;
     private readonly Label _timeframeLabel;
     private readonly ComboBox _timeframeCombo;
+    private readonly Label _selectHint;
     private readonly Label _modelLabel;
     private readonly ListView _modelList;
+    private readonly Button _modelShowAll;
     private readonly Label _projectLabel;
     private readonly ListView _projectList;
+    private readonly Button _projectShowAll;
     private readonly Label _hint;
     private readonly Button _exportButton;
     private readonly Button _closeButton;
@@ -80,6 +94,16 @@ internal sealed class UsageBreakdownForm : Form
     private LocalUsageBreakdown? _current;
     private bool _updatingMinimum;
     private bool _wasMinimized;
+
+    // The row selected in one table, resolved against the other axis — null when nothing is
+    // drilled into and both tables show everything.
+    private LocalUsageDrillDown? _drill;
+    // Filling a table changes its selection, which would re-enter the selection handler.
+    private bool _suppressSelection;
+    // One click that moves a selection raises SelectedIndexChanged twice (the row losing it, then
+    // the row gaining it), so the response is posted once and reads the settled selection.
+    private bool _selectionPending;
+    private (ListView List, BreakdownAxis Axis)? _lastSelectionSource;
 
     // One per table, so the two sort independently. Kept across a timeframe change on purpose:
     // switching Today → 30 days should answer the same question, not reset it.
@@ -144,7 +168,20 @@ internal sealed class UsageBreakdownForm : Form
         _timeframeCombo.SelectedIndexChanged += (_, _) => Reload();
         Controls.Add(_timeframeCombo);
 
-        _modelLabel = new Label { Text = "By model", AutoSize = true, ForeColor = _theme.HeaderAccent };
+        _selectHint = new Label
+        {
+            Text = "Select a row to break it down.",
+            AutoSize = true,
+            ForeColor = _theme.HintText,
+        };
+        Controls.Add(_selectHint);
+
+        _modelLabel = new Label
+        {
+            Text = BreakdownDrillText.ModelSection(null),
+            AutoSize = true,
+            ForeColor = _theme.HeaderAccent,
+        };
         Controls.Add(_modelLabel);
         _modelList = MakeTable("Model");
         _modelList.ColumnClick += (_, e) =>
@@ -152,9 +189,17 @@ internal sealed class UsageBreakdownForm : Form
             _modelSort = _modelSort.Toggle(e.Column);
             FillModels();
         };
+        _modelList.SelectedIndexChanged += (_, _) => OnRowSelected(_modelList, BreakdownAxis.Model);
         Controls.Add(_modelList);
+        _modelShowAll = MakeShowAllButton();
+        Controls.Add(_modelShowAll);
 
-        _projectLabel = new Label { Text = "By project", AutoSize = true, ForeColor = _theme.HeaderAccent };
+        _projectLabel = new Label
+        {
+            Text = BreakdownDrillText.ProjectSection(null),
+            AutoSize = true,
+            ForeColor = _theme.HeaderAccent,
+        };
         Controls.Add(_projectLabel);
         _projectList = MakeTable("Project");
         _projectList.ColumnClick += (_, e) =>
@@ -162,7 +207,10 @@ internal sealed class UsageBreakdownForm : Form
             _projectSort = _projectSort.Toggle(e.Column);
             FillProjects();
         };
+        _projectList.SelectedIndexChanged += (_, _) => OnRowSelected(_projectList, BreakdownAxis.Project);
         Controls.Add(_projectList);
+        _projectShowAll = MakeShowAllButton();
+        Controls.Add(_projectShowAll);
 
         _hint = new Label
         {
@@ -172,26 +220,12 @@ internal sealed class UsageBreakdownForm : Form
         };
         Controls.Add(_hint);
 
-        _exportButton = new Button
-        {
-            Text = "Export CSV...",
-            FlatStyle = FlatStyle.Flat,
-            BackColor = _theme.ButtonBack,
-            ForeColor = _theme.ButtonText,
-        };
-        _exportButton.FlatAppearance.BorderColor = _theme.ButtonBorder;
+        _exportButton = MakeButton("Export CSV...");
         _exportButton.Click += (_, _) => ExportCsv();
         Controls.Add(_exportButton);
 
-        _closeButton = new Button
-        {
-            Text = "Close",
-            DialogResult = DialogResult.OK,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = _theme.ButtonBack,
-            ForeColor = _theme.ButtonText,
-        };
-        _closeButton.FlatAppearance.BorderColor = _theme.ButtonBorder;
+        _closeButton = MakeButton("Close");
+        _closeButton.DialogResult = DialogResult.OK;
         Controls.Add(_closeButton);
 
         AcceptButton = _closeButton;
@@ -202,6 +236,28 @@ internal sealed class UsageBreakdownForm : Form
         Relayout();
     }
 
+    private Button MakeButton(string text)
+    {
+        var button = new Button
+        {
+            Text = text,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = _theme.ButtonBack,
+            ForeColor = _theme.ButtonText,
+        };
+        button.FlatAppearance.BorderColor = _theme.ButtonBorder;
+        return button;
+    }
+
+    // The way out of a drill-down: shown in the heading of whichever table is currently filtered.
+    private Button MakeShowAllButton()
+    {
+        var button = MakeButton("Show all");
+        button.Visible = false;
+        button.Click += (_, _) => ClearDrill();
+        return button;
+    }
+
     private ListView MakeTable(string firstColumn)
     {
         var list = new ListView
@@ -209,6 +265,9 @@ internal sealed class UsageBreakdownForm : Form
             View = View.Details,
             FullRowSelect = true,
             MultiSelect = false,
+            // The selection is the drill-down, so it has to keep reading as selected while the
+            // focus is on the other table, the "Show all" button, or the timeframe box.
+            HideSelection = false,
             // Clickable both to receive ColumnClick and to give the headers the hot-tracking that
             // tells people they can be clicked (#111).
             HeaderStyle = ColumnHeaderStyle.Clickable,
@@ -233,44 +292,85 @@ internal sealed class UsageBreakdownForm : Form
     {
         _current = _localUsage.Breakdown(SelectedTimeframe);
 
-        FillModels();
-        FillProjects();
+        // A drill-down survives a timeframe change — switching Today → 30 days asks the same
+        // question over a wider window — but is dropped when the selected model or project has no
+        // usage left in range, since there would be nothing on screen to point at.
+        _drill = _drill is null ? null : DrillFor(_drill.Axis, _drill.Key);
+        ApplyDrill();
 
         // No SizeColumns here on purpose: the widths are computed from the list's scrollbar-free
         // width, so a timeframe with more rows (and therefore a scrollbar) doesn't change them.
         _exportButton.Enabled = _current is not null && _current.Totals.TotalTokens > 0;
     }
 
-    private void FillModels() => Fill(_modelList, _current?.ByModel, _current?.Totals, _modelSort);
+    // Each table shows every row of its own axis, unless the OTHER table's selection has narrowed
+    // it to that selection's counterparts. The totals row follows the rows either way, so a
+    // drilled table still sums to what it says it is showing — the selected row's own totals.
+    private void FillModels()
+    {
+        var drill = DrillInto(BreakdownAxis.Model);
+        Fill(_modelList, drill?.Rows ?? _current?.ByModel, drill?.Totals ?? _current?.Totals, _modelSort);
+    }
 
-    private void FillProjects() => Fill(_projectList, _current?.ByProject, _current?.Totals, _projectSort);
+    private void FillProjects()
+    {
+        var drill = DrillInto(BreakdownAxis.Project);
+        Fill(_projectList, drill?.Rows ?? _current?.ByProject, drill?.Totals ?? _current?.Totals, _projectSort);
+    }
+
+    /// <summary>The drill-down currently filtering the <paramref name="axis"/> table, if any.</summary>
+    private LocalUsageDrillDown? DrillInto(BreakdownAxis axis) => Filtering(_drill, axis);
+
+    /// <summary>
+    /// Which of <paramref name="drill"/> the <paramref name="axis"/> table shows: a drill-down
+    /// filters the table on the <em>other</em> axis — a selected model narrows the projects.
+    /// </summary>
+    private static LocalUsageDrillDown? Filtering(LocalUsageDrillDown? drill, BreakdownAxis axis) =>
+        drill is not null && drill.Axis != axis ? drill : null;
 
     private void Fill(ListView list, IReadOnlyList<BreakdownRow>? rows, BreakdownRow? totals, BreakdownSortState sort)
     {
-        list.BeginUpdate();
-        list.Items.Clear();
-
-        if (rows is null || rows.Count == 0)
+        // Rebuilding the items clears the selection, and the selection IS the drill-down — so the
+        // handler is muted throughout and the drilled row is put back at the end. Without this a
+        // header click would silently undo the drill it was meant to re-sort.
+        var wasSuppressed = _suppressSelection;
+        _suppressSelection = true;
+        try
         {
-            var empty = new ListViewItem("(no local usage data)") { ForeColor = _theme.HintText };
-            list.Items.Add(empty);
+            list.BeginUpdate();
+            list.Items.Clear();
+
+            if (rows is null || rows.Count == 0)
+            {
+                var empty = new ListViewItem("(no local usage data)") { ForeColor = _theme.HintText };
+                list.Items.Add(empty);
+            }
+            else
+            {
+                // ReferenceEquals rather than the row's position or value: BreakdownRow is a record,
+                // and a project whose totals happen to match the grand total would compare equal.
+                var ordered = BreakdownSort.Order(rows, totals, sort);
+                foreach (var row in ordered)
+                    list.Items.Add(MakeItem(row, accent: ReferenceEquals(row, totals)));
+            }
+
+            list.EndUpdate();
+            RestoreDrilledRow(list);
         }
-        else
+        finally
         {
-            // ReferenceEquals rather than the row's position or value: BreakdownRow is a record,
-            // and a project whose totals happen to match the grand total would compare equal.
-            var ordered = BreakdownSort.Order(rows, totals, sort);
-            foreach (var row in ordered)
-                list.Items.Add(MakeItem(row, accent: ReferenceEquals(row, totals)));
+            _suppressSelection = wasSuppressed;
         }
 
-        list.EndUpdate();
         ListViewSortIndicator.Apply(list, (int)sort.Column, sort.Ascending);
     }
 
     private ListViewItem MakeItem(BreakdownRow row, bool accent)
     {
         var item = new ListViewItem(row.DisplayName);
+        // Only body rows carry their row, and only rows with one can be drilled into. The totals
+        // row deliberately doesn't: selecting it means "everything", which is the undrilled view.
+        item.Tag = accent ? null : row;
         item.SubItems.Add(LocalCostText.FormatTokens(row.InputTokens));
         item.SubItems.Add(LocalCostText.FormatTokens(row.OutputTokens));
         item.SubItems.Add(LocalCostText.FormatTokens(row.CacheWriteTokens));
@@ -288,6 +388,161 @@ internal sealed class UsageBreakdownForm : Form
         row.HasUnpricedModels
             ? row.CostUsd < 0.005 ? "—" : "≥" + LocalCostText.FormatCost(row.CostUsd).TrimStart('~')
             : LocalCostText.FormatCost(row.CostUsd);
+
+    /// <summary>The table a drill-down was started from — the one holding the selection.</summary>
+    private ListView SourceList(BreakdownAxis axis) =>
+        axis == BreakdownAxis.Model ? _modelList : _projectList;
+
+    private static bool SameKey(string a, string b) =>
+        string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether two drill-downs point at the same row — or both at nothing.</summary>
+    private static bool SameDrill(LocalUsageDrillDown? a, LocalUsageDrillDown? b) =>
+        a is null || b is null
+            ? a is null && b is null
+            : a.Axis == b.Axis && SameKey(a.Key, b.Key);
+
+    // Re-selects the drilled-into row after its own table was rebuilt (a re-sort, a timeframe
+    // change). A no-op for the other table, whose rows are the drill-down's results.
+    private void RestoreDrilledRow(ListView list)
+    {
+        if (_drill is null || SourceList(_drill.Axis) != list)
+            return;
+
+        foreach (ListViewItem item in list.Items)
+        {
+            if (item.Tag is BreakdownRow row && SameKey(row.Key, _drill.Key))
+            {
+                item.Selected = true;
+                // Focused too, or the arrow keys would carry on from the top of the rebuilt list
+                // instead of from the row that is actually selected.
+                item.Focused = true;
+                item.EnsureVisible();
+                return;
+            }
+        }
+    }
+
+    private void OnRowSelected(ListView list, BreakdownAxis axis)
+    {
+        if (_suppressSelection || !IsHandleCreated)
+            return;
+
+        // Moving the selection raises this twice — once for the row losing it (when the selection
+        // is momentarily empty) and once for the row gaining it. Responding to both would rebuild
+        // the other table twice, flashing the undrilled view in between, so the response is posted
+        // once and reads whatever the selection has settled on by the time it runs.
+        _lastSelectionSource = (list, axis);
+        if (_selectionPending)
+            return;
+
+        _selectionPending = true;
+        BeginInvoke(ApplyPendingSelection);
+    }
+
+    private void ApplyPendingSelection()
+    {
+        _selectionPending = false;
+        if (IsDisposed || _lastSelectionSource is not { } source)
+            return;
+
+        var (list, axis) = source;
+
+        // No row (an empty selection, the totals row, or the empty-state placeholder) means
+        // "everything" — the undrilled view — rather than an empty drill-down panel.
+        var row = list.SelectedItems.Count > 0 ? list.SelectedItems[0].Tag as BreakdownRow : null;
+        SetDrill(row is null ? null : DrillFor(axis, row.Key));
+    }
+
+    // "Show all": back to both full tables. The selection goes with it — a row left highlighted
+    // with nothing drilled into it would read as if the drill-down were still on.
+    private void ClearDrill()
+    {
+        if (_drill is not null)
+        {
+            var source = SourceList(_drill.Axis);
+            _suppressSelection = true;
+            try
+            {
+                source.SelectedItems.Clear();
+            }
+            finally
+            {
+                _suppressSelection = false;
+            }
+
+            // The button is about to hide itself, and WinForms would hand the focus to whatever
+            // comes next in the tab order (the Export button) — put it back on the table the
+            // selection came from instead.
+            source.Focus();
+        }
+
+        SetDrill(null);
+    }
+
+    private void SetDrill(LocalUsageDrillDown? drill)
+    {
+        // Nothing to redraw when the same row (or nothing at all) is picked again — and skipping
+        // it keeps a click on the already-selected row from throwing away its own scroll position.
+        if (SameDrill(_drill, drill))
+            return;
+
+        var previous = _drill;
+        _drill = drill;
+
+        // Only the table whose rows actually changed is rebuilt. The one holding the selection
+        // keeps its items — and with them the row the user just clicked, including the totals row,
+        // whose "everything" selection would otherwise vanish the moment it was made.
+        if (!ReferenceEquals(Filtering(previous, BreakdownAxis.Model), DrillInto(BreakdownAxis.Model)))
+            FillModels();
+        if (!ReferenceEquals(Filtering(previous, BreakdownAxis.Project), DrillInto(BreakdownAxis.Project)))
+            FillProjects();
+
+        UpdateSectionHeadings();
+    }
+
+    // Rebuilds both tables and the headings for the current drill state.
+    private void ApplyDrill()
+    {
+        FillModels();
+        FillProjects();
+        UpdateSectionHeadings();
+    }
+
+    private void UpdateSectionHeadings()
+    {
+        // At most one table is filtered at a time, so the drilled-into name belongs to whichever
+        // heading is not the plain one.
+        var name = DrilledDisplayName();
+        var model = DrillInto(BreakdownAxis.Model) is not null;
+        var project = DrillInto(BreakdownAxis.Project) is not null;
+
+        _modelLabel.Text = BreakdownDrillText.ModelSection(model ? name : null);
+        _projectLabel.Text = BreakdownDrillText.ProjectSection(project ? name : null);
+        _modelShowAll.Visible = model;
+        _projectShowAll.Visible = project;
+    }
+
+    // The drilled-into row's own display name for the heading — a project's real path rather than
+    // its directory key. Falls back to the key if the row has since vanished from the breakdown.
+    private string? DrilledDisplayName()
+    {
+        if (_drill is null)
+            return null;
+
+        var rows = _drill.Axis == BreakdownAxis.Model ? _current?.ByModel : _current?.ByProject;
+        return rows?.FirstOrDefault(r => SameKey(r.Key, _drill.Key))?.DisplayName ?? _drill.Key;
+    }
+
+    // The counterpart rows for one key in the selected timeframe, or null when that key has no
+    // usage in range (so there is nothing to drill into).
+    private LocalUsageDrillDown? DrillFor(BreakdownAxis axis, string key)
+    {
+        var rows = axis == BreakdownAxis.Model ? _current?.ByModel : _current?.ByProject;
+        return rows?.Any(r => SameKey(r.Key, key)) == true
+            ? _localUsage.DrillDown(SelectedTimeframe, axis, key)
+            : null;
+    }
 
     private void ExportCsv()
     {
@@ -337,9 +592,33 @@ internal sealed class UsageBreakdownForm : Form
         _timeframeCombo.SetBounds(
             _timeframeLabel.Right + Sc(8), _heading.Bottom + Sc(SectionGap), Sc(ComboWidth), 0,
             BoundsSpecified.Location | BoundsSpecified.Width);
+        _selectHint.Location = new Point(
+            _timeframeCombo.Right + Sc(12),
+            _timeframeCombo.Top + ((_timeframeCombo.Height - _selectHint.Height) / 2));
 
-        _modelLabel.Location = new Point(Sc(Pad), _timeframeCombo.Bottom + Sc(SectionGap));
+        LayoutSectionRow(_modelLabel, _modelShowAll, SectionTop, contentWidth);
         _hint.MaximumSize = new Size(contentWidth, 0);
+    }
+
+    /// <summary>Top of the first section heading. Requires <see cref="LayoutHeader"/> to have run.</summary>
+    private int SectionTop => _timeframeCombo.Bottom + Sc(SectionGap);
+
+    /// <summary>
+    /// The height of a section heading row. The "Show all" button is taller than the label, and
+    /// the row keeps its height whether or not the button is showing — otherwise starting a
+    /// drill-down would shift both tables down a few pixels.
+    /// </summary>
+    private int SectionRowHeight => Math.Max(_modelLabel.Height, Sc(ShowAllHeight));
+
+    // A section heading: the label on the left, its "Show all" button right-aligned with the
+    // table below, both centred in a row of SectionRowHeight.
+    private void LayoutSectionRow(Label label, Button showAll, int top, int contentWidth)
+    {
+        label.Location = new Point(Sc(Pad), top + ((SectionRowHeight - label.Height) / 2));
+        showAll.SetBounds(
+            Sc(Pad) + contentWidth - Sc(ShowAllWidth),
+            top + ((SectionRowHeight - Sc(ShowAllHeight)) / 2),
+            Sc(ShowAllWidth), Sc(ShowAllHeight));
     }
 
     /// <summary>
@@ -347,8 +626,8 @@ internal sealed class UsageBreakdownForm : Form
     /// <paramref name="hintHeight"/>. Requires <see cref="LayoutHeader"/> to have run.
     /// </summary>
     private int ChromeHeight(int hintHeight) =>
-        _modelLabel.Bottom + Sc(LabelGap)                          // down to the first table
-        + Sc(SectionGap) + _projectLabel.Height + Sc(LabelGap)     // "By project" between them
+        SectionTop + SectionRowHeight + Sc(LabelGap)               // down to the first table
+        + Sc(SectionGap) + SectionRowHeight + Sc(LabelGap)         // "By project" between them
         + Sc(SectionGap) + hintHeight + Sc(SectionGap)             // the hint line
         + Sc(ButtonHeight) + Sc(Pad);                              // the button row
 
@@ -371,7 +650,11 @@ internal sealed class UsageBreakdownForm : Form
             SystemInformation.VerticalScrollBarWidth,
             Sc(NumericColumn), Sc(CostColumn), Sc(MinFirstColumn)) + TableBorder;
         var buttonRow = Sc(ButtonWidth) + Sc(ButtonGap) + Sc(CloseButtonWidth);
-        var width = (2 * Sc(Pad)) + Math.Max(tableWidth, buttonRow);
+        // The timeframe row is normally the shortest of the three, but its labels are system-font
+        // width rather than scaled metrics, so it is measured rather than assumed to fit.
+        var timeframeRow =
+            _timeframeLabel.Width + Sc(8) + Sc(ComboWidth) + Sc(12) + _selectHint.Width;
+        var width = (2 * Sc(Pad)) + Math.Max(Math.Max(tableWidth, buttonRow), timeframeRow);
 
         // Measure the hint at the minimum width rather than reusing its current height: it wraps
         // to more lines when narrow, and the chrome has to leave room for that. Asking the label
@@ -415,16 +698,18 @@ internal sealed class UsageBreakdownForm : Form
         var buttonsTop = ClientSize.Height - Sc(Pad) - Sc(ButtonHeight);
         var hintTop = buttonsTop - Sc(SectionGap) - _hint.Height;
 
-        var tablesTop = _modelLabel.Bottom + Sc(LabelGap);
-        var betweenTables = Sc(SectionGap) + _projectLabel.Height + Sc(LabelGap);
+        var tablesTop = SectionTop + SectionRowHeight + Sc(LabelGap);
+        var betweenTables = Sc(SectionGap) + SectionRowHeight + Sc(LabelGap);
         var (modelHeight, projectHeight) = UsageBreakdownLayout.SplitTableHeights(
             hintTop - Sc(SectionGap) - tablesTop - betweenTables, Sc(MinTableHeight));
 
         _modelList.SetBounds(Sc(Pad), tablesTop, contentWidth, modelHeight);
         SizeColumns(_modelList);
 
-        _projectLabel.Location = new Point(Sc(Pad), _modelList.Bottom + Sc(SectionGap));
-        _projectList.SetBounds(Sc(Pad), _projectLabel.Bottom + Sc(LabelGap), contentWidth, projectHeight);
+        var projectSectionTop = _modelList.Bottom + Sc(SectionGap);
+        LayoutSectionRow(_projectLabel, _projectShowAll, projectSectionTop, contentWidth);
+        _projectList.SetBounds(
+            Sc(Pad), projectSectionTop + SectionRowHeight + Sc(LabelGap), contentWidth, projectHeight);
         SizeColumns(_projectList);
 
         _hint.Location = new Point(Sc(Pad), hintTop);

@@ -83,7 +83,8 @@ Run skills with `/<name>`; agents are delegated to automatically for isolated wo
 |-------|---------|
 | `/startup` | Load context + verify environment (run at session start) |
 | `/pm` | Project manager — create well-formed issues & triage the backlog |
-| `/implement-issue` | **Orchestrator** — ticket → plan → implement → test → review → PR (takes an issue #) |
+| `/implement-issue` | **Single ticket** — ticket → plan → implement → test → review → PR (takes an issue #) |
+| `/orchestrate` | **Whole queue in parallel** — dispatches Opus workers into git worktrees, opens PRs, never merges (supersedes `/implement-issue` while a run is active) |
 | `/check-code` | Code-quality analysis of changed files |
 | `/review` | Deeper architecture / correctness review |
 | `/commit-push-pr` | Commit, push, and open a PR (asks for approval) |
@@ -94,6 +95,12 @@ Run skills with `/<name>`; agents are delegated to automatically for isolated wo
 backlog); `/implement-issue <n>` then drives one ticket end-to-end — fetch, plan,
 **approve plan**, implement, test until green, `/review`, iterate, **approve
 commit**, then `/commit-push-pr`. The two approval gates are never skipped.
+
+For a whole queue at once, `/orchestrate` runs many tickets in parallel via Opus
+workers in isolated worktrees. It preserves both gates in adapted form: the plan
+gate becomes a worker self-check that **stops on ambiguity** rather than
+guessing, and the commit gate is preserved by the orchestrator **never merging**
+— every PR queues for you. It never publishes a release.
 
 **Commands** (in `.claude/commands/`): `/commit` (stage + commit, asks first),
 `/pr` (push + open a PR via the `new-pr` script).

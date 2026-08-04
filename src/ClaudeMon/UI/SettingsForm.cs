@@ -66,7 +66,6 @@ public sealed class SettingsForm : Form
     private const int ComboWidth = ContentRight - ControlLeft; // 206
     private const int NumericWidth = 64;
     private const int ToggleWidth = 40;
-    private const int TabStripHeight = 36;
     private const int TabContentGap = 12; // between the tab strip's baseline and the first row
 
     // Light or dark accents/controls, matching the Windows app theme.
@@ -167,7 +166,7 @@ public sealed class SettingsForm : Form
             AccessibleName = "Settings sections",
         };
         Controls.Add(_tabStrip);
-        _hspec.Add((_tabStrip, Pad, ContentRight - Pad, TabStripHeight));
+        _hspec.Add((_tabStrip, Pad, ContentRight - Pad, TabStrip.LogicalHeight));
 
         // --- General tab ---
         _currentTab = 0;

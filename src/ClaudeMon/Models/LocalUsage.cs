@@ -177,6 +177,35 @@ public record LocalUsageDrillDown(
     BreakdownRow Totals);
 
 /// <summary>
+/// One day of the cost-over-time chart. <see cref="HasUnpricedModels"/> carries
+/// the same meaning as everywhere else: the cost is a floor, not an exact
+/// figure, because a model missing from the pricing table contributed tokens.
+/// </summary>
+public record DailyCost(DateOnly Date, double CostUsd, bool HasUnpricedModels);
+
+/// <summary>
+/// Cost per local calendar day over a timeframe. Deliberately dense — every day
+/// from <see cref="FromDate"/> to <see cref="ToDate"/> has a point, days with no
+/// usage reading $0 — so the chart's x-axis is evenly dated and a gap in usage
+/// looks like a gap rather than silently closing up.
+/// </summary>
+public record LocalCostSeries(
+    DateOnly FromDate,
+    DateOnly ToDate,
+    IReadOnlyList<DailyCost> Days)
+{
+    // These three walk Days on every read rather than being cached. Deliberate: the series is
+    // bounded at the store's 30-day retention, and the record stays a plain immutable value.
+    /// <summary>The costliest day — what the chart scales its y-axis against.</summary>
+    public double MaxCostUsd => Days.Count == 0 ? 0.0 : Days.Max(d => d.CostUsd);
+
+    public double TotalCostUsd => Days.Sum(d => d.CostUsd);
+
+    /// <summary>True when any day's cost is a floor (an unpriced model contributed).</summary>
+    public bool HasUnpricedModels => Days.Any(d => d.HasUnpricedModels);
+}
+
+/// <summary>
 /// The two sums the budget alerts compare against their caps: today (local
 /// calendar day) and the current local calendar week (Monday through today).
 /// </summary>

@@ -6,6 +6,16 @@ GitHub release; the release notes are taken from these entries.
 ## [0.24.0] - 2026-07-29
 
 ### Added
+- **A cost-over-time chart in the Usage & costs window** — a new **Chart** tab plots what each day
+  cost across the timeframe you picked, so you can finally tell steady daily spend from one
+  expensive afternoon. The tables answered "where did the money go?" but not "how is it trending?":
+  a 30-day total of $400 looks identical whether it was $13 a day or a single $380 Tuesday. Tables
+  stays the default tab and the window opens exactly the size it always did — the chart is one
+  click away when you want it, and out of the way when you don't. It follows the timeframe
+  selector, grows with the window, and days whose cost is a floor because an unpriced model
+  contributed are drawn hatched, matching the "≥$x" the tables already show. Everything is
+  computed from usage ClaudeMon has already scanned — nothing is re-read and no numbers change.
+  (#113)
 - **Drill into a model or a project in the Usage & costs window** — select a row in *By model* and
   the project table becomes "Projects using claude-fable-5", showing how that model's spend splits
   across your projects; select a row in *By project* and the model table becomes "Models used in

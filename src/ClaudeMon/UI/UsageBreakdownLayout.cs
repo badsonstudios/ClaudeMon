@@ -55,6 +55,22 @@ internal static class UsageBreakdownLayout
     }
 
     /// <summary>
+    /// The client height the window opens at: the chrome plus two default-height tables, less
+    /// <paramref name="insertedRow"/>.
+    /// </summary>
+    /// <param name="chromeHeight">
+    /// Everything that isn't a table, <em>including</em> <paramref name="insertedRow"/>.
+    /// </param>
+    /// <param name="insertedRow">
+    /// The height of a fixed row added above the content — the tab strip (#113). Subtracting it
+    /// here is what keeps the window opening at the size it did before that row existed: the row
+    /// comes out of the tables' share, not out of the window's height. Zero when there is no such
+    /// row. The two tables have well over this much slack above their floor, so nothing collapses.
+    /// </param>
+    public static int DefaultHeight(int chromeHeight, int defaultTableHeight, int insertedRow) =>
+        chromeHeight + (2 * Math.Max(0, defaultTableHeight)) - Math.Max(0, insertedRow);
+
+    /// <summary>
     /// The available width at which <see cref="ColumnWidths"/> stops squeezing the first column —
     /// i.e. the narrowest table that still renders every header at its natural width. Drives the
     /// window's minimum width, and is exactly wide enough that a table showing its vertical

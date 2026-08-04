@@ -258,6 +258,35 @@ public sealed class LocalUsageStore
     }
 
     /// <summary>
+    /// Cost per local calendar day across a timeframe ending today, for the
+    /// breakdown window's chart — or null when the feature is unavailable.
+    /// Every day in range gets a point (days with no usage read $0), so the
+    /// series is already the chart's dated x-axis. Cells are keyed by day, so
+    /// this is a pure re-aggregation of cached data: no transcript rescan.
+    /// </summary>
+    public LocalCostSeries? CostSeries(BreakdownTimeframe timeframe)
+    {
+        lock (_lock)
+        {
+            if (!_available)
+                return null;
+
+            // Same range helper as Breakdown, so the chart and the tables can never
+            // disagree about which days a timeframe covers.
+            var (from, to) = RangeOf(timeframe);
+
+            var days = new List<DailyCost>();
+            for (var date = from; date <= to; date = date.AddDays(1))
+            {
+                var totals = SumDayLocked(DayKeyOf(date));
+                days.Add(new DailyCost(date, totals.CostUsd, totals.HasUnpricedModels));
+            }
+
+            return new LocalCostSeries(from, to, days);
+        }
+    }
+
+    /// <summary>
     /// The sums the budget alerts compare against their caps: today, and the
     /// current local calendar week (Monday through today). Null when unavailable.
     /// </summary>

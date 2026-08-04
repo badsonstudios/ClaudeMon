@@ -11,7 +11,8 @@
     <Description>Windows system tray monitor for Claude AI usage</Description>
     <!-- The app icon for every window's taskbar button and Alt-Tab entry (#108). WinForms sets
          no per-window icon on these dialogs (WM_GETICON returns 0 for all three icon sizes, as
-         they are FormBorderStyle.FixedDialog with no explicit Form.Icon), so Windows
+         they are FormBorderStyle.FixedDialog with no explicit Form.Icon — the resizable Usage &
+         costs window gets the same effect from ShowIcon = false, see #110), so Windows
          synthesizes those from the executable's own icon resource — which is what this embeds.
          No per-Form Icon assignment is needed. Title bars stay icon-less, which is both the
          existing behaviour and the Windows convention for fixed dialogs. Also used by the

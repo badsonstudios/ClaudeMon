@@ -17,20 +17,43 @@ using ClaudeMon.Services;
 /// <see cref="LocalUsageMonitor"/>'s thread-safe queries on open and whenever
 /// the timeframe changes; the window shows a static picture (no live refresh —
 /// reopen for fresh numbers, matching how the flyout snapshots on open).
+///
+/// Unlike the app's other windows this one is <b>resizable</b> (#110): a month of
+/// usage across several projects doesn't fit a fixed 700×150 viewport. The
+/// hand-scaled convention is kept — no <c>AutoScaleMode</c>, no anchors — but
+/// <see cref="Relayout"/> is driven by the current <see cref="Form.ClientSize"/>
+/// instead of dictating it, and the size/column math lives in the pure,
+/// unit-tested <see cref="UsageBreakdownLayout"/>. Size and position are not
+/// remembered between sessions (deliberately out of scope for #110).
 /// </summary>
 internal sealed class UsageBreakdownForm : Form
 {
     // Layout metrics, logical (96-DPI) units.
     private const int Pad = 20;
-    private const int ClientWidth = 700;
-    private const int ContentRight = ClientWidth - Pad;
+    private const int DefaultClientWidth = 700;
     private const int HeaderTop = 16;
     private const int SectionGap = 14;
     private const int LabelGap = 6;
-    private const int TableHeight = 150;
+    private const int DefaultTableHeight = 150;
+    /// <summary>Floor for each table: its header plus about two rows stay visible.</summary>
+    private const int MinTableHeight = 66;
     private const int ButtonHeight = 30;
     private const int ButtonWidth = 100;
+    private const int ButtonGap = 8;
     private const int CloseButtonWidth = 82;
+    private const int ComboWidth = 140;
+    private const int NumericColumn = 62;
+    private const int CostColumn = 78;
+    private const int MinFirstColumn = 120;
+
+    /// <summary>
+    /// Both edges of a <see cref="BorderStyle.FixedSingle"/> border. Not DPI-scaled — it is a
+    /// one-pixel window frame at every scale — and measured as a constant rather than from
+    /// <c>Width - ClientSize.Width</c>, which would also swallow a visible scrollbar.
+    /// </summary>
+    private const int TableBorder = 2;
+
+    private const int WM_DPICHANGED = 0x02E0;
 
     private readonly Theme _theme = Theme.Current;
     private readonly LocalUsageMonitor _localUsage;
@@ -51,6 +74,8 @@ internal sealed class UsageBreakdownForm : Form
     private readonly Button _closeButton;
 
     private LocalUsageBreakdown? _current;
+    private bool _updatingMinimum;
+    private bool _wasMinimized;
 
     private static readonly (string Text, BreakdownTimeframe Value)[] TimeframeOptions =
     [
@@ -65,9 +90,18 @@ internal sealed class UsageBreakdownForm : Form
         _logger = logger;
 
         Text = "ClaudeMon — Usage & costs";
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
+        // The one resizable window in the app (#110) — the tables are the content, and there is
+        // never a "right" fixed height for them. MinimizeBox stays off: this is an ownerless
+        // modal guarded by TrayApplication._breakdownOpen, so a minimized copy would swallow
+        // further menu clicks with nothing on screen to explain why.
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MaximizeBox = true;
         MinimizeBox = false;
+        // Keeps the title bar icon-less (the existing look, and the convention these dialogs
+        // follow). It also keeps WM_GETICON answering 0, which is how Windows is left to
+        // synthesize the taskbar/Alt-Tab icon from the executable's own resource — see the
+        // <ApplicationIcon> note in ClaudeMon.csproj (#108). FixedDialog used to imply this.
+        ShowIcon = false;
         StartPosition = FormStartPosition.Manual;
         AutoScaleMode = AutoScaleMode.None;
         Font = _baseFont;
@@ -137,6 +171,7 @@ internal sealed class UsageBreakdownForm : Form
         CancelButton = _closeButton;
 
         Reload();
+        ClientSize = DefaultClientSize();
         Relayout();
     }
 
@@ -176,6 +211,8 @@ internal sealed class UsageBreakdownForm : Form
         Fill(_modelList, _current?.ByModel, _current?.Totals);
         Fill(_projectList, _current?.ByProject, _current?.Totals);
 
+        // No SizeColumns here on purpose: the widths are computed from the list's scrollbar-free
+        // width, so a timeframe with more rows (and therefore a scrollbar) doesn't change them.
         _exportButton.Enabled = _current is not null && _current.Totals.TotalTokens > 0;
     }
 
@@ -258,63 +295,190 @@ internal sealed class UsageBreakdownForm : Form
 
     private int Sc(int value) => DpiScale.Scale(value, DeviceDpi / 96f);
 
-    private void Relayout()
+    // Everything above the first table is fixed-height and width-independent, so it is laid out
+    // the same way whether we're measuring a candidate size or laying out the real one. The
+    // hint's wrap width is set here too, because its resulting height feeds ChromeHeight.
+    private void LayoutHeader(int contentWidth)
     {
-        var contentWidth = ContentRight - Pad;
-
         _heading.Location = new Point(Sc(Pad), Sc(HeaderTop));
 
         _timeframeLabel.Location = new Point(Sc(Pad), _heading.Bottom + Sc(SectionGap) + Sc(4));
         _timeframeCombo.SetBounds(
-            _timeframeLabel.Right + Sc(8), _heading.Bottom + Sc(SectionGap), Sc(140), 0,
+            _timeframeLabel.Right + Sc(8), _heading.Bottom + Sc(SectionGap), Sc(ComboWidth), 0,
             BoundsSpecified.Location | BoundsSpecified.Width);
 
         _modelLabel.Location = new Point(Sc(Pad), _timeframeCombo.Bottom + Sc(SectionGap));
-        _modelList.SetBounds(Sc(Pad), _modelLabel.Bottom + Sc(LabelGap), Sc(contentWidth), Sc(TableHeight));
+        _hint.MaximumSize = new Size(contentWidth, 0);
+    }
+
+    /// <summary>
+    /// The client height taken by everything that isn't a table, for a hint line of
+    /// <paramref name="hintHeight"/>. Requires <see cref="LayoutHeader"/> to have run.
+    /// </summary>
+    private int ChromeHeight(int hintHeight) =>
+        _modelLabel.Bottom + Sc(LabelGap)                          // down to the first table
+        + Sc(SectionGap) + _projectLabel.Height + Sc(LabelGap)     // "By project" between them
+        + Sc(SectionGap) + hintHeight + Sc(SectionGap)             // the hint line
+        + Sc(ButtonHeight) + Sc(Pad);                              // the button row
+
+    /// <summary>The size the window opens at: the chrome plus two default-height tables.</summary>
+    private Size DefaultClientSize()
+    {
+        var width = Sc(DefaultClientWidth);
+        LayoutHeader(width - (2 * Sc(Pad)));
+        return new Size(width, ChromeHeight(_hint.Height) + (2 * Sc(DefaultTableHeight)));
+    }
+
+    /// <summary>
+    /// The smallest client area the window still renders sensibly in: wide enough for both table
+    /// headers at their natural column widths (and for the button row), tall enough for two
+    /// floor-height tables plus the chrome.
+    /// </summary>
+    private Size MinClientSize()
+    {
+        var tableWidth = UsageBreakdownLayout.MinTableWidth(
+            SystemInformation.VerticalScrollBarWidth,
+            Sc(NumericColumn), Sc(CostColumn), Sc(MinFirstColumn)) + TableBorder;
+        var buttonRow = Sc(ButtonWidth) + Sc(ButtonGap) + Sc(CloseButtonWidth);
+        var width = (2 * Sc(Pad)) + Math.Max(tableWidth, buttonRow);
+
+        // Measure the hint at the minimum width rather than reusing its current height: it wraps
+        // to more lines when narrow, and the chrome has to leave room for that. Asking the label
+        // itself (rather than TextRenderer) guarantees the same answer Relayout will read back
+        // out of _hint.Height — a few pixels of disagreement at the wrap point costs a whole line.
+        var hint = _hint.GetPreferredSize(new Size(width - (2 * Sc(Pad)), 0)).Height;
+
+        return new Size(width, ChromeHeight(hint) + (2 * Sc(MinTableHeight)));
+    }
+
+    // MinimumSize is the outer window size, so the frame has to be added back on. Deliberately
+    // not called from OnResize on every pass — the value is resize-invariant, and assigning it
+    // can itself resize the window, which would bounce straight back in here.
+    private void UpdateMinimumSize()
+    {
+        // Minimizing reports a degenerate frame, so there is nothing sensible to compute from;
+        // OnResize restores the floor when the window comes back.
+        if (_updatingMinimum || WindowState == FormWindowState.Minimized)
+            return;
+
+        _updatingMinimum = true;
+        try
+        {
+            var min = MinClientSize();
+            MinimumSize = new Size(
+                min.Width + (Width - ClientSize.Width),
+                min.Height + (Height - ClientSize.Height));
+        }
+        finally
+        {
+            _updatingMinimum = false;
+        }
+    }
+
+    private void Relayout()
+    {
+        var contentWidth = Math.Max(Sc(MinFirstColumn), ClientSize.Width - (2 * Sc(Pad)));
+        LayoutHeader(contentWidth);
+
+        // The hint and buttons hang off the bottom edge; the tables take what's left in between.
+        var buttonsTop = ClientSize.Height - Sc(Pad) - Sc(ButtonHeight);
+        var hintTop = buttonsTop - Sc(SectionGap) - _hint.Height;
+
+        var tablesTop = _modelLabel.Bottom + Sc(LabelGap);
+        var betweenTables = Sc(SectionGap) + _projectLabel.Height + Sc(LabelGap);
+        var (modelHeight, projectHeight) = UsageBreakdownLayout.SplitTableHeights(
+            hintTop - Sc(SectionGap) - tablesTop - betweenTables, Sc(MinTableHeight));
+
+        _modelList.SetBounds(Sc(Pad), tablesTop, contentWidth, modelHeight);
         SizeColumns(_modelList);
 
         _projectLabel.Location = new Point(Sc(Pad), _modelList.Bottom + Sc(SectionGap));
-        _projectList.SetBounds(Sc(Pad), _projectLabel.Bottom + Sc(LabelGap), Sc(contentWidth), Sc(TableHeight));
+        _projectList.SetBounds(Sc(Pad), _projectLabel.Bottom + Sc(LabelGap), contentWidth, projectHeight);
         SizeColumns(_projectList);
 
-        _hint.MaximumSize = new Size(Sc(contentWidth), 0);
-        _hint.Location = new Point(Sc(Pad), _projectList.Bottom + Sc(SectionGap));
-
-        var buttonsTop = _hint.Bottom + Sc(SectionGap);
+        _hint.Location = new Point(Sc(Pad), hintTop);
         _exportButton.SetBounds(Sc(Pad), buttonsTop, Sc(ButtonWidth), Sc(ButtonHeight));
         _closeButton.SetBounds(
-            Sc(ContentRight - CloseButtonWidth), buttonsTop, Sc(CloseButtonWidth), Sc(ButtonHeight));
-
-        ClientSize = new Size(Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad));
+            ClientSize.Width - Sc(Pad) - Sc(CloseButtonWidth), buttonsTop,
+            Sc(CloseButtonWidth), Sc(ButtonHeight));
     }
 
-    // First column takes what the six fixed-width numeric columns leave over.
-    // The vertical scrollbar's width is reserved up front so a long 30-day
-    // list doesn't force a horizontal scrollbar the moment the vertical appears.
+    // First column takes what the six fixed-width numeric columns leave over; see
+    // UsageBreakdownLayout.ColumnWidths for the scrollbar reservation.
     private void SizeColumns(ListView list)
     {
-        var numeric = Sc(62);
-        var cost = Sc(78);
-        var total = list.ClientSize.Width - SystemInformation.VerticalScrollBarWidth;
-        var first = Math.Max(Sc(120), total - (numeric * 5 + cost));
+        // Width minus the border, not ClientSize.Width: a visible vertical scrollbar is already
+        // outside the client area, so measuring from there would reserve its width a second time
+        // and leave a dead strip. This way the widths depend only on the list's own size, which
+        // makes the relayout idempotent — it runs on every mouse move during a drag-resize.
+        var widths = UsageBreakdownLayout.ColumnWidths(
+            list.Width - TableBorder, SystemInformation.VerticalScrollBarWidth,
+            Sc(NumericColumn), Sc(CostColumn), Sc(MinFirstColumn));
 
-        list.Columns[0].Width = first;
-        for (var i = 1; i <= 5; i++)
-            list.Columns[i].Width = numeric;
-        list.Columns[6].Width = cost;
+        for (var i = 0; i < widths.Length; i++)
+        {
+            // Dragging an edge re-lays out on every mouse move; skip the columns that didn't
+            // change, since assigning a width repaints the whole table.
+            if (list.Columns[i].Width != widths[i])
+                list.Columns[i].Width = widths[i];
+        }
     }
 
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
+        // Relayout first: DeviceDpi is only reliable once the handle exists (see
+        // UpdateAvailableDialog.OnLoad), and MinClientSize measures off the laid-out header.
         Relayout();
+        UpdateMinimumSize();
         DialogPlacement.CenterOnPrimary(this);
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (!IsHandleCreated)
+            return;
+
+        // Minimizing reports a degenerate client size; laying out against it would stack every
+        // control in the corner and leave it there when the window is restored. (MinimizeBox is
+        // off, but "Show desktop" and a taskbar-thumbnail minimise still get here.)
+        if (WindowState == FormWindowState.Minimized)
+        {
+            _wasMinimized = true;
+            return;
+        }
+
+        Relayout();
+
+        // A DPI change that arrived while minimized cleared the floor in WndProc and
+        // UpdateMinimumSize refused to recompute it; put it back now there's a real frame again.
+        if (_wasMinimized)
+        {
+            _wasMinimized = false;
+            UpdateMinimumSize();
+        }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        // MinimumSize is physical pixels, so the one computed for the old monitor is a stale
+        // floor that would clamp the shrink Windows performs while handling WM_DPICHANGED (which
+        // happens inside base.WndProc). Drop it here; OnDpiChanged puts the rescaled one back.
+        // The WM_SIZE that base.WndProc raises on the way through still sees the old DeviceDpi,
+        // so its Relayout is off by one scale factor for a single frame — OnDpiChanged, which
+        // runs immediately after, redoes it at the new one.
+        if (m.Msg == WM_DPICHANGED)
+            MinimumSize = Size.Empty;
+
+        base.WndProc(ref m);
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
     {
         base.OnDpiChanged(e);
         Relayout();
+        UpdateMinimumSize();
     }
 
     protected override void OnShown(EventArgs e)

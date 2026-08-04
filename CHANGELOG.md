@@ -31,6 +31,13 @@ GitHub release; the release notes are taken from these entries.
   class of bug as the flyout fix in #104. (#108)
 
 ### Changed
+- **The Usage & costs window can now be resized and maximised** — drag any edge or corner and
+  both tables grow with it, sharing the extra height between them, while the Model/Project
+  column takes up the extra width so long project paths stop being truncated. Previously the
+  window was locked to a fixed size with two 150-pixel table viewports, so a month of usage
+  across several projects meant scrolling a small box on an otherwise empty screen. The window
+  can't be dragged smaller than the point where the table headers and buttons stop being
+  usable, and it doesn't yet remember its size between sessions. (#110)
 - **Development only — CI now measures code coverage.** Every push and pull request publishes a
   per-class coverage summary, uploads the full HTML report, and fails the build if the logic
   layer (everything except the desktop-bound WinForms code, which can't run headless) drops

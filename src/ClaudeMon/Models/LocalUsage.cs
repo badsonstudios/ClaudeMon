@@ -124,6 +124,25 @@ public record BreakdownRow(
     public long TotalTokens => InputTokens + OutputTokens + CacheWriteTokens + CacheReadTokens;
 }
 
+/// <summary>Which axis of the usage cells a breakdown row belongs to.</summary>
+public enum BreakdownAxis
+{
+    Model,
+    Project,
+}
+
+/// <summary>
+/// One cell of the model × project cross-product, summed over the timeframe
+/// (#112) — the pairing <see cref="LocalUsageBreakdown.ByModel"/> and
+/// <see cref="LocalUsageBreakdown.ByProject"/> fold away. Each (project, model)
+/// combination appears at most once.
+/// </summary>
+public record BreakdownPair(
+    string ProjectKey,
+    string ProjectDisplayName,
+    string ModelKey,
+    LocalDayTotals Totals);
+
 /// <summary>
 /// The full breakdown for one timeframe: per-model rows, per-project rows
 /// (both sorted by cost, then tokens, descending), and the grand totals.
@@ -133,6 +152,28 @@ public record LocalUsageBreakdown(
     DateOnly ToDate,
     IReadOnlyList<BreakdownRow> ByModel,
     IReadOnlyList<BreakdownRow> ByProject,
+    BreakdownRow Totals)
+{
+    /// <summary>
+    /// The same usage split by (project, model) rather than by one axis — what a
+    /// drill-down slices (#112). Part of this record on purpose: the drill-down
+    /// has to come from the same snapshot as the tables, or a scan landing while
+    /// the window is open would let it total more than the row it drills into.
+    /// </summary>
+    public IReadOnlyList<BreakdownPair> Pairs { get; init; } = [];
+}
+
+/// <summary>
+/// One side of the model × project cross-product for a single key (#112): the
+/// projects a model ran in, or the models a project used. <see cref="Rows"/> is
+/// always the <em>other</em> axis to <see cref="Axis"/>, sorted the same way the
+/// main tables are (cost, then tokens, descending), and <see cref="Totals"/> is
+/// their sum — which is exactly the totals of the selected row it drills into.
+/// </summary>
+public record LocalUsageDrillDown(
+    BreakdownAxis Axis,
+    string Key,
+    IReadOnlyList<BreakdownRow> Rows,
     BreakdownRow Totals);
 
 /// <summary>

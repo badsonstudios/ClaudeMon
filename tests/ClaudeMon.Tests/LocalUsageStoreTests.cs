@@ -490,6 +490,127 @@ public class LocalUsageStoreTests : IDisposable
         Assert.Equal(0, today.Totals.TotalTokens);
     }
 
+    // Two projects sharing one model, one of them also using a second (unpriced) model — the
+    // smallest interesting model × project cross-product (#112).
+    private LocalUsageStore CrossProductStore()
+    {
+        WriteTranscriptTo("proj-a", "s1.jsonl",
+            Line(_now.AddMinutes(-90), "msg_1", "req_1", input: 0, output: 100_000, model: "claude-fable-5"),
+            Line(_now.AddMinutes(-80), "msg_2", "req_2", input: 0, output: 200_000, model: "claude-other-1"));
+        WriteTranscriptTo("proj-b", "s2.jsonl",
+            Line(_now.AddMinutes(-70), "msg_3", "req_3", input: 0, output: 400_000, model: "claude-fable-5"));
+
+        var store = Store();
+        store.ScanOnce();
+        return store;
+    }
+
+    private static BreakdownPair Pair(LocalUsageBreakdown breakdown, string project, string model) =>
+        Assert.Single(breakdown.Pairs, p => p.ProjectKey == project && p.ModelKey == model);
+
+    [Fact]
+    public void Breakdown_Pairs_KeepThePairingTheAxisTablesFoldAway()
+    {
+        var breakdown = CrossProductStore().Breakdown(BreakdownTimeframe.Today);
+        Assert.NotNull(breakdown);
+
+        // Three of the four possible combinations were actually used — proj-b never ran the
+        // unpriced model, so that pair simply doesn't exist.
+        Assert.Equal(3, breakdown.Pairs.Count);
+        Assert.Equal(100_000, Pair(breakdown, "proj-a", "claude-fable-5").Totals.OutputTokens);
+        Assert.Equal(400_000, Pair(breakdown, "proj-b", "claude-fable-5").Totals.OutputTokens);
+
+        var unpriced = Pair(breakdown, "proj-a", "claude-other-1");
+        Assert.Equal(200_000, unpriced.Totals.OutputTokens);
+        Assert.True(unpriced.Totals.HasUnpricedModels);
+        Assert.Equal(0.0, unpriced.Totals.CostUsd);
+    }
+
+    [Fact]
+    public void Breakdown_Pairs_SumToTheAxisRowsAndTheGrandTotals()
+    {
+        var breakdown = CrossProductStore().Breakdown(BreakdownTimeframe.Today);
+        Assert.NotNull(breakdown);
+
+        // The property the drill-down is built on: whichever axis you slice by, one key's pairs
+        // add up to exactly that key's row in the table.
+        foreach (var row in breakdown.ByModel)
+        {
+            var cells = breakdown.Pairs.Where(p => p.ModelKey == row.Key).ToList();
+            Assert.Equal(row.TotalTokens, cells.Sum(p => p.Totals.TotalTokens));
+            Assert.Equal(row.CostUsd, cells.Sum(p => p.Totals.CostUsd), precision: 10);
+        }
+
+        foreach (var row in breakdown.ByProject)
+        {
+            var cells = breakdown.Pairs.Where(p => p.ProjectKey == row.Key).ToList();
+            Assert.Equal(row.TotalTokens, cells.Sum(p => p.Totals.TotalTokens));
+            Assert.Equal(row.CostUsd, cells.Sum(p => p.Totals.CostUsd), precision: 10);
+        }
+
+        Assert.Equal(breakdown.Totals.TotalTokens, breakdown.Pairs.Sum(p => p.Totals.TotalTokens));
+    }
+
+    [Fact]
+    public void Breakdown_Pairs_UseTheProjectDisplayNameFromCwd()
+    {
+        WriteTranscriptTo("c--Projects-ClaudeMon", "s1.jsonl",
+            Line(_now.AddMinutes(-30), "msg_1", "req_1", cwd: @"C:\Projects\ClaudeMon"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var pair = Assert.Single(store.Breakdown(BreakdownTimeframe.Today)!.Pairs);
+        Assert.Equal("c--Projects-ClaudeMon", pair.ProjectKey);
+        Assert.Equal(@"C:\Projects\ClaudeMon", pair.ProjectDisplayName);
+    }
+
+    [Fact]
+    public void Breakdown_Pairs_RespectTheTimeframe()
+    {
+        WriteTranscriptTo("proj-a", "s1.jsonl",
+            Line(_now.AddHours(-1), "msg_1", "req_1", input: 1, output: 0));
+        WriteTranscriptTo("proj-b", "s2.jsonl",
+            Line(_now.AddDays(-3), "msg_2", "req_2", input: 10, output: 0));
+
+        var store = Store();
+        store.ScanOnce();
+
+        // proj-b's usage is three days old, so only the wider window pairs it.
+        Assert.Equal("proj-a",
+            Assert.Single(store.Breakdown(BreakdownTimeframe.Today)!.Pairs).ProjectKey);
+        Assert.Equal(2, store.Breakdown(BreakdownTimeframe.SevenDays)!.Pairs.Count);
+    }
+
+    [Fact]
+    public void Breakdown_Pairs_MergeModelVariantsAndSpanDays()
+    {
+        WriteTranscriptTo("proj-a", "s1.jsonl",
+            Line(_now.AddMinutes(-30), "msg_1", "req_1", input: 100, output: 0, model: "claude-fable-5"),
+            Line(_now.AddMinutes(-20), "msg_2", "req_2", input: 50, output: 0, model: "claude-fable-5-20260101"),
+            Line(_now.AddDays(-2), "msg_3", "req_3", input: 7, output: 0, model: "claude-fable-5"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        // One pair, not three: the dated variant normalizes onto the plain id the way the ByModel
+        // row does, and a pair sums across every day in the timeframe.
+        var pair = Assert.Single(store.Breakdown(BreakdownTimeframe.SevenDays)!.Pairs);
+        Assert.Equal("claude-fable-5", pair.ModelKey);
+        Assert.Equal(157, pair.Totals.InputTokens);
+    }
+
+    [Fact]
+    public void Breakdown_Pairs_EmptyWhenNothingInRange()
+    {
+        WriteTranscript("s1.jsonl", Line(_now.AddDays(-10), "msg_1", "req_1"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        Assert.Empty(store.Breakdown(BreakdownTimeframe.Today)!.Pairs);
+    }
+
     [Fact]
     public void BudgetTotals_WeekIsMondayThroughToday()
     {

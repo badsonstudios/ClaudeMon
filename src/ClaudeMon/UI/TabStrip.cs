@@ -4,15 +4,23 @@ using System.ComponentModel;
 using System.Drawing;
 
 /// <summary>
-/// An owner-drawn horizontal row of tab headers for the Settings dialog — the active tab gets an
-/// accent underline over a full-width hairline baseline. A custom control (in the vein of
-/// <see cref="ToggleSwitch"/>) rather than a stock <see cref="TabControl"/>, which the app-wide
-/// dark mode doesn't theme. Selection only — the parent shows/hides its own content per
-/// <see cref="SelectedIndex"/>. Clickable, hoverable, and keyboard-accessible (Left/Right arrows
-/// when focused). Geometry comes from <see cref="TabStripLayout"/>, scaled by the monitor DPI.
+/// An owner-drawn horizontal row of tab headers — the active tab gets an accent underline over a
+/// full-width hairline baseline. A custom control (in the vein of <see cref="ToggleSwitch"/>)
+/// rather than a stock <see cref="TabControl"/>, which the app-wide dark mode doesn't theme.
+/// Used by the Settings dialog (General / Alerts / Taskbar / Updates) and by the Usage &amp; costs
+/// window (Tables / Chart). Selection only — the parent shows/hides its own content per
+/// <see cref="SelectedIndex"/>, which is what lets both consumers keep their own layout. Clickable,
+/// hoverable, and keyboard-accessible (Left/Right arrows when focused). Geometry comes from
+/// <see cref="TabStripLayout"/>, scaled by the monitor DPI.
 /// </summary>
 public sealed class TabStrip : Control
 {
+    /// <summary>
+    /// The logical (96-DPI) height a strip should be given. Not enforced — the parent sets the
+    /// bounds — but shared, so the two windows that use one can't drift apart.
+    /// </summary>
+    public const int LogicalHeight = 36;
+
     private readonly string[] _tabs;
     private int _selectedIndex;
     private int _hoverIndex = -1;

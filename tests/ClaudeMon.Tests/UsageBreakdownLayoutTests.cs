@@ -165,4 +165,44 @@ public class UsageBreakdownLayoutTests
         Assert.Equal(Sc(MinFirst) + (5 * Sc(Numeric)) + Sc(Cost) + 26, at150);
         Assert.True(at150 > UsageBreakdownLayout.MinTableWidth(ScrollBar, Numeric, Cost, MinFirst));
     }
+
+    [Fact]
+    public void DefaultHeight_IsTheChromePlusTwoTables()
+    {
+        Assert.Equal(400 + 150 + 150, UsageBreakdownLayout.DefaultHeight(400, 150, insertedRow: 0));
+    }
+
+    [Fact]
+    public void DefaultHeight_InsertedRowComesOutOfTheTables_NotTheWindow()
+    {
+        // The invariant behind #113's "the window's default size is unchanged": the tab strip is
+        // counted inside the chrome, and subtracting it again here is what keeps the window
+        // opening at the height it did before the strip existed. Break the pairing and this fails.
+        const int row = 42;
+        const int chromeWithoutStrip = 400;
+
+        Assert.Equal(
+            UsageBreakdownLayout.DefaultHeight(chromeWithoutStrip, 150, insertedRow: 0),
+            UsageBreakdownLayout.DefaultHeight(chromeWithoutStrip + row, 150, insertedRow: row));
+    }
+
+    [Fact]
+    public void DefaultHeight_StillLeavesBothTablesWellAboveTheirFloor()
+    {
+        // The strip's row is only affordable because the default tables are far taller than the
+        // floor SplitTableHeights clamps to; if that ever stops being true the window would open
+        // with a clamped table and a gap at the bottom.
+        var height = UsageBreakdownLayout.DefaultHeight(400, 150, insertedRow: 42);
+        var (first, second) = UsageBreakdownLayout.SplitTableHeights(height - 400, minHeight: 66);
+
+        Assert.True(first > 66 && second > 66, "the default tables must not land on their floor");
+    }
+
+    [Theory]
+    [InlineData(-10, 0)]
+    [InlineData(0, -10)]
+    public void DefaultHeight_IgnoresNegativeMetrics(int table, int row)
+    {
+        Assert.Equal(400, UsageBreakdownLayout.DefaultHeight(400, table, row));
+    }
 }

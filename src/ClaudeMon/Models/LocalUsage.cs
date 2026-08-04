@@ -194,6 +194,8 @@ public record LocalCostSeries(
     DateOnly ToDate,
     IReadOnlyList<DailyCost> Days)
 {
+    // These three walk Days on every read rather than being cached. Deliberate: the series is
+    // bounded at the store's 30-day retention, and the record stays a plain immutable value.
     /// <summary>The costliest day — what the chart scales its y-axis against.</summary>
     public double MaxCostUsd => Days.Count == 0 ? 0.0 : Days.Max(d => d.CostUsd);
 

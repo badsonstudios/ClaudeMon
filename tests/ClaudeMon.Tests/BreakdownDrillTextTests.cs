@@ -17,6 +17,25 @@ public class BreakdownDrillTextTests
     }
 
     [Fact]
+    public void ChartSection_SaysItIsNotFilteredWhileADrillDownRuns()
+    {
+        // The chart is whole-timeframe by design, so the one case that matters is the drilled one:
+        // its heading has to contradict the narrower question still showing on the Tables tab.
+        Assert.Equal("Cost per day", BreakdownDrillText.ChartSection(null));
+        Assert.Equal("Cost per day — everything, not just claude-fable-5",
+            BreakdownDrillText.ChartSection("claude-fable-5"));
+    }
+
+    [Fact]
+    public void ChartSection_ShortensALongName()
+    {
+        var heading = BreakdownDrillText.ChartSection(new string('x', 200));
+
+        Assert.Contains("…", heading);
+        Assert.True(heading.Length < 100);
+    }
+
+    [Fact]
     public void Sections_NameWhatTheyAreShowing()
     {
         Assert.Equal(@"Models used in C:\Projects\ClaudeMon",

@@ -32,6 +32,18 @@ internal static class BreakdownDrillText
         drilledModel is null ? "By project" : $"Projects using {Shorten(drilledModel)}";
 
     /// <summary>
+    /// The heading above the cost-over-time chart (#113). The chart is deliberately whole-
+    /// timeframe — per-project and per-model series are out of scope — so when a drill-down is
+    /// running underneath, the heading says so rather than letting the chart be read as the
+    /// selected row's spend. <paramref name="drilledName"/> is the drilled-into row's display
+    /// name, or null when nothing is drilled into.
+    /// </summary>
+    public static string ChartSection(string? drilledName) =>
+        drilledName is null
+            ? "Cost per day"
+            : $"Cost per day — everything, not just {Shorten(drilledName)}";
+
+    /// <summary>
     /// <paramref name="value"/> clipped to <see cref="MaxNameLength"/> characters with the middle
     /// elided. The middle rather than the tail because these are paths, and the leaf directory —
     /// the part that identifies the project — is at the end.

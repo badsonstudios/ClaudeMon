@@ -30,7 +30,15 @@ using ClaudeMon.Services;
 /// store is what keeps a drill-down from totalling more than the row it drills into on a window
 /// that has been open across a scan. The selection lives in one table at a time; the other table's
 /// heading says what it is showing and grows a "Show all" button to get back. Deliberately no
-/// third table: the window is already two tables tall, and a tab strip is coming above them (#113).
+/// third table: the window is already two tables tall.
+///
+/// A <see cref="TabStrip"/> (#113) puts a cost-per-day <see cref="CostChart"/> behind a second tab
+/// rather than stacking it under the tables, which would push them off a compact window. Tables is
+/// the default tab and the window still opens at the size it always did — the strip's row comes out
+/// of the tables' share, not out of the window's height. The tabs switch <i>views</i>, not filters:
+/// both describe the same timeframe, and the tables keep their sort and drill-down while the chart
+/// is up. The chart is deliberately whole-timeframe — a drilled-into project does not narrow it,
+/// since per-project series are out of scope for #113.
 ///
 /// Unlike the app's other windows this one is <b>resizable</b> (#110): a month of
 /// usage across several projects doesn't fit a fixed 700×150 viewport. The
@@ -83,6 +91,9 @@ internal sealed class UsageBreakdownForm : Form
     private readonly Label _timeframeLabel;
     private readonly ComboBox _timeframeCombo;
     private readonly Label _selectHint;
+    private readonly TabStrip _tabStrip;
+    private readonly Label _chartLabel;
+    private readonly CostChart _chart;
     private readonly Label _modelLabel;
     private readonly ListView _modelList;
     private readonly Button _modelShowAll;
@@ -178,6 +189,33 @@ internal sealed class UsageBreakdownForm : Form
         };
         Controls.Add(_selectHint);
 
+        // Tables first and selected by default: the numbers are what this window is for, and the
+        // chart is one click away when the question is "how is it trending?" instead (#113).
+        _tabStrip = new TabStrip("Tables", "Chart") { AccessibleName = "Usage views" };
+        _tabStrip.SelectedIndexChanged += (_, _) =>
+        {
+            ApplyTab();
+            // A mouse click on a tab header doesn't move the focus (TabStrip only sets its own
+            // SelectedIndex), so hiding the table that had it would let WinForms hand the focus to
+            // the next control in the tab order — the Export button, several rows away. Taking it
+            // onto the strip is both where the user just clicked and where the Left/Right arrow
+            // keys work. The same reasoning as ClearDrill's source.Focus().
+            _tabStrip.Focus();
+        };
+        Controls.Add(_tabStrip);
+
+        // The chart says what it is, and — because it is deliberately whole-timeframe — says so
+        // when a drill-down is running underneath it. Without this the Chart tab is the one place
+        // where the window shows unlabelled numbers with a narrower question still on screen.
+        _chartLabel = MakeSectionLabel(BreakdownDrillText.ChartSection(null));
+        _chartLabel.Visible = false;
+        Controls.Add(_chartLabel);
+
+        // Laid out in the same region as the tables and simply hidden behind them, so switching
+        // tabs is a visibility flip rather than a second layout pass.
+        _chart = new CostChart { Visible = false };
+        Controls.Add(_chart);
+
         _modelLabel = MakeSectionLabel(BreakdownDrillText.ModelSection(null));
         Controls.Add(_modelLabel);
         _modelList = MakeTable("Model");
@@ -224,8 +262,33 @@ internal sealed class UsageBreakdownForm : Form
         CancelButton = _closeButton;
 
         Reload();
+        ApplyTab();
         ClientSize = DefaultClientSize();
         Relayout();
+    }
+
+    /// <summary>What the window shows right now: the selected tab crossed with the drill state.</summary>
+    private BreakdownTabVisibility Visibility => BreakdownTabView.For(
+        _tabStrip.SelectedIndex,
+        DrillInto(BreakdownAxis.Model) is not null,
+        DrillInto(BreakdownAxis.Project) is not null);
+
+    // The tabs share one layout, so switching them only changes what is visible. The rule itself
+    // lives in the pure BreakdownTabView -- a drill-down survives a trip to the Chart tab, so a
+    // "Show all" button's visibility depends on the tab as well as on the drill.
+    private void ApplyTab()
+    {
+        var visible = Visibility;
+
+        _selectHint.Visible = visible.SelectHint;
+        _modelLabel.Visible = visible.Tables;
+        _modelList.Visible = visible.Tables;
+        _projectLabel.Visible = visible.Tables;
+        _projectList.Visible = visible.Tables;
+        _chartLabel.Visible = visible.Chart;
+        _chart.Visible = visible.Chart;
+        _modelShowAll.Visible = visible.ModelShowAll;
+        _projectShowAll.Visible = visible.ProjectShowAll;
     }
 
     // A table's heading. Sized in LayoutSectionRow rather than by AutoSize: a drilled heading
@@ -291,10 +354,15 @@ internal sealed class UsageBreakdownForm : Form
             ? TimeframeOptions[i].Value
             : BreakdownTimeframe.Today;
 
-    // Pulls fresh data for the selected timeframe and rebuilds both tables.
+    // Pulls fresh data for the selected timeframe and rebuilds both tables and the chart.
     private void Reload()
     {
         _current = _localUsage.Breakdown(SelectedTimeframe);
+        // Both queries re-aggregate the same cached cells, so the chart is refreshed even when it
+        // is behind the Tables tab: it costs a walk over at most 30 days, and it means the two
+        // tabs are always snapshots of the same moment rather than of whenever each was last
+        // looked at. (Like the tables, that moment is the last open or timeframe change.)
+        _chart.Series = _localUsage.CostSeries(SelectedTimeframe);
 
         // A drill-down survives a timeframe change — switching Today → 30 days asks the same
         // question over a wider window — but is dropped when the selected model or project has no
@@ -525,8 +593,12 @@ internal sealed class UsageBreakdownForm : Form
 
         _modelLabel.Text = BreakdownDrillText.ModelSection(model ? name : null);
         _projectLabel.Text = BreakdownDrillText.ProjectSection(project ? name : null);
-        _modelShowAll.Visible = model;
-        _projectShowAll.Visible = project;
+        // The chart doesn't narrow with the drill-down, so its heading owns up to that.
+        _chartLabel.Text = BreakdownDrillText.ChartSection(name);
+
+        // Starting or ending a drill-down changes which "Show all" buttons belong on screen, and
+        // that is the same tab-and-drill rule the tab switch applies.
+        ApplyTab();
     }
 
     // The drilled-into row's own display name for the heading — a project's real path rather than
@@ -592,12 +664,26 @@ internal sealed class UsageBreakdownForm : Form
             _timeframeCombo.Right + Sc(12),
             _timeframeCombo.Top + ((_timeframeCombo.Height - _selectHint.Height) / 2));
 
+        _tabStrip.SetBounds(Sc(Pad), TabStripTop, contentWidth, Sc(TabStrip.LogicalHeight));
+
         LayoutSectionRow(_modelLabel, _modelShowAll, SectionTop, contentWidth);
         _hint.MaximumSize = new Size(contentWidth, 0);
     }
 
-    /// <summary>Top of the first section heading. Requires <see cref="LayoutHeader"/> to have run.</summary>
-    private int SectionTop => _timeframeCombo.Bottom + Sc(SectionGap);
+    /// <summary>Top of the tab header row. Requires <see cref="LayoutHeader"/> to have run.</summary>
+    private int TabStripTop => _timeframeCombo.Bottom + Sc(SectionGap);
+
+    /// <summary>
+    /// The vertical space the tab strip adds above the content. Its own baseline hairline does the
+    /// separating, so it only needs the small gap under it.
+    /// </summary>
+    private int TabStripRow => Sc(TabStrip.LogicalHeight) + Sc(LabelGap);
+
+    /// <summary>
+    /// Top of the tab content — the first section heading on the Tables tab, the chart on the
+    /// Chart tab. Requires <see cref="LayoutHeader"/> to have run.
+    /// </summary>
+    private int SectionTop => TabStripTop + TabStripRow;
 
     /// <summary>
     /// The height of a section heading row. The "Show all" button is taller than the label, and
@@ -631,12 +717,18 @@ internal sealed class UsageBreakdownForm : Form
         + Sc(SectionGap) + hintHeight + Sc(SectionGap)             // the hint line
         + Sc(ButtonHeight) + Sc(Pad);                              // the button row
 
-    /// <summary>The size the window opens at: the chrome plus two default-height tables.</summary>
+    /// <summary>
+    /// The size the window opens at: the chrome plus two default-height tables. The tab strip's
+    /// row is subtracted back off, so adding the Chart tab left the default window exactly the
+    /// size it was before it (#113) — the strip comes out of the tables' share instead. There is
+    /// plenty of slack for that: the default tables are more than twice their floor height.
+    /// </summary>
     private Size DefaultClientSize()
     {
         var width = Sc(DefaultClientWidth);
         LayoutHeader(width - (2 * Sc(Pad)));
-        return new Size(width, ChromeHeight(_hint.Height) + (2 * Sc(DefaultTableHeight)));
+        return new Size(width, UsageBreakdownLayout.DefaultHeight(
+            ChromeHeight(_hint.Height), Sc(DefaultTableHeight), TabStripRow));
     }
 
     /// <summary>
@@ -699,6 +791,17 @@ internal sealed class UsageBreakdownForm : Form
         var hintTop = buttonsTop - Sc(SectionGap) - _hint.Height;
 
         var tablesTop = SectionTop + SectionRowHeight + Sc(LabelGap);
+
+        // Both tabs are laid out every pass, visible or not: one layout path, and the chart is
+        // already the right size when its tab comes forward rather than a frame later. The chart's
+        // heading sits in the same row as the first table's and the chart fills everything below,
+        // so nothing above or below moves when the tab changes.
+        var contentBottom = hintTop - Sc(SectionGap);
+        _chartLabel.SetBounds(
+            Sc(Pad), SectionTop + ((SectionRowHeight - _chartLabel.PreferredHeight) / 2),
+            contentWidth, _chartLabel.PreferredHeight);
+        _chart.SetBounds(Sc(Pad), tablesTop, contentWidth, Math.Max(0, contentBottom - tablesTop));
+
         var betweenTables = Sc(SectionGap) + SectionRowHeight + Sc(LabelGap);
         var (modelHeight, projectHeight) = UsageBreakdownLayout.SplitTableHeights(
             hintTop - Sc(SectionGap) - tablesTop - betweenTables, Sc(MinTableHeight));

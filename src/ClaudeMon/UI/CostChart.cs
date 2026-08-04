@@ -45,7 +45,11 @@ internal sealed class CostChart : Control
             ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
             | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw,
             true);
-        TabStop = false;
+        // Focusable on purpose. The chart is the whole of its tab, so if Tab skipped it the only
+        // textual rendering of the data — the accessible description below — would be unreachable
+        // by keyboard, and a screen-reader user would go straight from the tab strip to the
+        // buttons past a chart they were never told about.
+        TabStop = true;
         AccessibleRole = AccessibleRole.Chart;
         AccessibleName = "Cost per day";
         UpdateAccessibleDescription();
@@ -90,6 +94,18 @@ internal sealed class CostChart : Control
         Invalidate();
     }
 
+    protected override void OnGotFocus(EventArgs e)
+    {
+        base.OnGotFocus(e);
+        Invalidate();
+    }
+
+    protected override void OnLostFocus(EventArgs e)
+    {
+        base.OnLostFocus(e);
+        Invalidate();
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
@@ -106,6 +122,7 @@ internal sealed class CostChart : Control
             TextRenderer.DrawText(
                 g, $"({reason ?? EmptyNoData})", Font, ClientRectangle, theme.HintText,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+            DrawFocusCue(g, theme);
             return;
         }
 
@@ -167,6 +184,21 @@ internal sealed class CostChart : Control
                 new Rectangle(0, Height - lineHeight, Width, lineHeight),
                 theme.HintText, LabelFlags | TextFormatFlags.EndEllipsis);
         }
+
+        DrawFocusCue(g, theme);
+    }
+
+    // Focus ring only for keyboard users — Windows suppresses focus cues until the keyboard is
+    // used, so tabbing here shows the chart is focused while a click leaves no dotted box behind.
+    // Same treatment as TabStrip's active tab.
+    private void DrawFocusCue(Graphics g, Theme theme)
+    {
+        if (!Focused || !ShowFocusCues)
+            return;
+
+        var focus = ClientRectangle;
+        focus.Inflate(-1, -1);
+        ControlPaint.DrawFocusRectangle(g, focus, theme.HintText, BackColor);
     }
 
     private void DrawGrid(

@@ -57,13 +57,6 @@ public sealed class LocalUsageMonitor : IDisposable
     /// <summary>The breakdown tables for the Usage &amp; costs window.</summary>
     public LocalUsageBreakdown? Breakdown(BreakdownTimeframe timeframe) => _store.Breakdown(timeframe);
 
-    /// <summary>
-    /// The counterpart rows for one selected model or project — what the Usage
-    /// &amp; costs window drills into (#112).
-    /// </summary>
-    public LocalUsageDrillDown? DrillDown(BreakdownTimeframe timeframe, BreakdownAxis axis, string key) =>
-        _store.DrillDown(timeframe, axis, key);
-
     /// <summary>The sums the budget alerts compare against their caps.</summary>
     public LocalBudgetTotals? BudgetTotals() => _store.BudgetTotals();
 

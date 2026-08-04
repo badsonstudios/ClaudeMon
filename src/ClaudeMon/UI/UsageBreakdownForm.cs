@@ -24,11 +24,13 @@ using ClaudeMon.Services;
 ///
 /// Selecting a row drills into it (#112): the two tables are the two axes of the same cells, so a
 /// selected model turns the project table into "the projects that model ran in" (and a selected
-/// project turns the model table into "the models that project used") — one
-/// <see cref="LocalUsageMonitor.DrillDown"/> query, the axes swapped. The selection lives in one
-/// table at a time; the other table's heading says what it is showing and grows a "Show all"
-/// button to get back. Deliberately no third table: the window is already two tables tall, and a
-/// tab strip is coming above them (#113).
+/// project turns the model table into "the models that project used") — the pure
+/// <see cref="BreakdownDrill"/> slicing <see cref="LocalUsageBreakdown.Pairs"/> of the breakdown
+/// already on screen, with the axes swapped. Slicing the same snapshot rather than re-querying the
+/// store is what keeps a drill-down from totalling more than the row it drills into on a window
+/// that has been open across a scan. The selection lives in one table at a time; the other table's
+/// heading says what it is showing and grows a "Show all" button to get back. Deliberately no
+/// third table: the window is already two tables tall, and a tab strip is coming above them (#113).
 ///
 /// Unlike the app's other windows this one is <b>resizable</b> (#110): a month of
 /// usage across several projects doesn't fit a fixed 700×150 viewport. The
@@ -176,12 +178,7 @@ internal sealed class UsageBreakdownForm : Form
         };
         Controls.Add(_selectHint);
 
-        _modelLabel = new Label
-        {
-            Text = BreakdownDrillText.ModelSection(null),
-            AutoSize = true,
-            ForeColor = _theme.HeaderAccent,
-        };
+        _modelLabel = MakeSectionLabel(BreakdownDrillText.ModelSection(null));
         Controls.Add(_modelLabel);
         _modelList = MakeTable("Model");
         _modelList.ColumnClick += (_, e) =>
@@ -194,12 +191,7 @@ internal sealed class UsageBreakdownForm : Form
         _modelShowAll = MakeShowAllButton();
         Controls.Add(_modelShowAll);
 
-        _projectLabel = new Label
-        {
-            Text = BreakdownDrillText.ProjectSection(null),
-            AutoSize = true,
-            ForeColor = _theme.HeaderAccent,
-        };
+        _projectLabel = MakeSectionLabel(BreakdownDrillText.ProjectSection(null));
         Controls.Add(_projectLabel);
         _projectList = MakeTable("Project");
         _projectList.ColumnClick += (_, e) =>
@@ -235,6 +227,18 @@ internal sealed class UsageBreakdownForm : Form
         ClientSize = DefaultClientSize();
         Relayout();
     }
+
+    // A table's heading. Sized in LayoutSectionRow rather than by AutoSize: a drilled heading
+    // carries a project path, and the row it shares with the "Show all" button is one line high —
+    // so it is given the width that is actually free and ellipsized into it, instead of growing
+    // under the button (or wrapping, which would change the row's height).
+    private Label MakeSectionLabel(string text) => new()
+    {
+        Text = text,
+        AutoSize = false,
+        AutoEllipsis = true,
+        ForeColor = _theme.HeaderAccent,
+    };
 
     private Button MakeButton(string text)
     {
@@ -295,7 +299,7 @@ internal sealed class UsageBreakdownForm : Form
         // A drill-down survives a timeframe change — switching Today → 30 days asks the same
         // question over a wider window — but is dropped when the selected model or project has no
         // usage left in range, since there would be nothing on screen to point at.
-        _drill = _drill is null ? null : DrillFor(_drill.Axis, _drill.Key);
+        _drill = _drill is null ? null : BreakdownDrill.For(_current, _drill.Axis, _drill.Key);
         ApplyDrill();
 
         // No SizeColumns here on purpose: the widths are computed from the list's scrollbar-free
@@ -319,14 +323,7 @@ internal sealed class UsageBreakdownForm : Form
     }
 
     /// <summary>The drill-down currently filtering the <paramref name="axis"/> table, if any.</summary>
-    private LocalUsageDrillDown? DrillInto(BreakdownAxis axis) => Filtering(_drill, axis);
-
-    /// <summary>
-    /// Which of <paramref name="drill"/> the <paramref name="axis"/> table shows: a drill-down
-    /// filters the table on the <em>other</em> axis — a selected model narrows the projects.
-    /// </summary>
-    private static LocalUsageDrillDown? Filtering(LocalUsageDrillDown? drill, BreakdownAxis axis) =>
-        drill is not null && drill.Axis != axis ? drill : null;
+    private LocalUsageDrillDown? DrillInto(BreakdownAxis axis) => BreakdownDrill.Filtering(_drill, axis);
 
     private void Fill(ListView list, IReadOnlyList<BreakdownRow>? rows, BreakdownRow? totals, BreakdownSortState sort)
     {
@@ -396,12 +393,6 @@ internal sealed class UsageBreakdownForm : Form
     private static bool SameKey(string a, string b) =>
         string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Whether two drill-downs point at the same row — or both at nothing.</summary>
-    private static bool SameDrill(LocalUsageDrillDown? a, LocalUsageDrillDown? b) =>
-        a is null || b is null
-            ? a is null && b is null
-            : a.Axis == b.Axis && SameKey(a.Key, b.Key);
-
     // Re-selects the drilled-into row after its own table was rebuilt (a re-sort, a timeframe
     // change). A no-op for the other table, whose rows are the drill-down's results.
     private void RestoreDrilledRow(ListView list)
@@ -448,28 +439,24 @@ internal sealed class UsageBreakdownForm : Form
 
         var (list, axis) = source;
 
+        // Exactly one table holds a selection: the one the user just acted on. Anything left over
+        // in the other one would read as a drill-down that is no longer on — and, since clicking an
+        // already-selected row raises no event, could not even be clicked to bring it back.
+        ClearSelection(list == _modelList ? _projectList : _modelList);
+
         // No row (an empty selection, the totals row, or the empty-state placeholder) means
         // "everything" — the undrilled view — rather than an empty drill-down panel.
         var row = list.SelectedItems.Count > 0 ? list.SelectedItems[0].Tag as BreakdownRow : null;
-        SetDrill(row is null ? null : DrillFor(axis, row.Key));
+        SetDrill(row is null ? null : BreakdownDrill.For(_current, axis, row.Key));
     }
 
-    // "Show all": back to both full tables. The selection goes with it — a row left highlighted
-    // with nothing drilled into it would read as if the drill-down were still on.
+    // "Show all": back to both full tables, selection and all.
     private void ClearDrill()
     {
         if (_drill is not null)
         {
             var source = SourceList(_drill.Axis);
-            _suppressSelection = true;
-            try
-            {
-                source.SelectedItems.Clear();
-            }
-            finally
-            {
-                _suppressSelection = false;
-            }
+            ClearSelection(source);
 
             // The button is about to hide itself, and WinForms would hand the focus to whatever
             // comes next in the tab order (the Export button) — put it back on the table the
@@ -480,11 +467,29 @@ internal sealed class UsageBreakdownForm : Form
         SetDrill(null);
     }
 
+    // Drops a table's selection without letting it look like the user did it.
+    private void ClearSelection(ListView list)
+    {
+        if (list.SelectedIndices.Count == 0)
+            return;
+
+        var wasSuppressed = _suppressSelection;
+        _suppressSelection = true;
+        try
+        {
+            list.SelectedIndices.Clear();
+        }
+        finally
+        {
+            _suppressSelection = wasSuppressed;
+        }
+    }
+
     private void SetDrill(LocalUsageDrillDown? drill)
     {
         // Nothing to redraw when the same row (or nothing at all) is picked again — and skipping
         // it keeps a click on the already-selected row from throwing away its own scroll position.
-        if (SameDrill(_drill, drill))
+        if (BreakdownDrill.Same(_drill, drill))
             return;
 
         var previous = _drill;
@@ -493,9 +498,10 @@ internal sealed class UsageBreakdownForm : Form
         // Only the table whose rows actually changed is rebuilt. The one holding the selection
         // keeps its items — and with them the row the user just clicked, including the totals row,
         // whose "everything" selection would otherwise vanish the moment it was made.
-        if (!ReferenceEquals(Filtering(previous, BreakdownAxis.Model), DrillInto(BreakdownAxis.Model)))
+        var (model, project) = BreakdownDrill.Rebuild(previous, drill);
+        if (model)
             FillModels();
-        if (!ReferenceEquals(Filtering(previous, BreakdownAxis.Project), DrillInto(BreakdownAxis.Project)))
+        if (project)
             FillProjects();
 
         UpdateSectionHeadings();
@@ -532,16 +538,6 @@ internal sealed class UsageBreakdownForm : Form
 
         var rows = _drill.Axis == BreakdownAxis.Model ? _current?.ByModel : _current?.ByProject;
         return rows?.FirstOrDefault(r => SameKey(r.Key, _drill.Key))?.DisplayName ?? _drill.Key;
-    }
-
-    // The counterpart rows for one key in the selected timeframe, or null when that key has no
-    // usage in range (so there is nothing to drill into).
-    private LocalUsageDrillDown? DrillFor(BreakdownAxis axis, string key)
-    {
-        var rows = axis == BreakdownAxis.Model ? _current?.ByModel : _current?.ByProject;
-        return rows?.Any(r => SameKey(r.Key, key)) == true
-            ? _localUsage.DrillDown(SelectedTimeframe, axis, key)
-            : null;
     }
 
     private void ExportCsv()
@@ -608,16 +604,20 @@ internal sealed class UsageBreakdownForm : Form
     /// the row keeps its height whether or not the button is showing — otherwise starting a
     /// drill-down would shift both tables down a few pixels.
     /// </summary>
-    private int SectionRowHeight => Math.Max(_modelLabel.Height, Sc(ShowAllHeight));
+    private int SectionRowHeight => Math.Max(_modelLabel.PreferredHeight, Sc(ShowAllHeight));
 
-    // A section heading: the label on the left, its "Show all" button right-aligned with the
-    // table below, both centred in a row of SectionRowHeight.
+    // A section heading: the label on the left with everything the button doesn't need, its
+    // "Show all" button right-aligned with the table below, both centred in a row of
+    // SectionRowHeight.
     private void LayoutSectionRow(Label label, Button showAll, int top, int contentWidth)
     {
-        label.Location = new Point(Sc(Pad), top + ((SectionRowHeight - label.Height) / 2));
+        var row = SectionRowHeight;
+        var labelHeight = label.PreferredHeight;
+        label.SetBounds(
+            Sc(Pad), top + ((row - labelHeight) / 2),
+            Math.Max(0, contentWidth - Sc(ShowAllWidth) - Sc(ButtonGap)), labelHeight);
         showAll.SetBounds(
-            Sc(Pad) + contentWidth - Sc(ShowAllWidth),
-            top + ((SectionRowHeight - Sc(ShowAllHeight)) / 2),
+            Sc(Pad) + contentWidth - Sc(ShowAllWidth), top + ((row - Sc(ShowAllHeight)) / 2),
             Sc(ShowAllWidth), Sc(ShowAllHeight));
     }
 

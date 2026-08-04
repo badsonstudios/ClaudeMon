@@ -215,6 +215,9 @@ public sealed class LocalUsageStore
 
             var byModel = new Dictionary<string, BreakdownRow>(StringComparer.OrdinalIgnoreCase);
             var byProject = new Dictionary<string, BreakdownRow>(StringComparer.OrdinalIgnoreCase);
+            // Keyed by the whole "project|model" cell key, case-insensitively so
+            // pairs merge exactly where the two axis tables above merge.
+            var pairs = new Dictionary<string, BreakdownPair>(StringComparer.OrdinalIgnoreCase);
             var totals = EmptyRow("total", "Total");
 
             for (var date = from; date <= to; date = date.AddDays(1))
@@ -225,63 +228,19 @@ public sealed class LocalUsageStore
                 foreach (var (cellKey, cell) in dayCells)
                 {
                     var (project, model) = SplitCellKey(cellKey);
+                    var display = ProjectDisplay.Resolve(project, _projectPaths);
 
                     Fold(byModel, model, model, cell);
-                    Fold(byProject, project, ProjectDisplay.Resolve(project, _projectPaths), cell);
+                    Fold(byProject, project, display, cell);
+                    FoldPair(pairs, cellKey, project, display, model, cell);
                     totals = Add(totals, cell);
                 }
             }
 
-            return new LocalUsageBreakdown(from, to, Sorted(byModel), Sorted(byProject), totals);
-        }
-    }
-
-    /// <summary>
-    /// The other half of one breakdown row (#112): the projects a model ran in
-    /// (<see cref="BreakdownAxis.Model"/>), or the models a project used
-    /// (<see cref="BreakdownAxis.Project"/>) — the same cells
-    /// <see cref="Breakdown"/> walks, but keeping the pairing it folds away
-    /// instead of aggregating each axis on its own. Null when the feature is
-    /// unavailable; a key with no usage in range comes back with no rows and
-    /// zero totals rather than null, since a key can legitimately drop out of
-    /// the data when the timeframe narrows.
-    /// </summary>
-    public LocalUsageDrillDown? DrillDown(BreakdownTimeframe timeframe, BreakdownAxis axis, string key)
-    {
-        lock (_lock)
-        {
-            if (!_available)
-                return null;
-
-            var (from, to) = RangeOf(timeframe);
-
-            var rows = new Dictionary<string, BreakdownRow>(StringComparer.OrdinalIgnoreCase);
-            var totals = EmptyRow("total", "Total");
-
-            for (var date = from; date <= to; date = date.AddDays(1))
+            return new LocalUsageBreakdown(from, to, Sorted(byModel), Sorted(byProject), totals)
             {
-                if (!_cells.TryGetValue(DayKeyOf(date), out var dayCells))
-                    continue;
-
-                foreach (var (cellKey, cell) in dayCells)
-                {
-                    var (project, model) = SplitCellKey(cellKey);
-                    // Case-insensitively, because that is how Breakdown's own
-                    // dictionaries merge keys — the row the caller selected may
-                    // differ from a cell's key only in case.
-                    var selected = axis == BreakdownAxis.Model ? model : project;
-                    if (!string.Equals(selected, key, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    if (axis == BreakdownAxis.Model)
-                        Fold(rows, project, ProjectDisplay.Resolve(project, _projectPaths), cell);
-                    else
-                        Fold(rows, model, model, cell);
-                    totals = Add(totals, cell);
-                }
-            }
-
-            return new LocalUsageDrillDown(from, to, axis, key, Sorted(rows), totals);
+                Pairs = pairs.Values.ToList(),
+            };
         }
     }
 
@@ -364,6 +323,17 @@ public sealed class LocalUsageStore
         if (!rows.TryGetValue(key, out var row))
             row = EmptyRow(key, display);
         rows[key] = Add(row, cell);
+    }
+
+    // Same fold, one axis lower: a (project, model) cell summed across the days
+    // in range, keeping the pairing the two axis tables discard (#112).
+    private static void FoldPair(
+        Dictionary<string, BreakdownPair> pairs,
+        string cellKey, string project, string display, string model, LocalDayTotals cell)
+    {
+        if (!pairs.TryGetValue(cellKey, out var pair))
+            pair = new BreakdownPair(project, display, model, new LocalDayTotals());
+        pairs[cellKey] = pair with { Totals = Add(pair.Totals, cell) };
     }
 
     private static IReadOnlyList<BreakdownRow> Sorted(Dictionary<string, BreakdownRow> rows) =>

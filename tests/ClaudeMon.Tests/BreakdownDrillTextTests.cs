@@ -45,6 +45,34 @@ public class BreakdownDrillTextTests
         Assert.Contains('…', shortened);
     }
 
+    [Theory]
+    [InlineData(20)]
+    [InlineData(21)]
+    [InlineData(22)]
+    [InlineData(23)]
+    public void Shorten_NeverSplitsASurrogatePair(int lead)
+    {
+        // A directory name can hold astral characters; half a surrogate pair renders as a
+        // replacement box. The lead length walks both cut points across an emoji.
+        var value = new string('a', lead) + "😀" + new string('b', 60) + "😀" + new string('c', lead);
+
+        var shortened = BreakdownDrillText.Shorten(value);
+
+        for (var i = 0; i < shortened.Length; i++)
+        {
+            if (char.IsHighSurrogate(shortened[i]))
+            {
+                Assert.True(i + 1 < shortened.Length && char.IsLowSurrogate(shortened[i + 1]),
+                    $"lone high surrogate at {i} in '{shortened}'");
+                i++;
+            }
+            else
+            {
+                Assert.False(char.IsLowSurrogate(shortened[i]), $"lone low surrogate at {i}");
+            }
+        }
+    }
+
     [Fact]
     public void Shorten_AppliesInsideTheHeading()
     {

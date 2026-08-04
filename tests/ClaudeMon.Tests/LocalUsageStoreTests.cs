@@ -612,6 +612,161 @@ public class LocalUsageStoreTests : IDisposable
     }
 
     [Fact]
+    public void CostSeries_HasOnePointPerDayInTheTimeframe_EndingToday()
+    {
+        WriteTranscript("s1.jsonl", Line(_now.AddHours(-1), "msg_1", "req_1"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var today = DateOnly.FromDateTime(_now.ToLocalTime().DateTime);
+        var series = store.CostSeries(BreakdownTimeframe.SevenDays);
+        Assert.NotNull(series);
+        Assert.Equal(7, series.Days.Count);
+        Assert.Equal(today.AddDays(-6), series.FromDate);
+        Assert.Equal(today, series.ToDate);
+        // Contiguous and in ascending date order — the chart's x-axis is the list order.
+        for (var i = 0; i < series.Days.Count; i++)
+            Assert.Equal(series.FromDate.AddDays(i), series.Days[i].Date);
+    }
+
+    [Fact]
+    public void CostSeries_PlacesEachDaysCostOnItsOwnDay()
+    {
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddHours(-1), "msg_1", "req_1", input: 0, output: 100_000),  // $5 today
+            Line(_now.AddDays(-2), "msg_2", "req_2", input: 0, output: 200_000));  // $10 two days back
+
+        var store = Store();
+        store.ScanOnce();
+
+        var series = store.CostSeries(BreakdownTimeframe.SevenDays)!;
+        Assert.Equal(5.0, series.Days[^1].CostUsd, precision: 10);
+        Assert.Equal(10.0, series.Days[^3].CostUsd, precision: 10);
+        Assert.Equal(15.0, series.TotalCostUsd, precision: 10);
+        Assert.Equal(10.0, series.MaxCostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void CostSeries_DaysWithoutUsage_ReadZeroRatherThanBeingOmitted()
+    {
+        WriteTranscript("s1.jsonl", Line(_now.AddHours(-1), "msg_1", "req_1", input: 0, output: 100_000));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var series = store.CostSeries(BreakdownTimeframe.SevenDays)!;
+        // A gap in usage must stay a visible gap in the chart, not close up.
+        Assert.Equal(7, series.Days.Count);
+        Assert.All(series.Days.Take(6), d => Assert.Equal(0.0, d.CostUsd));
+        Assert.False(series.HasUnpricedModels);
+    }
+
+    [Fact]
+    public void CostSeries_FlagsOnlyTheDaysAnUnpricedModelTouched()
+    {
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddHours(-1), "msg_1", "req_1", input: 0, output: 100_000, model: "claude-fable-5"),
+            Line(_now.AddDays(-1), "msg_2", "req_2", input: 0, output: 100_000, model: "claude-other-1"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var series = store.CostSeries(BreakdownTimeframe.SevenDays)!;
+        Assert.False(series.Days[^1].HasUnpricedModels);  // today: fully priced
+        Assert.True(series.Days[^2].HasUnpricedModels);   // yesterday: a floor of $0
+        Assert.Equal(0.0, series.Days[^2].CostUsd);
+        Assert.True(series.HasUnpricedModels);
+    }
+
+    [Fact]
+    public void CostSeries_Today_IsASinglePoint()
+    {
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddHours(-1), "msg_1", "req_1", input: 0, output: 100_000),
+            Line(_now.AddDays(-1), "msg_2", "req_2", input: 0, output: 200_000));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var series = store.CostSeries(BreakdownTimeframe.Today)!;
+        var day = Assert.Single(series.Days);
+        Assert.Equal(series.FromDate, series.ToDate);
+        Assert.Equal(5.0, day.CostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void CostSeries_ThirtyDays_CoversTheWholeRetentionWindow()
+    {
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddDays(-29), "msg_1", "req_1", input: 0, output: 100_000),  // the oldest day in range
+            Line(_now.AddDays(-31), "msg_2", "req_2", input: 0, output: 900_000)); // outside it entirely
+
+        var store = Store();
+        store.ScanOnce();
+
+        var series = store.CostSeries(BreakdownTimeframe.ThirtyDays)!;
+        Assert.Equal(30, series.Days.Count);
+        Assert.Equal(DateOnly.FromDateTime(_now.AddDays(-29).ToLocalTime().DateTime), series.Days[0].Date);
+        Assert.Equal(5.0, series.Days[0].CostUsd, precision: 10);
+        // The window is inclusive of today, so it reaches back exactly 29 days and no further.
+        Assert.Equal(5.0, series.TotalCostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void LocalCostSeries_WithNoDays_ReportsZerosRatherThanThrowing()
+    {
+        // The store can't produce this (every timeframe is at least a day), but the chart
+        // reads these aggregates before it knows what it was handed.
+        var empty = new LocalCostSeries(
+            new DateOnly(2026, 8, 4), new DateOnly(2026, 8, 4), []);
+
+        Assert.Equal(0.0, empty.MaxCostUsd);
+        Assert.Equal(0.0, empty.TotalCostUsd);
+        Assert.False(empty.HasUnpricedModels);
+    }
+
+    [Fact]
+    public void CostSeries_NoUsageAtAll_IsAllZerosNotNull()
+    {
+        WriteTranscript("s1.jsonl", Line(_now.AddDays(-10), "msg_1", "req_1"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var series = store.CostSeries(BreakdownTimeframe.Today)!;
+        Assert.Equal(0.0, series.MaxCostUsd);
+        Assert.Equal(0.0, series.TotalCostUsd);
+    }
+
+    [Fact]
+    public void CostSeries_MissingProjectsDir_ReturnsNull()
+    {
+        var store = Store(projectsDir: Path.Combine(_tempDir, "nope"));
+        store.ScanOnce();
+        Assert.Null(store.CostSeries(BreakdownTimeframe.ThirtyDays));
+    }
+
+    [Fact]
+    public void CostSeries_TotalMatchesTheBreakdownItIsAggregatedFrom()
+    {
+        WriteTranscriptTo("proj-a", "s1.jsonl",
+            Line(_now.AddHours(-1), "msg_1", "req_1", input: 0, output: 100_000),
+            Line(_now.AddDays(-3), "msg_2", "req_2", input: 0, output: 300_000));
+        WriteTranscriptTo("proj-b", "s2.jsonl",
+            Line(_now.AddDays(-5), "msg_3", "req_3", input: 0, output: 200_000));
+
+        var store = Store();
+        store.ScanOnce();
+
+        // Same cells, sliced two ways — the chart and the tables must never disagree.
+        Assert.Equal(
+            store.Breakdown(BreakdownTimeframe.SevenDays)!.Totals.CostUsd,
+            store.CostSeries(BreakdownTimeframe.SevenDays)!.TotalCostUsd,
+            precision: 10);
+    }
+
+    [Fact]
     public void BudgetTotals_WeekIsMondayThroughToday()
     {
         var todayLocal = DateOnly.FromDateTime(_now.ToLocalTime().DateTime);

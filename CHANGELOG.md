@@ -30,6 +30,12 @@ GitHub release; the release notes are taken from these entries.
   is now re-run until the window is observed to actually be centred where it should be. Same
   class of bug as the flyout fix in #104. (#108)
 
+### Changed
+- **Development only — CI now measures code coverage.** Every push and pull request publishes a
+  per-class coverage summary, uploads the full HTML report, and fails the build if the logic
+  layer (everything except the desktop-bound WinForms code, which can't run headless) drops
+  below 85% line / 84% branch. Nothing about the app itself changed. (#102)
+
 ## [0.23.0] - 2026-07-22
 
 ### Fixed

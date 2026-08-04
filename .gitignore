@@ -43,6 +43,10 @@ publish/
 installer/Output/
 dist/
 
+# Coverage output (see coverage.runsettings)
+coverage/
+TestResults/
+
 
 # ClaudeTemplates: secrets & local Claude files
 # ── Secrets (NEVER commit) — the real secrets file is .claude/.env ────────────

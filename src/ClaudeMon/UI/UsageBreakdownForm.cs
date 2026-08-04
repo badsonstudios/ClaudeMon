@@ -18,6 +18,10 @@ using ClaudeMon.Services;
 /// the timeframe changes; the window shows a static picture (no live refresh —
 /// reopen for fresh numbers, matching how the flyout snapshots on open).
 ///
+/// Either table can be re-sorted by clicking a column header (#111); the ordering itself lives in
+/// the pure <see cref="BreakdownSort"/>, which sorts the <see cref="BreakdownRow"/> numbers rather
+/// than the formatted cell text and keeps the totals row pinned to the bottom.
+///
 /// Unlike the app's other windows this one is <b>resizable</b> (#110): a month of
 /// usage across several projects doesn't fit a fixed 700×150 viewport. The
 /// hand-scaled convention is kept — no <c>AutoScaleMode</c>, no anchors — but
@@ -77,6 +81,19 @@ internal sealed class UsageBreakdownForm : Form
     private bool _updatingMinimum;
     private bool _wasMinimized;
 
+    // One per table, so the two sort independently. Kept across a timeframe change on purpose:
+    // switching Today → 30 days should answer the same question, not reset it.
+    private BreakdownSortState _modelSort = BreakdownSortState.Default;
+    private BreakdownSortState _projectSort = BreakdownSortState.Default;
+
+    /// <summary>
+    /// The six numeric columns, in the order <see cref="BreakdownSortColumn"/> lists them after
+    /// <see cref="BreakdownSortColumn.Name"/>. A clicked column index is cast straight to that
+    /// enum, so a column added, removed or moved here has to move there too.
+    /// </summary>
+    private static readonly string[] NumericColumns =
+        ["Input", "Output", "Cache W", "Cache R", "Tokens", "Cost (est.)"];
+
     private static readonly (string Text, BreakdownTimeframe Value)[] TimeframeOptions =
     [
         ("Today", BreakdownTimeframe.Today),
@@ -130,11 +147,21 @@ internal sealed class UsageBreakdownForm : Form
         _modelLabel = new Label { Text = "By model", AutoSize = true, ForeColor = _theme.HeaderAccent };
         Controls.Add(_modelLabel);
         _modelList = MakeTable("Model");
+        _modelList.ColumnClick += (_, e) =>
+        {
+            _modelSort = _modelSort.Toggle(e.Column);
+            FillModels();
+        };
         Controls.Add(_modelList);
 
         _projectLabel = new Label { Text = "By project", AutoSize = true, ForeColor = _theme.HeaderAccent };
         Controls.Add(_projectLabel);
         _projectList = MakeTable("Project");
+        _projectList.ColumnClick += (_, e) =>
+        {
+            _projectSort = _projectSort.Toggle(e.Column);
+            FillProjects();
+        };
         Controls.Add(_projectList);
 
         _hint = new Label
@@ -182,19 +209,17 @@ internal sealed class UsageBreakdownForm : Form
             View = View.Details,
             FullRowSelect = true,
             MultiSelect = false,
-            HeaderStyle = ColumnHeaderStyle.Nonclickable,
+            // Clickable both to receive ColumnClick and to give the headers the hot-tracking that
+            // tells people they can be clicked (#111).
+            HeaderStyle = ColumnHeaderStyle.Clickable,
             BorderStyle = BorderStyle.FixedSingle,
             BackColor = _theme.FieldBack,
             ForeColor = _theme.FieldText,
         };
         // Columns get their scaled widths in Relayout; -2 here is a placeholder.
         list.Columns.Add(firstColumn);
-        list.Columns.Add("Input", -2, HorizontalAlignment.Right);
-        list.Columns.Add("Output", -2, HorizontalAlignment.Right);
-        list.Columns.Add("Cache W", -2, HorizontalAlignment.Right);
-        list.Columns.Add("Cache R", -2, HorizontalAlignment.Right);
-        list.Columns.Add("Tokens", -2, HorizontalAlignment.Right);
-        list.Columns.Add("Cost (est.)", -2, HorizontalAlignment.Right);
+        foreach (var column in NumericColumns)
+            list.Columns.Add(column, -2, HorizontalAlignment.Right);
         return list;
     }
 
@@ -208,15 +233,19 @@ internal sealed class UsageBreakdownForm : Form
     {
         _current = _localUsage.Breakdown(SelectedTimeframe);
 
-        Fill(_modelList, _current?.ByModel, _current?.Totals);
-        Fill(_projectList, _current?.ByProject, _current?.Totals);
+        FillModels();
+        FillProjects();
 
         // No SizeColumns here on purpose: the widths are computed from the list's scrollbar-free
         // width, so a timeframe with more rows (and therefore a scrollbar) doesn't change them.
         _exportButton.Enabled = _current is not null && _current.Totals.TotalTokens > 0;
     }
 
-    private void Fill(ListView list, IReadOnlyList<BreakdownRow>? rows, BreakdownRow? totals)
+    private void FillModels() => Fill(_modelList, _current?.ByModel, _current?.Totals, _modelSort);
+
+    private void FillProjects() => Fill(_projectList, _current?.ByProject, _current?.Totals, _projectSort);
+
+    private void Fill(ListView list, IReadOnlyList<BreakdownRow>? rows, BreakdownRow? totals, BreakdownSortState sort)
     {
         list.BeginUpdate();
         list.Items.Clear();
@@ -228,13 +257,15 @@ internal sealed class UsageBreakdownForm : Form
         }
         else
         {
-            foreach (var row in rows)
-                list.Items.Add(MakeItem(row, accent: false));
-            if (totals is not null)
-                list.Items.Add(MakeItem(totals, accent: true));
+            // ReferenceEquals rather than the row's position or value: BreakdownRow is a record,
+            // and a project whose totals happen to match the grand total would compare equal.
+            var ordered = BreakdownSort.Order(rows, totals, sort);
+            foreach (var row in ordered)
+                list.Items.Add(MakeItem(row, accent: ReferenceEquals(row, totals)));
         }
 
         list.EndUpdate();
+        ListViewSortIndicator.Apply(list, (int)sort.Column, sort.Ascending);
     }
 
     private ListViewItem MakeItem(BreakdownRow row, bool accent)
@@ -431,6 +462,12 @@ internal sealed class UsageBreakdownForm : Form
         // UpdateAvailableDialog.OnLoad), and MinClientSize measures off the laid-out header.
         Relayout();
         UpdateMinimumSize();
+
+        // The tables were filled in the constructor, before there was a header control to put the
+        // sort arrow on.
+        ListViewSortIndicator.Apply(_modelList, (int)_modelSort.Column, _modelSort.Ascending);
+        ListViewSortIndicator.Apply(_projectList, (int)_projectSort.Column, _projectSort.Ascending);
+
         DialogPlacement.CenterOnPrimary(this);
     }
 

@@ -6,6 +6,13 @@ GitHub release; the release notes are taken from these entries.
 ## [0.24.0] - 2026-07-29
 
 ### Added
+- **Sort the Usage & costs tables by clicking a column header** — click any header to sort by that
+  column and click it again to reverse, so you can finally ask "which project burns the most
+  cache-write tokens?" or read the list alphabetically instead of always by cost. The two tables
+  sort independently, an arrow marks the column each one is sorted by, and the sort sticks when you
+  switch timeframe. Sorting is on the real numbers behind the cells, so 1.2M correctly outranks
+  900K, and the Total row always stays at the bottom. Both tables still open in cost order, as
+  before. (#111)
 - **ClaudeMon now has its own app icon** — a clay tile with a white "C". It appears on the
   taskbar button and in Alt-Tab for every ClaudeMon window (update prompts, Settings, About,
   the usage breakdown), on the installer, on the Start-menu shortcut, and in Add/Remove

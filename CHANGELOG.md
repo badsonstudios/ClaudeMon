@@ -3,7 +3,7 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
-## [0.24.0] - 2026-07-29
+## [0.24.0] - 2026-08-04
 
 ### Added
 - **A cost-over-time chart in the Usage & costs window** — a new **Chart** tab plots what each day

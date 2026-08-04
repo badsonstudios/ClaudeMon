@@ -34,7 +34,14 @@ internal sealed class CostChart : Control
     private const string EmptyUnpriced = "cost unavailable — only unpriced models were used";
     private const string FloorNote = "Hatched days include unpriced models — their cost is a floor (≥).";
 
-    private const TextFormatFlags LabelFlags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine;
+    // static readonly, NOT const, and it has to stay that way. A const's type is written into
+    // metadata as a constant, and Cecil resolves that type when it rewrites the module — which
+    // coverlet does to the whole assembly during a coverage run. System.Windows.Forms isn't in the
+    // test project's output (it comes from the shared framework), so the resolve throws, coverlet
+    // gives up on ClaudeMon.dll entirely, and CI's coverage gate sees 0%. A type-exclusion filter
+    // cannot save it: the module is rewritten whether or not this type is instrumented.
+    private static readonly TextFormatFlags LabelFlags =
+        TextFormatFlags.NoPadding | TextFormatFlags.SingleLine;
 
     private LocalCostSeries? _series;
     private Font? _axisFont;

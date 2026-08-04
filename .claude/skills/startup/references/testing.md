@@ -53,6 +53,16 @@ were deliberately extracted out of the forms (`*Layout`, `*Metrics`, `*Placement
 Only add a class to the exclusion list if it genuinely needs a live desktop or a message loop.
 "It has no tests yet" is not a reason — that is precisely what the gate exists to notice.
 
+**Never declare a `const` whose type comes from WinForms** (`TextFormatFlags`, `AnchorStyles`,
+`Keys`, …) — use `static readonly` instead. A `const`'s type is baked into metadata as a constant,
+and Mono.Cecil resolves that type when coverlet rewrites the assembly. `System.Windows.Forms` isn't
+in the test project's output (it comes from the shared framework), so the resolve throws, coverlet
+abandons **the whole of `ClaudeMon.dll`**, and the gate reports **0% / 0%** — not a partial drop.
+The failure is silent apart from a warning buried in `--diag` output, and an exclusion filter
+cannot save you: the module is rewritten whether or not the offending type is instrumented.
+Found the hard way in #113; the diagnosis is `dotnet test --diag:log.txt` then
+`grep "Unable to instrument module" log.datacollector.*.txt`.
+
 ## Expectations
 
 - Test the testable layers — `Configuration`, `Monitoring`, `Services`, and pure UI helpers

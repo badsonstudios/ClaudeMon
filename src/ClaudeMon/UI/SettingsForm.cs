@@ -35,6 +35,7 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _nearCapNumeric;
     private readonly NumericUpDown _sevenDayWarningNumeric;
     private readonly ToggleSwitch _notifyOnResetToggle;
+    private readonly TextBox _pushTopicText;
     private readonly ToggleSwitch _dailyBudgetToggle;
     private readonly NumericUpDown _dailyCapNumeric;
     private readonly ToggleSwitch _weeklyBudgetToggle;
@@ -185,6 +186,12 @@ public sealed class SettingsForm : Form
         _nearCapNumeric = AddNumericRow("Critical alert near the limit at", 50, 100, indent: true, visible: AlertsOn);
         _sevenDayWarningNumeric = AddNumericRow("Weekly (7-day) warning at", 10, 100, indent: true, visible: AlertsOn);
         _notifyOnResetToggle = AddToggleRow("Notify when the limit resets", indent: true, visible: AlertsOn);
+        // Push notifications (ntfy.sh), in addition to the desktop balloon — see PushNotifier.
+        // Blank disables it; there's no default topic, since a topic is a de facto shared
+        // secret (anyone who knows an unauthenticated ntfy topic name can read it) and so has
+        // to be something the user picks, not something ClaudeMon invents on their behalf.
+        _pushTopicText = AddTextRow("Push notification topic (ntfy.sh)", indent: true, visible: AlertsOn,
+            placeholder: "blank = disabled");
         // Estimated-cost budgets (issue #74), computed from the local Claude Code
         // transcripts. Caps are dollars, two decimals; sub-rows collapse with
         // their toggle like the pace sensitivity row above.
@@ -290,6 +297,26 @@ public sealed class SettingsForm : Form
         _hspec.Add((lbl, indent ? Pad + 16 : Pad, 0, 0));
         _hspec.Add((combo, ControlLeft, ComboWidth, 0));
         return combo;
+    }
+
+    private TextBox AddTextRow(
+        string label, bool indent = false, Func<bool>? visible = null, string? placeholder = null)
+    {
+        var left = indent ? Pad + 16 : Pad;
+        var lbl = new Label
+        {
+            Text = label,
+            AutoEllipsis = true,
+            TextAlign = ContentAlignment.MiddleLeft,
+        };
+        var textBox = new TextBox { PlaceholderText = placeholder ?? string.Empty };
+        Controls.Add(lbl);
+        Controls.Add(textBox);
+        _hspec.Add((lbl, left, ControlLeft - left - 8, 24));
+        _hspec.Add((textBox, ControlLeft, ComboWidth, 0));
+
+        _rows.Add(new RowDef { Items = [(lbl, 2), (textBox, 2)], Height = 34, Tab = _currentTab, Visible = visible });
+        return textBox;
     }
 
     private NumericUpDown AddNumericRow(
@@ -550,6 +577,7 @@ public sealed class SettingsForm : Form
         _nearCapNumeric.Value = ClampToRange(_nearCapNumeric, settings.AlertThresholds.NearCapWarning);
         _sevenDayWarningNumeric.Value = ClampToRange(_sevenDayWarningNumeric, settings.AlertThresholds.SevenDayWarning);
         _notifyOnResetToggle.Checked = settings.Notifications.NotifyOnReset;
+        _pushTopicText.Text = settings.Notifications.PushTopic ?? string.Empty;
         _dailyBudgetToggle.Checked = settings.Budgets.DailyEnabled;
         _dailyCapNumeric.Value = ClampToRange(_dailyCapNumeric, settings.Budgets.DailyCapUsd);
         _weeklyBudgetToggle.Checked = settings.Budgets.WeeklyEnabled;
@@ -606,6 +634,7 @@ public sealed class SettingsForm : Form
             {
                 Enabled = _notificationsToggle.Checked,
                 NotifyOnReset = _notifyOnResetToggle.Checked,
+                PushTopic = string.IsNullOrWhiteSpace(_pushTopicText.Text) ? null : _pushTopicText.Text.Trim(),
             },
             Budgets = new BudgetSettings
             {

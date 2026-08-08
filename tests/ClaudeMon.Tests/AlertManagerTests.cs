@@ -832,4 +832,76 @@ public class AlertManagerTests : IDisposable
         Assert.Single(_notifications);
         Assert.Equal("Almost Out", _notifications[0].Title);
     }
+
+    // --- Latch persistence (restart shouldn't re-arm an alert that's still true) ---
+
+    [Fact]
+    public void GetLatchState_AfterNearCapFires_ReportsNearCapFired()
+    {
+        _alertManager.Check(FiveHour(95), DefaultSettings());
+
+        var state = _alertManager.GetLatchState();
+
+        Assert.True(state.NearCapFired);
+        // Near-cap also latches the pace flag, so climbing further doesn't also fire a
+        // redundant pace warning on the way up (see AlertManager.CheckFiveHourAlerts).
+        Assert.True(state.PaceWarningFired);
+    }
+
+    [Fact]
+    public void GetLatchState_AfterWeeklyCriticalFires_IncludesBucketKeyed()
+    {
+        _alertManager.Check(SevenDay(95), DefaultSettings());
+
+        var state = _alertManager.GetLatchState();
+
+        var bucket = Assert.Single(state.WeeklyBuckets);
+        Assert.True(bucket.Value.CriticalFired);
+    }
+
+    [Fact]
+    public void Construct_WithNearCapAlreadyLatched_DoesNotRefireOnFirstCheck()
+    {
+        // Simulates a restart while still over the near-cap: the condition is genuinely still
+        // true, but it was already alerted before the restart, so it must not fire again.
+        var seeded = new AlertLatchState(PaceWarningFired: true, NearCapFired: true, WeeklyBuckets: []);
+        var manager = new AlertManager(_notifyIcon, (title, text, icon) => _notifications.Add((title, text, icon)), seeded);
+
+        manager.Check(FiveHour(95), DefaultSettings());
+
+        Assert.Empty(_notifications);
+    }
+
+    [Fact]
+    public void Construct_WithWeeklyCriticalAlreadyLatched_DoesNotRefireOnFirstCheck()
+    {
+        var seeded = new AlertLatchState(
+            PaceWarningFired: false,
+            NearCapFired: false,
+            WeeklyBuckets: new Dictionary<string, WeeklyBucketLatch>(StringComparer.OrdinalIgnoreCase)
+            {
+                // "weekly_all" is LimitDisplay's internal key for the overall 7-day bucket —
+                // matching AlertManager's own dictionary key exactly, the same as GetLatchState
+                // round-trips it.
+                ["weekly_all"] = new WeeklyBucketLatch(WarningFired: true, CriticalFired: true),
+            });
+        var manager = new AlertManager(_notifyIcon, (title, text, icon) => _notifications.Add((title, text, icon)), seeded);
+
+        manager.Check(SevenDay(95), DefaultSettings());
+
+        Assert.Empty(_notifications);
+    }
+
+    [Fact]
+    public void Construct_WithNoLatchedState_StillFiresNormally()
+    {
+        // A null/default initial state (fresh install, or first run after upgrading from a
+        // version that didn't persist this) must behave exactly like today — no regression for
+        // the common case of "nothing was latched yet".
+        var manager = new AlertManager(_notifyIcon, (title, text, icon) => _notifications.Add((title, text, icon)), initialState: null);
+
+        manager.Check(FiveHour(95), DefaultSettings());
+
+        Assert.Single(_notifications);
+    }
 }

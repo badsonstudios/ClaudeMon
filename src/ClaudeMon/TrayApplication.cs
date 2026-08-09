@@ -20,6 +20,7 @@ public sealed class TrayApplication : IDisposable
     private readonly ContextMenuStrip _contextMenu;
     private readonly UsageMonitor _monitor;
     private readonly ClaudeApiClient _apiClient;
+    private readonly ServiceStatusClient _serviceStatusClient;
     private readonly TokenRefresher _tokenRefresher;
     private readonly Logger _logger;
     private readonly UsageHistoryStore _history;
@@ -98,11 +99,15 @@ public sealed class TrayApplication : IDisposable
 
         _apiClient = new ClaudeApiClient();
         _tokenRefresher = new TokenRefresher();
+        // Anthropic's status page (issue #132), fetched on the usage poll's cadence so there is
+        // no second timer and it pauses with the poll while the workstation is locked.
+        _serviceStatusClient = new ServiceStatusClient();
         var credentialReader = new CredentialReader();
         _monitor = new UsageMonitor(
             credentialReader, _apiClient, _configManager.Settings.PollInterval,
-            _tokenRefresher, _logger, _history);
+            _tokenRefresher, _logger, _history, _serviceStatusClient);
         _monitor.UsageUpdated += OnUsageUpdated;
+        _monitor.ServiceStatusUpdated += OnServiceStatusUpdated;
 
         _flyout = new FlyoutPanel(_logger);
         // The flyout's gear button opens Settings (the flyout hides itself when it loses focus).
@@ -273,6 +278,27 @@ public sealed class TrayApplication : IDisposable
         }, null);
     }
 
+    /// <summary>
+    /// The optional incident notification (off by default). The decision — including the
+    /// opt-in toggle, the master notifications switch, and the snooze — is pure
+    /// (<see cref="ServiceStatusAlerts"/>); this handler only marshals to the UI thread and
+    /// shows what comes back.
+    /// </summary>
+    private void OnServiceStatusUpdated(object? sender, ServiceStatusUpdatedEventArgs e)
+    {
+        if (_disposed) return;
+
+        _syncContext.Post(_ =>
+        {
+            if (_disposed) return;
+
+            var alert = ServiceStatusAlerts.Evaluate(
+                e.Previous, e.Current, _configManager.Settings.Notifications, DateTimeOffset.UtcNow);
+            if (alert is not null)
+                ShowAlert(alert.Title, alert.Text, alert.Icon);
+        }, null);
+    }
+
     private void OnTrayMouseClick(object? sender, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
@@ -317,7 +343,7 @@ public sealed class TrayApplication : IDisposable
 
         _flyout.UpdateData(
             _monitor.LastUsage, _monitor.Status, _monitor.LastUpdated, fiveHourTrend, timeToLimit,
-            _configManager.Settings.ColorMode, _localUsage.Snapshot());
+            _configManager.Settings.ColorMode, _localUsage.Snapshot(), _monitor.LastServiceStatus);
         _flyout.ShowNear(anchor);
     }
 
@@ -947,6 +973,7 @@ public sealed class TrayApplication : IDisposable
         _monitor.Dispose();
         _localUsage.Dispose();
         _apiClient.Dispose();
+        _serviceStatusClient.Dispose();
         _tokenRefresher.Dispose();
         _pushNotifier.Dispose();
         _notifyIcon.Visible = false;

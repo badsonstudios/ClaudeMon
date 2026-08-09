@@ -510,6 +510,181 @@ public class UsageMonitorTests : IDisposable
         Assert.Equal(21.0, monitor.LastUsage?.FiveHour?.UtilizationPct);
     }
 
+    // --- Anthropic service status, piggybacked on the usage poll (issue #132) ---
+
+    private const string UsageBody =
+        """{"five_hour": {"utilization": 9.0, "resets_at": "2026-06-01T00:00:00Z"}}""";
+
+    private static string StatusBody(string indicator, string description) =>
+        $$$"""{"page":{"id":"tymt9n04zgry"},"status":{"indicator":"{{{indicator}}}","description":"{{{description}}}"}}""";
+
+    [Fact]
+    public async Task RefreshNow_FetchesServiceStatus_AndRaisesEventOnChangeOnly()
+    {
+        var credPath = WriteCredentialFile();
+        var handler = new StatusRoutingHttpHandler(UsageBody, StatusBody("major", "Partial System Outage"));
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var statusClient = new ServiceStatusClient(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1),
+            tokenRefresher: null, logger: null, history: null, serviceStatus: statusClient);
+
+        var events = new List<ServiceStatusUpdatedEventArgs>();
+        monitor.ServiceStatusUpdated += (_, args) => events.Add(args);
+
+        await monitor.RefreshNowAsync();
+        await monitor.RefreshNowAsync(); // same status — must not re-announce
+
+        Assert.Equal(ServiceStatusLevel.Major, monitor.LastServiceStatus?.Level);
+        Assert.Equal("Partial System Outage", monitor.LastServiceStatus?.Description);
+        var evt = Assert.Single(events);
+        Assert.Null(evt.Previous);
+        Assert.Equal(ServiceStatusLevel.Major, evt.Current.Level);
+        // No second timer: the status came along on the usage poll's own cadence.
+        Assert.Equal(2, handler.StatusCallCount);
+    }
+
+    [Fact]
+    public async Task RefreshNow_ServiceStatusChanges_CarriesThePreviousStatus()
+    {
+        var credPath = WriteCredentialFile();
+        var handler = new StatusRoutingHttpHandler(UsageBody, StatusBody("none", "All Systems Operational"));
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var statusClient = new ServiceStatusClient(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1),
+            tokenRefresher: null, logger: null, history: null, serviceStatus: statusClient);
+
+        ServiceStatusUpdatedEventArgs? last = null;
+        monitor.ServiceStatusUpdated += (_, args) => last = args;
+
+        await monitor.RefreshNowAsync();
+        handler.SetStatusBody(StatusBody("critical", "Major Service Outage"));
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(ServiceStatusLevel.Operational, last?.Previous?.Level);
+        Assert.Equal(ServiceStatusLevel.Critical, last?.Current.Level);
+    }
+
+    [Fact]
+    public async Task RefreshNow_ServiceStatusFetchFails_KeepsLastKnownAndStaysSilent()
+    {
+        var credPath = WriteCredentialFile();
+        var handler = new StatusRoutingHttpHandler(UsageBody, StatusBody("minor", "Partially Degraded Service"));
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var statusClient = new ServiceStatusClient(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1),
+            tokenRefresher: null, logger: null, history: null, serviceStatus: statusClient);
+
+        var eventCount = 0;
+        monitor.ServiceStatusUpdated += (_, _) => eventCount++;
+
+        await monitor.RefreshNowAsync();
+        handler.StatusStatusCode = HttpStatusCode.InternalServerError;
+        await monitor.RefreshNowAsync();
+
+        // The status page being unreachable is not itself an alert, and it must not flap the
+        // flyout line off — the usage poll still succeeded.
+        Assert.Equal(ServiceStatusLevel.Minor, monitor.LastServiceStatus?.Level);
+        Assert.Equal(1, eventCount);
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+        Assert.Null(monitor.LastError);
+    }
+
+    [Fact]
+    public async Task RefreshNow_MissingCredentials_StillFetchesServiceStatus()
+    {
+        // "Is it me or is it down?" matters most on a poll that can't reach the usage API.
+        var credPath = Path.Combine(_tempDir, "nonexistent.json");
+        var handler = new StatusRoutingHttpHandler(UsageBody, StatusBody("major", "Partial System Outage"));
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var statusClient = new ServiceStatusClient(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1),
+            tokenRefresher: null, logger: null, history: null, serviceStatus: statusClient);
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.AuthError, monitor.Status);
+        Assert.Equal(ServiceStatusLevel.Major, monitor.LastServiceStatus?.Level);
+    }
+
+    [Fact]
+    public async Task RefreshNow_NoServiceStatusClient_LeavesStatusUnknown()
+    {
+        var credPath = WriteCredentialFile();
+        using var apiClient = new ClaudeApiClient(
+            new HttpClient(new MockHttpHandler(HttpStatusCode.OK, UsageBody)));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1));
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Null(monitor.LastServiceStatus);
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+    }
+
+    [Fact]
+    public async Task RefreshNow_ServiceStatusChange_IsLoggedOncePerChange()
+    {
+        var credPath = WriteCredentialFile();
+        var logger = new Logger(Path.Combine(_tempDir, "status-logs"));
+        var handler = new StatusRoutingHttpHandler(UsageBody, StatusBody("major", "Partial System Outage"));
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var statusClient = new ServiceStatusClient(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1),
+            tokenRefresher: null, logger: logger, history: null, serviceStatus: statusClient);
+
+        await monitor.RefreshNowAsync();
+        await monitor.RefreshNowAsync();
+
+        var lines = File.ReadAllLines(logger.FilePath)
+            .Count(l => l.Contains("Anthropic service status"));
+        Assert.Equal(1, lines);
+    }
+
+    /// <summary>
+    /// Routes by host: the status page (status.claude.com) returns a configurable statuspage
+    /// body, everything else returns usage JSON.
+    /// </summary>
+    private sealed class StatusRoutingHttpHandler : HttpMessageHandler
+    {
+        private readonly string _usageBody;
+        private string _statusBody;
+        private int _statusCallCount;
+
+        public HttpStatusCode StatusStatusCode { get; set; } = HttpStatusCode.OK;
+        public int StatusCallCount => Volatile.Read(ref _statusCallCount);
+
+        public StatusRoutingHttpHandler(string usageBody, string statusBody)
+        {
+            _usageBody = usageBody;
+            _statusBody = statusBody;
+        }
+
+        public void SetStatusBody(string statusBody) => _statusBody = statusBody;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.Host.Contains("status."))
+            {
+                Interlocked.Increment(ref _statusCallCount);
+                return Task.FromResult(new HttpResponseMessage(StatusStatusCode)
+                {
+                    Content = new StringContent(_statusBody),
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_usageBody),
+            });
+        }
+    }
+
     private sealed class MockHttpHandler : HttpMessageHandler
     {
         private HttpStatusCode _statusCode;

@@ -10,7 +10,8 @@ using ClaudeMon.Models;
 /// below the tab content. Rows are tracked in <see cref="_rows"/> tagged with their tab and an
 /// optional visibility predicate — sub-options <em>collapse</em> when their parent toggle is off —
 /// and <see cref="Relayout"/> positions the active tab's visible rows and sizes the window to
-/// them (so the dialog height follows the current tab). The app-wide dark mode
+/// them (so the dialog height follows the current tab), within whatever height the monitor's
+/// working area allows — see <see cref="SettingsFormLayout"/>. The app-wide dark mode
 /// (<c>Application.SetColorMode</c> in Program.cs) themes the standard controls; this form only
 /// adds the accents and the custom <see cref="ToggleSwitch"/>/<see cref="TabStrip"/> controls.
 /// </summary>
@@ -70,6 +71,9 @@ public sealed class SettingsForm : Form
     private const int NumericWidth = 64;
     private const int ToggleWidth = 40;
     private const int TabContentGap = 12; // between the tab strip's baseline and the first row
+    // Floor for the height clamp when the monitor's working area is too small to hold even the
+    // window chrome; see SettingsFormLayout.ClampClientHeight.
+    private const int MinClientHeight = 200;
 
     // Light or dark accents/controls, matching the Windows app theme.
     private readonly Theme _theme = Theme.Current;
@@ -303,6 +307,7 @@ public sealed class SettingsForm : Form
         _rows.Add(new RowDef { Items = [(lbl, 6), (combo, 3)], Height = 34, Tab = _currentTab, Visible = visible });
         _hspec.Add((lbl, indent ? Pad + 16 : Pad, 0, 0));
         _hspec.Add((combo, ControlLeft, ComboWidth, 0));
+        ScrollDialogInsteadOfEditing(combo);
         return combo;
     }
 
@@ -363,8 +368,24 @@ public sealed class SettingsForm : Form
         }
 
         _rows.Add(new RowDef { Items = items.ToArray(), Height = 34, Tab = _currentTab, Visible = visible });
+        ScrollDialogInsteadOfEditing(numeric);
         return numeric;
     }
+
+    // Windows delivers the wheel to the focused control, so once the dialog scrolls (#139) a wheel
+    // gesture aimed at the window would instead silently change whichever dropdown or spinner was
+    // last clicked — and OK would save it. While the dialog scrolls, take the wheel away from the
+    // control and scroll the window with it; a dialog that fits the monitor never sees this at all,
+    // so the wheel keeps adjusting the focused control exactly as it always has.
+    private void ScrollDialogInsteadOfEditing(Control control) =>
+        control.MouseWheel += (_, e) =>
+        {
+            if (!AutoScroll || e is not HandledMouseEventArgs handled)
+                return;
+
+            handled.Handled = true;
+            OnMouseWheel(e);
+        };
 
     private Button MakeButton(string text, DialogResult result)
     {
@@ -386,8 +407,17 @@ public sealed class SettingsForm : Form
     // window to fit (so both collapsing a sub-option and switching tabs resize the dialog).
     // Every metric is scaled from its logical (96-DPI) value by the current monitor DPI (Sc),
     // since AutoScaleMode.None means we own all scaling.
-    private void Relayout()
+    private void Relayout(bool preserveScroll = true)
     {
+        // Every top below is an unscrolled coordinate, so scroll back to the origin before writing
+        // them — otherwise WinForms offsets each control we position by the current scroll amount
+        // and the rows drift up the window (#139). Where the row the user is looking at survives
+        // the relayout (a sub-option expanding, not a tab switch) the offset is restored at the
+        // end, so ticking a toggle at the bottom of a scrolled tab doesn't jump them to the top.
+        var scrolledTo = AutoScroll && preserveScroll ? -AutoScrollPosition.Y : 0;
+        if (AutoScroll)
+            AutoScrollPosition = Point.Empty;
+
         // Horizontal placement + control sizes (scaled from the logical spec captured at build time).
         foreach (var (control, left, width, height) in _hspec)
         {
@@ -418,7 +448,61 @@ public sealed class SettingsForm : Form
         y += Sc(14);
         _okButton.Top = y;
         _cancelButton.Top = y;
-        ClientSize = new Size(Sc(480), y + _okButton.Height + Sc(Pad));
+
+        // The height the content wants — which the monitor may not have room for. Clamping it, and
+        // then sliding the window back up under the bottom of the working area, is what keeps the
+        // OK/Cancel row on screen on a short display or at a large scale factor; the overflow
+        // becomes a scrollbar instead of falling off the bottom (#139). Both halves matter: the
+        // window grows downwards from the top it was centered at for the tab it opened on, so a
+        // taller tab can run off the bottom long before it is too tall for the monitor at all.
+        var area = CurrentWorkingArea();
+        var contentHeight = y + _okButton.Height + Sc(Pad);
+        var (clientHeight, scroll) = SettingsFormLayout.ClampClientHeight(
+            contentHeight, area.Height, Height - ClientSize.Height, Sc(MinClientHeight));
+
+        // Setting a non-empty AutoScrollMinSize turns AutoScroll on by itself; the assignment
+        // after it is what turns it back off once a shorter tab fits again. AdjustWindowRectEx
+        // ignores WS_VSCROLL, so the scrollbar comes out of the client width rather than widening
+        // the window, and it fits in the right margin — but only just: the rows end at 456 logical
+        // and carry a 3px unscaled Margin, against a client width of 480 less a ~17px scrollbar.
+        // That is ~4px of slack, so don't grow ContentRight without re-checking it, or a spurious
+        // horizontal scrollbar appears (and inflates the chrome measured above by ~17px).
+        AutoScrollMinSize = scroll ? new Size(0, contentHeight) : Size.Empty;
+        AutoScroll = scroll;
+        ClientSize = new Size(Sc(480), clientHeight);
+
+        // Only once the window exists — before that, Top is meaningless and OnLoad's
+        // CenterOnPrimary does the opening placement anyway.
+        if (IsHandleCreated)
+            Top = SettingsFormLayout.ClampTop(Top, Height, area.Top, area.Bottom);
+
+        // Last word on the scroll offset: hiding the focused control (which is what switching tabs
+        // does) makes WinForms scroll whatever gains focus into view, so the reset at the top of
+        // this method is not enough on its own. WinForms clamps the value to the new range.
+        if (scroll)
+            AutoScrollPosition = new Point(0, scrolledTo);
+    }
+
+    /// <summary>
+    /// The working area both clamps measure against: the monitor the dialog is on once it has a
+    /// window, the primary monitor's before that. Those agree for the first layout — the
+    /// dialog is centered on the primary in <see cref="OnLoad"/> (#88) and an as-yet-unplaced form
+    /// sits at the origin, which is on the primary by definition — so the pass that runs before
+    /// the window is shown already clamps against the monitor the user will see it on.
+    /// </summary>
+    private Rectangle CurrentWorkingArea()
+    {
+        try
+        {
+            if (IsHandleCreated)
+                return Screen.FromControl(this).WorkingArea;
+        }
+        catch
+        {
+            // Monitor enumeration can fail in odd session states; fall through to the primary.
+        }
+
+        return DialogPlacement.PrimaryWorkingArea();
     }
 
     protected override void OnLoad(EventArgs e)
@@ -450,8 +534,9 @@ public sealed class SettingsForm : Form
 
     private void WireEvents()
     {
-        // Switching tabs swaps which rows are visible (and re-fits the window height).
-        _tabStrip.SelectedIndexChanged += (_, _) => RelayoutLive();
+        // Switching tabs swaps which rows are visible (and re-fits the window height). A new tab
+        // starts at its top, unlike the sub-option toggles below, which keep their scroll offset.
+        _tabStrip.SelectedIndexChanged += (_, _) => RelayoutLive(preserveScroll: false);
 
         // Collapse/expand on the gating toggles; some also live-preview the taskbar appearance.
         _notificationsToggle.CheckedChanged += (_, _) => RelayoutLive();
@@ -491,10 +576,10 @@ public sealed class SettingsForm : Form
         _secondaryOffsetNumeric.ValueChanged += (_, _) => PreviewOffsets();
     }
 
-    private void RelayoutLive()
+    private void RelayoutLive(bool preserveScroll = true)
     {
         if (!_loading)
-            Relayout();
+            Relayout(preserveScroll);
     }
 
     private void Preview(Action apply)

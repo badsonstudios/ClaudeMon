@@ -3,6 +3,7 @@ namespace ClaudeMon.UI;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Text;
 using ClaudeMon.Models;
 using ClaudeMon.Services;
 
@@ -485,6 +486,17 @@ public sealed class TaskbarOverlayWindow : Form
             return;
         }
 
+        // A fullscreen app covering this monitor hides the taskbar beneath it — the readout
+        // must follow the taskbar down rather than float over games or fullscreen RDP
+        // sessions (issue #123). Running on the keep-alive tick means the readout returns
+        // within 500 ms of the app closing or losing foreground, mirroring the shell's own
+        // "rude app" taskbar behaviour (alt-tab out of a borderless game and both come back).
+        if (FullscreenCoversTaskbar(rect))
+        {
+            if (Visible) Hide();
+            return;
+        }
+
         // Left edge of the notification area (clock/tray). The primary taskbar exposes a
         // TrayNotifyWnd we can anchor exactly to; secondary taskbars don't (their clock is a
         // windowless XAML surface), so there we reserve estimated clock space at the right.
@@ -566,6 +578,30 @@ public sealed class TaskbarOverlayWindow : Form
         {
             Redraw();
         }
+    }
+
+    /// <summary>
+    /// Gathers the live facts — foreground window bounds, class, and ownership — and asks
+    /// <see cref="TaskbarOverlayFullscreen.ShouldHide"/> whether the foreground window is
+    /// burying this overlay's taskbar. The rules live in that pure class; this method only
+    /// does the Win32 reads, and any failed read fails toward visible.
+    /// </summary>
+    private static bool FullscreenCoversTaskbar(RECT taskbarRect)
+    {
+        var foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero || !GetWindowRect(foreground, out var fg))
+            return false;
+
+        var className = new StringBuilder(128);
+        if (GetClassName(foreground, className, className.Capacity) == 0)
+            return false;
+        _ = GetWindowThreadProcessId(foreground, out var pid);
+
+        return TaskbarOverlayFullscreen.ShouldHide(
+            Rectangle.FromLTRB(fg.Left, fg.Top, fg.Right, fg.Bottom),
+            className.ToString(),
+            ownProcess: pid == (uint)Environment.ProcessId,
+            Rectangle.FromLTRB(taskbarRect.Left, taskbarRect.Top, taskbarRect.Right, taskbarRect.Bottom));
     }
 
     /// <summary>Renders the readout to a 32bpp ARGB bitmap and pushes it via UpdateLayeredWindow.</summary>
@@ -751,6 +787,15 @@ public sealed class TaskbarOverlayWindow : Form
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder buffer, int maxCount);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

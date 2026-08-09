@@ -707,6 +707,17 @@ public sealed class SettingsForm : Form
 
     private void OnOkClicked(object? sender, EventArgs e)
     {
+        _configManager.Update(BuildSettings());
+        ConfigManager.SetRunAtStartup(_runAtStartupToggle.Checked);
+    }
+
+    /// <summary>
+    /// The settings the dialog's controls describe, layered onto the saved settings with
+    /// <c>with</c> so everything the dialog doesn't edit survives the save. Separate from
+    /// <see cref="OnOkClicked"/> so that layering is testable without OK's registry write.
+    /// </summary>
+    internal AppSettings BuildSettings()
+    {
         var pollMinutes = _pollIntervalCombo.SelectedIndex switch
         {
             0 => 2,
@@ -716,7 +727,7 @@ public sealed class SettingsForm : Form
             _ => 5,
         };
 
-        var newSettings = _configManager.Settings with
+        return _configManager.Settings with
         {
             PollIntervalMinutes = pollMinutes,
             AlertThresholds = new AlertThresholds
@@ -742,7 +753,10 @@ public sealed class SettingsForm : Form
                 WeeklyEnabled = _weeklyBudgetToggle.Checked,
                 WeeklyCapUsd = (double)_weeklyCapNumeric.Value,
             },
-            TaskbarDisplay = new TaskbarDisplaySettings
+            // `with` on the existing record, not `new` — for the same reason as Notifications
+            // above: a reconstruction silently resets every field the dialog doesn't edit
+            // (today the migration-only LegacyShowSevenDay) on every settings save.
+            TaskbarDisplay = _configManager.Settings.TaskbarDisplay with
             {
                 Enabled = _taskbarToggle.Checked,
                 Style = SelectedOption(_styleCombo, StyleOptions),
@@ -762,8 +776,5 @@ public sealed class SettingsForm : Form
             CheckForUpdates = _checkForUpdatesToggle.Checked,
             AutoInstallUpdates = _autoInstallUpdatesToggle.Checked,
         };
-
-        _configManager.Update(newSettings);
-        ConfigManager.SetRunAtStartup(_runAtStartupToggle.Checked);
     }
 }

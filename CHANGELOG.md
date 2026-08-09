@@ -49,6 +49,10 @@ GitHub release; the release notes are taken from these entries.
   is scrolling, the mouse wheel scrolls the dialog instead of quietly changing whichever
   dropdown or spinner you last clicked. On a screen where it already fitted, nothing
   changes. (#139)
+- **Saving Settings no longer resets taskbar options the dialog doesn't show** — OK rebuilt the
+  taskbar display settings from the controls alone, so anything stored there without a control of
+  its own was quietly dropped on every save. It is now layered onto your saved settings, the way
+  the notification settings already were. (#143)
 
 ## [0.25.0] - 2026-08-09
 

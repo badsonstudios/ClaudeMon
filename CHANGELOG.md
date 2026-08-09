@@ -73,6 +73,11 @@ GitHub release; the release notes are taken from these entries.
   taskbar display settings from the controls alone, so anything stored there without a control of
   its own was quietly dropped on every save. It is now layered onto your saved settings, the way
   the notification settings already were. (#143)
+- **Settings that fail to load or save now say so in the log.** Those paths are deliberately
+  best-effort — a corrupt config quietly becomes defaults, an unwritable one is retried on the
+  next save — but they left no trace at all, so "my settings didn't stick" was undiagnosable.
+  Both now record the reason and the file involved in the daily log (**View logs** in the tray
+  menu). The behaviour itself is unchanged, and a successful save still logs nothing. (#148)
 
 ## [0.25.0] - 2026-08-09
 

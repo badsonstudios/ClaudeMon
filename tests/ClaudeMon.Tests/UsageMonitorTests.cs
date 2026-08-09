@@ -596,6 +596,142 @@ public class UsageMonitorTests : IDisposable
         }
     }
 
+    // --- Fire-and-forget and notification error paths (issue #103) ---
+
+    [Fact]
+    public async Task Start_PollThrowsUnexpectedly_IsSwallowedAndLogged()
+    {
+        // PollAsync runs unawaited from the timer and from Start/Resume. Anything it doesn't
+        // swallow itself would escape as an unobserved task exception and tear the app down,
+        // so SafePollAsync is the last line of defence — and it must leave a breadcrumb.
+        var credPath = WriteCredentialFile();
+        var logger = new Logger(Path.Combine(_tempDir, "safepoll-logs"));
+        var handler = new ThrowingHttpHandler(new InvalidOperationException("handler exploded"));
+
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), tokenRefresher: null, logger: logger);
+
+        monitor.Start();
+
+        var log = await WaitForLogAsync(logger, "Usage poll failed");
+        Assert.Contains("Usage poll failed", log);
+        Assert.Contains("handler exploded", log);
+    }
+
+    [Fact]
+    public async Task UpdateInterval_TakesEffectOnTheRunningTimer()
+    {
+        var credPath = WriteCredentialFile();
+        var handler = new CountingHttpHandler(
+            """{"five_hour":{"utilization":1.0,"resets_at":"2026-06-01T00:00:00Z"}}""");
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1));
+
+        monitor.Start(); // one immediate poll, then nothing for an hour
+        monitor.UpdateInterval(TimeSpan.FromMilliseconds(50));
+
+        var deadline = Environment.TickCount64 + 10_000;
+        while (handler.CallCount < 3 && Environment.TickCount64 < deadline)
+            await Task.Delay(25);
+
+        // Stop before asserting: a 50 ms poll loop still draining into teardown would hold the
+        // credentials file open while the fixture deletes the temp tree.
+        monitor.Stop();
+        await Task.Delay(100); // let the last in-flight poll drain
+
+        Assert.True(handler.CallCount >= 3, $"only {handler.CallCount} polls at the new interval");
+    }
+
+    [Fact]
+    public async Task RefreshNow_CredentialsUnreadable_NotifiesSubscribersAndLogsAnError()
+    {
+        // SetError has to reach the UI as well as the log: the tray icon can't be left showing
+        // stale-but-green while the app is actually signed out.
+        var logger = new Logger(Path.Combine(_tempDir, "autherror-logs"));
+        var handler = new MockHttpHandler(HttpStatusCode.OK, "{}");
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(Path.Combine(_tempDir, "no-such-credentials.json")),
+            apiClient, TimeSpan.FromHours(1), tokenRefresher: null, logger: logger);
+
+        UsageUpdatedEventArgs? received = null;
+        monitor.UsageUpdated += (_, args) => received = args;
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.AuthError, monitor.Status);
+        Assert.NotNull(received);
+        Assert.Equal(MonitorStatus.AuthError, received.Status);
+        Assert.NotNull(received.Error);
+        // Auth problems are logged at ERROR, not WARN — they need the user to do something.
+        Assert.Contains("[ERROR]", File.ReadAllText(logger.FilePath));
+    }
+
+    [Fact]
+    public async Task RefreshNow_TokenEndpointErrors_NotifiesSubscribersWithOffline()
+    {
+        // A refresh the server can't complete is "offline", not "signed out": only a 400/401
+        // means the refresh token is dead. Anything else must keep the last known state rather
+        // than telling the user to re-authenticate over a flaky connection.
+        var credPath = WriteExpiredCredentialFile();
+        var handler = new MockHttpHandler(HttpStatusCode.InternalServerError, "{}");
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher);
+
+        UsageUpdatedEventArgs? received = null;
+        monitor.UsageUpdated += (_, args) => received = args;
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.Offline, monitor.Status);
+        Assert.NotNull(received);
+        Assert.Equal(MonitorStatus.Offline, received.Status);
+        Assert.Contains("retry", received.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<string> WaitForLogAsync(Logger logger, string expected)
+    {
+        var deadline = Environment.TickCount64 + 10_000;
+        while (Environment.TickCount64 < deadline)
+        {
+            var text = ReadSharing(logger.FilePath);
+            if (text.Contains(expected, StringComparison.Ordinal))
+                return text;
+
+            await Task.Delay(25);
+        }
+
+        return ReadSharing(logger.FilePath);
+    }
+
+    /// <summary>
+    /// Reads with FileShare.ReadWrite. File.ReadAllText would deny the writer, and Logger drops
+    /// any line it can't append — so a polling reader could silently destroy the very entry it
+    /// is waiting for.
+    /// </summary>
+    private static string ReadSharing(string path)
+    {
+        if (!File.Exists(path))
+            return "";
+
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    /// <summary>Fails the way a transport fault the client doesn't classify would.</summary>
+    private sealed class ThrowingHttpHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromException<HttpResponseMessage>(exception);
+    }
+
     private sealed class CountingHttpHandler : HttpMessageHandler
     {
         private readonly string _responseBody;

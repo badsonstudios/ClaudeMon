@@ -358,6 +358,14 @@ public record NotificationSettings
     public bool NotifyOnReset { get; init; }
 
     /// <summary>
+    /// Notify when Anthropic's status page starts reporting an incident (and again if it gets
+    /// worse). Off by default: the flyout already shows the state passively, and an outage
+    /// balloon is only useful to people who want to be interrupted by one.
+    /// </summary>
+    [JsonPropertyName("notifyOnServiceIncident")]
+    public bool NotifyOnServiceIncident { get; init; }
+
+    /// <summary>
     /// Alerts are suppressed until this instant (issue #14). Null or in the past means not
     /// snoozed — expired values are simply ignored, so nothing needs to clean them up.
     /// Persisted so a snooze survives an app restart.

@@ -13,6 +13,7 @@ public sealed class UsageMonitor : IDisposable
     private readonly TokenRefresher? _tokenRefresher;
     private readonly Logger? _logger;
     private readonly UsageHistoryStore? _history;
+    private readonly ServiceStatusClient? _serviceStatus;
     private readonly System.Timers.Timer _timer;
     private readonly object _lock = new();
     private bool _polling;
@@ -25,7 +26,17 @@ public sealed class UsageMonitor : IDisposable
     public DateTimeOffset? LastUpdated { get; private set; }
     public MonitorStatus Status { get; private set; } = MonitorStatus.Initializing;
 
+    /// <summary>
+    /// The last known Anthropic service status, or null while none has been fetched. A failed
+    /// fetch leaves the previous value in place (like <see cref="LastUsage"/> on a failed poll)
+    /// rather than flapping the flyout line off and on.
+    /// </summary>
+    public ServiceStatus? LastServiceStatus { get; private set; }
+
     public event EventHandler<UsageUpdatedEventArgs>? UsageUpdated;
+
+    /// <summary>Raised only when the service status actually changes, never on an unchanged poll.</summary>
+    public event EventHandler<ServiceStatusUpdatedEventArgs>? ServiceStatusUpdated;
 
     public UsageMonitor(
         CredentialReader credentialReader,
@@ -33,13 +44,15 @@ public sealed class UsageMonitor : IDisposable
         TimeSpan pollInterval,
         TokenRefresher? tokenRefresher = null,
         Logger? logger = null,
-        UsageHistoryStore? history = null)
+        UsageHistoryStore? history = null,
+        ServiceStatusClient? serviceStatus = null)
     {
         _credentialReader = credentialReader;
         _apiClient = apiClient;
         _tokenRefresher = tokenRefresher;
         _logger = logger;
         _history = history;
+        _serviceStatus = serviceStatus;
         _timer = new System.Timers.Timer(pollInterval.TotalMilliseconds);
         // The poll runs unawaited on a timer thread-pool thread: any exception PollAsync
         // doesn't swallow would otherwise escape unobserved and tear the whole app down.
@@ -117,8 +130,22 @@ public sealed class UsageMonitor : IDisposable
             _polling = true;
         }
 
+        // The service-status fetch, once started (see below). Declared out here so the finally
+        // can join it whichever way the usage path exits.
+        Task? statusTask = null;
+
         try
         {
+            var token = _cts?.Token ?? CancellationToken.None;
+
+            // Started alongside the usage work rather than in front of it: a slow status page
+            // must never be what makes a poll (or "Refresh Now", or the unlock refresh) feel
+            // slow — least of all during an outage, when it's most likely to be slow. Because
+            // it's kicked off before the credential read, it still runs on polls that never
+            // reach the usage API at all — which is exactly when the user asks whether it's
+            // them or Anthropic. Joined in the finally below, so every early return observes it.
+            statusTask = PollServiceStatusAsync(token);
+
             var credResult = _credentialReader.Read();
             if (!credResult.IsSuccess)
             {
@@ -126,7 +153,6 @@ public sealed class UsageMonitor : IDisposable
                 return;
             }
 
-            var token = _cts?.Token ?? CancellationToken.None;
             var credential = credResult.Credential!;
             var canRefresh = _tokenRefresher is not null && credential.HasRefreshToken;
             var refreshedThisPoll = false;
@@ -230,8 +256,68 @@ public sealed class UsageMonitor : IDisposable
         }
         finally
         {
+            // PollServiceStatusAsync never throws, so this can't mask the usage path's outcome
+            // — it only makes sure the fetch is observed and finished before the poll is
+            // considered done (which also stops two status fetches ever overlapping).
+            if (statusTask is not null)
+                await statusTask;
+
             lock (_lock) { _polling = false; }
         }
+    }
+
+    /// <summary>
+    /// Fetches the Anthropic service status, piggybacking the usage poll: no second timer, and
+    /// it pauses with the poll timer while the workstation is locked. Failures are silent and
+    /// leave the last known status alone — the status page being unreachable is not an alert.
+    /// </summary>
+    /// <remarks>
+    /// Never throws. A secondary signal must not be able to break the primary one: this runs
+    /// concurrently with the usage poll and is awaited in its finally, so anything escaping here
+    /// — including the shutdown race where the client is disposed mid-fetch — would surface as a
+    /// lost usage update (or, on the RefreshNowAsync path, an unhandled UI-thread exception).
+    /// </remarks>
+    private async Task PollServiceStatusAsync(CancellationToken token)
+    {
+        if (_serviceStatus is null)
+            return;
+
+        try
+        {
+            var status = await _serviceStatus.GetStatusAsync(token);
+            if (status is null)
+                return;
+
+            var previous = LastServiceStatus;
+            LastServiceStatus = status;
+
+            if (previous == status)
+                return;
+
+            LogServiceStatus(status);
+            ServiceStatusUpdated?.Invoke(this, new ServiceStatusUpdatedEventArgs(previous, status));
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutdown requested — nothing to report.
+        }
+        catch (Exception ex)
+        {
+            _logger?.Warn($"Service status check failed: {ex.Message}");
+        }
+    }
+
+    // One line per actual change, so a multi-hour incident doesn't fill the log.
+    private void LogServiceStatus(ServiceStatus status)
+    {
+        if (_logger is null)
+            return;
+
+        var entry = $"Anthropic service status -> {status.Level}: {status.Description}";
+        if (status.IsOperational)
+            _logger.Info(entry);
+        else
+            _logger.Warn(entry);
     }
 
     /// <summary>
@@ -371,4 +457,14 @@ public record UsageUpdatedEventArgs(
     UsageResponse? Usage,
     string? Error,
     MonitorStatus Status
+);
+
+/// <summary>
+/// A change in the Anthropic service status. <paramref name="Previous"/> is null the first time
+/// a status is read (nothing was known before), which counts as an incident start if the new
+/// status isn't operational.
+/// </summary>
+public record ServiceStatusUpdatedEventArgs(
+    ServiceStatus? Previous,
+    ServiceStatus Current
 );

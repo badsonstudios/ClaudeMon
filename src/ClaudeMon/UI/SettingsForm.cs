@@ -35,6 +35,7 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _nearCapNumeric;
     private readonly NumericUpDown _sevenDayWarningNumeric;
     private readonly ToggleSwitch _notifyOnResetToggle;
+    private readonly ToggleSwitch _notifyOnServiceIncidentToggle;
     private readonly TextBox _pushTopicText;
     private readonly ToggleSwitch _dailyBudgetToggle;
     private readonly NumericUpDown _dailyCapNumeric;
@@ -186,6 +187,9 @@ public sealed class SettingsForm : Form
         _nearCapNumeric = AddNumericRow("Critical alert near the limit at", 50, 100, indent: true, visible: AlertsOn);
         _sevenDayWarningNumeric = AddNumericRow("Weekly (7-day) warning at", 10, 100, indent: true, visible: AlertsOn);
         _notifyOnResetToggle = AddToggleRow("Notify when the limit resets", indent: true, visible: AlertsOn);
+        // Off by default: the flyout already shows an incident passively (issue #132).
+        _notifyOnServiceIncidentToggle = AddToggleRow("Notify on Anthropic service incidents",
+            indent: true, visible: AlertsOn);
         // Push notifications (ntfy.sh), in addition to the desktop balloon — see PushNotifier.
         // Blank disables it; there's no default topic, since a topic is a de facto shared
         // secret (anyone who knows an unauthenticated ntfy topic name can read it) and so has
@@ -577,6 +581,7 @@ public sealed class SettingsForm : Form
         _nearCapNumeric.Value = ClampToRange(_nearCapNumeric, settings.AlertThresholds.NearCapWarning);
         _sevenDayWarningNumeric.Value = ClampToRange(_sevenDayWarningNumeric, settings.AlertThresholds.SevenDayWarning);
         _notifyOnResetToggle.Checked = settings.Notifications.NotifyOnReset;
+        _notifyOnServiceIncidentToggle.Checked = settings.Notifications.NotifyOnServiceIncident;
         _pushTopicText.Text = settings.Notifications.PushTopic ?? string.Empty;
         _dailyBudgetToggle.Checked = settings.Budgets.DailyEnabled;
         _dailyCapNumeric.Value = ClampToRange(_dailyCapNumeric, settings.Budgets.DailyCapUsd);
@@ -634,6 +639,7 @@ public sealed class SettingsForm : Form
             {
                 Enabled = _notificationsToggle.Checked,
                 NotifyOnReset = _notifyOnResetToggle.Checked,
+                NotifyOnServiceIncident = _notifyOnServiceIncidentToggle.Checked,
                 PushTopic = string.IsNullOrWhiteSpace(_pushTopicText.Text) ? null : _pushTopicText.Text.Trim(),
             },
             Budgets = new BudgetSettings

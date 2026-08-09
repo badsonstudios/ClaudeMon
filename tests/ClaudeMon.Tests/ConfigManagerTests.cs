@@ -54,6 +54,35 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void ServiceIncidentLevel_RoundTrips_AndIsAbsentByDefault()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        manager.Load();
+
+        // Nothing latched on a fresh (or upgraded) config — the first incident must alert.
+        Assert.Null(manager.Settings.ServiceIncidentLevel);
+
+        manager.Update(manager.Settings with { ServiceIncidentLevel = ServiceStatusLevel.Major });
+
+        // Written by name, so a hand-read config stays legible and reordering the enum can't
+        // silently reinterpret a saved latch.
+        Assert.Contains("\"Major\"", File.ReadAllText(path));
+
+        var reloaded = new ConfigManager(path);
+        reloaded.Load();
+
+        Assert.Equal(ServiceStatusLevel.Major, reloaded.Settings.ServiceIncidentLevel);
+
+        reloaded.Update(reloaded.Settings with { ServiceIncidentLevel = null });
+
+        var cleared = new ConfigManager(path);
+        cleared.Load();
+
+        Assert.Null(cleared.Settings.ServiceIncidentLevel);
+    }
+
+    [Fact]
     public void Load_NoConfigFile_CreatesDefaults()
     {
         var path = Path.Combine(_tempDir, "config.json");

@@ -18,12 +18,25 @@ public sealed class LocalUsageMonitor : IDisposable
 
     private readonly LocalUsageStore _store;
     private readonly Logger? _logger;
+    private readonly Action _scan;
     private readonly System.Timers.Timer _timer;
 
     public LocalUsageMonitor(LocalUsageStore store, Logger? logger = null)
+        : this(store, logger, scan: null)
+    {
+    }
+
+    /// <summary>
+    /// Test seam: replaces the scan step. <see cref="LocalUsageStore.ScanOnce"/> swallows its own
+    /// per-file IO failures by design, so there is no way to make a real store throw — and the
+    /// two-tier exception handling in <see cref="ScanSafely"/> is exactly the behaviour that has
+    /// to be verified. Production always takes the <c>null</c> path.
+    /// </summary>
+    internal LocalUsageMonitor(LocalUsageStore store, Logger? logger, Action? scan)
     {
         _store = store;
         _logger = logger;
+        _scan = scan ?? store.ScanOnce;
         _timer = new System.Timers.Timer(ScanInterval.TotalMilliseconds) { AutoReset = true };
         _timer.Elapsed += (_, _) => ScanSafely();
     }
@@ -64,11 +77,13 @@ public sealed class LocalUsageMonitor : IDisposable
     public LocalBudgetTotals? BudgetTotals() => _store.BudgetTotals();
 
     // Timer/Task.Run entry point: nothing may escape a fire-and-forget callback.
-    private void ScanSafely()
+    // Internal rather than private so tests can drive it synchronously instead of
+    // racing the timer and Task.Run.
+    internal void ScanSafely()
     {
         try
         {
-            _store.ScanOnce();
+            _scan();
         }
         catch (Exception ex)
         {

@@ -115,6 +115,22 @@ public record AppSettings
     [JsonPropertyName("alertLatchState")]
     public AlertLatchState? AlertLatchState { get; init; }
 
+    /// <summary>
+    /// The service-incident latch: the severity of the Anthropic incident ClaudeMon has already
+    /// accounted for (see <see cref="Monitoring.ServiceStatusAlerts"/>), or null while the status
+    /// page is healthy or nothing has been read yet. Persisted so restarting during a long
+    /// incident doesn't raise the same balloon again — in-memory only, an eight-hour maintenance
+    /// window cost one notification per restart (#138). Internal state, not a user setting —
+    /// kept top-level like <see cref="BudgetAlertState"/>, for the same reason: the Settings
+    /// dialog's <c>with</c>-expression save must not silently drop it. Stored by name; the
+    /// converter sits on the property rather than on <see cref="ServiceStatusLevel"/> because
+    /// the enum is the status page's vocabulary, not a settings type — this file is the only
+    /// place it is persisted.
+    /// </summary>
+    [JsonPropertyName("serviceIncidentLevel")]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public ServiceStatusLevel? ServiceIncidentLevel { get; init; }
+
     [JsonPropertyName("taskbarDisplay")]
     public TaskbarDisplaySettings TaskbarDisplay { get; init; } = new();
 

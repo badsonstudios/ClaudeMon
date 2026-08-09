@@ -239,6 +239,62 @@ public class LoggerTests : IDisposable
         Assert.Null(logger.LatestExistingFilePath);
     }
 
+    [Fact]
+    public void Write_RotationBlocked_TruncatesInsteadOfGrowingWithoutBound()
+    {
+        // The ".1" backup is locked (a tail/editor holding it open), so the rename fails. The
+        // per-file cap is a backstop against a runaway loop, so the fallback truncates instead.
+        const long cap = 2_000;
+        var logger = CreateLogger(maxBytes: cap);
+        logger.Info(new string('x', (int)cap)); // one oversized line puts the file over the cap
+
+        var backup = TodayPath + ".1";
+        File.WriteAllText(backup, "previous backup");
+        using (new FileStream(backup, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            logger.Info("after the blocked rotation");
+        }
+
+        Assert.Equal("previous backup", File.ReadAllText(backup)); // untouched
+        var current = File.ReadAllText(TodayPath);
+        Assert.Contains("after the blocked rotation", current);
+        Assert.DoesNotContain("xxxx", current); // the oversized line was truncated away
+    }
+
+    [Fact]
+    public void Write_RotationAndTruncationBothBlocked_StillDoesNotThrow()
+    {
+        const long cap = 2_000;
+        var logger = CreateLogger(maxBytes: cap);
+        logger.Info(new string('x', (int)cap));
+
+        var backup = TodayPath + ".1";
+        File.WriteAllText(backup, "previous backup");
+
+        // Both the rename target and the log file itself are locked: nothing can be done, and
+        // the line is dropped silently rather than taking the app down.
+        using var lockedBackup = new FileStream(backup, FileMode.Open, FileAccess.Read, FileShare.None);
+        using var lockedCurrent = new FileStream(TodayPath, FileMode.Open, FileAccess.Read, FileShare.None);
+
+        var ex = Record.Exception(() => logger.Info("dropped"));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void DefaultDirectory_IsUnderLocalAppData()
+    {
+        // Constructing only resolves the path; nothing is written until the first log line, so
+        // this does not touch the developer's real ClaudeMon log directory.
+        var logger = new Logger();
+
+        var expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ClaudeMon",
+            "logs");
+        Assert.Equal(expected, logger.DirectoryPath);
+    }
+
     private string CreateBackdatedFile(string name, int ageDays)
     {
         var path = Path.Combine(_dir, name);

@@ -20,6 +20,9 @@ public sealed class ConfigManager
 
     public AppSettings Settings { get; private set; } = new();
 
+    /// <summary>The file this manager reads and writes. Exposed for tests.</summary>
+    internal string ConfigPath => _configPath;
+
     public ConfigManager(string? configPath = null)
     {
         _configPath = configPath ?? GetDefaultConfigPath();

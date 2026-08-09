@@ -108,6 +108,60 @@ public class ClaudeApiClientTests : IDisposable
         Assert.Equal("my-secret-token", _handler.LastRequest.Headers.Authorization?.Parameter);
     }
 
+    // The usage endpoint is polled every few minutes for the life of the session; identify
+    // ourselves honestly so Anthropic can attribute (and if need be, contact) the traffic.
+    // Deliberately NOT "claude-code/…" — see the header audit in issue #136.
+    [Fact]
+    public async Task GetUsage_SendsClaudeMonUserAgent()
+    {
+        _handler.SetResponse(HttpStatusCode.OK, """{"five_hour":{"utilization":0,"resets_at":"2026-01-01T00:00:00Z"}}""");
+
+        await _client.GetUsageAsync("test-token");
+
+        var assemblyVersion = typeof(ClaudeApiClient).Assembly.GetName().Version;
+        Assert.NotNull(assemblyVersion);
+
+        var product = Assert.Single(_handler.LastRequest!.Headers.UserAgent);
+        Assert.Equal("ClaudeMon", product.Product?.Name);
+        // Pinned to the real assembly version, so a broken version lookup can't pass as "0.0.0".
+        Assert.Equal(ClaudeApiClient.FormatVersion(assemblyVersion), product.Product?.Version);
+        Assert.NotEqual("0.0.0", product.Product?.Version);
+    }
+
+    // OAuth bearer calls to the first-party API carry this beta header in Claude Code; the
+    // usage endpoint tolerates its absence today, so sending it is forward-insurance.
+    [Fact]
+    public async Task GetUsage_SendsOAuthBetaAndAcceptHeaders()
+    {
+        _handler.SetResponse(HttpStatusCode.OK, """{"five_hour":{"utilization":0,"resets_at":"2026-01-01T00:00:00Z"}}""");
+
+        await _client.GetUsageAsync("test-token");
+
+        Assert.True(_handler.LastRequest!.Headers.TryGetValues("anthropic-beta", out var beta));
+        Assert.Equal("oauth-2025-04-20", Assert.Single(beta));
+        Assert.Contains(
+            _handler.LastRequest.Headers.Accept,
+            h => h.MediaType == "application/json");
+    }
+
+    [Theory]
+    [InlineData(0, 26, 0, 0, "0.26.0")]
+    [InlineData(1, 2, 3, 4, "1.2.3")]
+    public void FormatVersion_DropsTheFourthComponent(
+        int major, int minor, int build, int revision, string expected)
+    {
+        Assert.Equal(expected, ClaudeApiClient.FormatVersion(new Version(major, minor, build, revision)));
+    }
+
+    // A missing or 2-part version must still yield a valid product token, never "ClaudeMon/-1"
+    // (Version.Build is -1 when unspecified), which would throw when added to the header.
+    [Fact]
+    public void FormatVersion_MissingOrPartialVersion_StillWellFormed()
+    {
+        Assert.Equal("0.0.0", ClaudeApiClient.FormatVersion(null));
+        Assert.Equal("1.2.0", ClaudeApiClient.FormatVersion(new Version(1, 2)));
+    }
+
     [Fact]
     public void UsageBucket_FormatResetCountdown_Hours()
     {
@@ -169,10 +223,90 @@ public class ClaudeApiClientTests : IDisposable
         Assert.InRange(fraction.Value, 0.49, 0.51);
     }
 
+    // --- Error paths: everything below the happy path must come back as a result record, never
+    // as an exception thrown into the poll loop (issue #103).
+
+    [Fact]
+    public async Task GetUsage_JsonNullBody_ReturnsEmptyResponseError()
+    {
+        // Well-formed JSON that deserializes to null — distinct from a parse failure.
+        _handler.SetResponse(HttpStatusCode.OK, "null");
+
+        var result = await _client.GetUsageAsync("test-token");
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("empty", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetUsage_NetworkFailure_ReturnsErrorWithoutThrowing()
+    {
+        _handler.SetException(new HttpRequestException("no such host"));
+
+        var result = await _client.GetUsageAsync("test-token");
+
+        Assert.False(result.IsSuccess);
+        Assert.False(result.IsAuthError);
+        Assert.False(result.IsRateLimited);
+        Assert.Contains("Network error", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task GetUsage_Timeout_ReturnsTimedOutError()
+    {
+        // HttpClient surfaces its own timeout as a TaskCanceledException with no cancellation
+        // requested — which must read as "timed out", not as a shutdown.
+        _handler.SetException(new TaskCanceledException("The request timed out."));
+
+        var result = await _client.GetUsageAsync("test-token");
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("timed out", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetUsage_Cancelled_PropagatesInsteadOfReportingAnError()
+    {
+        // Shutdown is not a poll failure: the monitor's own catch handles it, and reporting it
+        // as an error would flap the tray icon on the way out.
+        _handler.SetResponse(HttpStatusCode.OK, "{}");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => _client.GetUsageAsync("test-token", cts.Token));
+    }
+
+    [Fact]
+    public void Dispose_OwnedHttpClient_IsDisposedIdempotently()
+    {
+        // Constructed without a caller-supplied client, so this one owns (and must dispose) it.
+        var client = new ClaudeApiClient();
+
+        Assert.Null(Record.Exception(client.Dispose));
+        Assert.Null(Record.Exception(client.Dispose));
+    }
+
+    [Fact]
+    public async Task Dispose_CallerSuppliedHttpClient_IsLeftAlone()
+    {
+        // The monitor shares one HttpClient across the API client and the token refresher, so
+        // disposing either must not pull the socket handler out from under the other.
+        using var shared = new HttpClient(_handler);
+        new ClaudeApiClient(shared).Dispose();
+
+        _handler.SetResponse(HttpStatusCode.OK, """{"five_hour":{"utilization":1,"resets_at":"2026-01-01T00:00:00Z"}}""");
+        using var second = new ClaudeApiClient(shared);
+        var result = await second.GetUsageAsync("test-token");
+
+        Assert.True(result.IsSuccess);
+    }
+
     private sealed class MockHttpHandler : HttpMessageHandler
     {
         private HttpStatusCode _statusCode = HttpStatusCode.OK;
         private string _responseBody = "";
+        private Exception? _exception;
 
         public HttpRequestMessage? LastRequest { get; private set; }
 
@@ -182,10 +316,17 @@ public class ClaudeApiClientTests : IDisposable
             _responseBody = body;
         }
 
+        /// <summary>Makes the next send fail the way the transport would.</summary>
+        public void SetException(Exception exception) => _exception = exception;
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequest = request;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_exception is not null)
+                return Task.FromException<HttpResponseMessage>(_exception);
+
             var response = new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(_responseBody),

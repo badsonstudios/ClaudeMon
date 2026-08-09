@@ -3,6 +3,16 @@ namespace ClaudeMon.Tests;
 using System.Drawing;
 using ClaudeMon.UI;
 
+/// <summary>
+/// Defines the collection that serialises every test class touching WinForms' <c>Screen</c> /
+/// <c>SystemInformation</c> statics. Their caches are populated non-atomically, so two classes
+/// first touching them from different xUnit threads can observe an empty rectangle — an
+/// intermittent failure that has nothing to do with the code under test.
+/// </summary>
+[CollectionDefinition("Desktop metrics", DisableParallelization = true)]
+public sealed class DesktopMetricsCollection;
+
+[Collection("Desktop metrics")]
 public class DialogPlacementTests
 {
     [Fact]
@@ -205,4 +215,33 @@ public class DialogPlacementTests
         Assert.Equal(new Point(760, 420), result);
         Assert.Single(form.Moves);
     }
+
+    // --- The Form-facing wrappers. These construct a Form but never show it, so there is no
+    // message loop and no window is ever put on screen.
+
+    [Fact]
+    public void CenterOn_MovesTheFormToTheCenterOfTheGivenArea()
+    {
+        var area = new Rectangle(0, 0, 1920, 1040);
+        using var form = new Form { FormBorderStyle = FormBorderStyle.None, Size = new Size(400, 200) };
+
+        DialogPlacement.CenterOn(form, area);
+
+        Assert.Equal(DialogPlacement.CenterIn(area, form.Size), form.Location);
+    }
+
+    [Fact]
+    public void CenterOnPrimary_LandsInsideThePrimaryWorkingArea()
+    {
+        // Deliberately not asserting an absolute point: the working area depends on the machine.
+        // What matters is that the dialog ends up on the primary monitor rather than wherever
+        // the mouse cursor happened to be (issue #88).
+        var primary = DialogPlacement.PrimaryWorkingArea();
+        using var form = new Form { FormBorderStyle = FormBorderStyle.None, Size = new Size(300, 150) };
+
+        DialogPlacement.CenterOnPrimary(form);
+
+        Assert.Equal(DialogPlacement.CenterIn(primary, form.Size), form.Location);
+    }
+
 }

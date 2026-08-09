@@ -30,6 +30,64 @@ public class TrayTooltipTests
         Assert.Equal(expected, TrayTooltip.Compose(usage, MonitorStatus.Connected));
     }
 
+    // --- The over-budget degrade ladder (issue #103).
+    //
+    // NotifyIcon.Text throws past 127 characters, so Compose must guarantee the cap no matter
+    // what the API returns. Real utilization figures never get anywhere near the budget, so the
+    // only way to reach the ladder is with pathological percentages — which is exactly the
+    // point: the cap is a hard runtime contract, not an assumption about well-behaved input.
+    //
+    // The magnitudes below are chosen so each rung of the ladder is the one that fires. With the
+    // "resets 2h 29m" / "resets 2d 2h" countdowns these fixtures produce, and a 10-char model
+    // name, the composed lengths are:
+    //
+    //   pct     full   without countdown   without scoped line
+    //   1e16     131         123                    -          -> drops the countdown
+    //   1e20     139         131                   111         -> drops the whole scoped line
+    //   1e30     161         153                   131         -> nothing left to drop; truncates
+    //
+    // If the countdown format changes, these margins (4 characters at the tightest) are what
+    // gives, so recompute rather than nudging the exponents.
+    private static UsageResponse Inflated(double pct) => new(
+        new UsageBucket(pct, FiveHourReset),
+        new UsageBucket(pct, WeeklyReset),
+        [Scoped(100, "Opus-XL-99")]); // exactly the 10-char name budget, so nothing is elided
+
+    [Fact]
+    public void Compose_OverBudget_DropsTheScopedCountdownFirst()
+    {
+        var text = TrayTooltip.Compose(Inflated(1e16), MonitorStatus.RateLimited);
+
+        Assert.True(text.Length <= TrayTooltip.MaxLength, $"length {text.Length}");
+        // The scoped line survives, minus its countdown — the percentage is the useful part.
+        Assert.Equal("Opus-XL-99 wk: 100%", text.Split('\n')[3]);
+        Assert.EndsWith("[RateLimited]", text);
+    }
+
+    [Fact]
+    public void Compose_StillOverBudget_DropsTheWholeScopedLine()
+    {
+        var text = TrayTooltip.Compose(Inflated(1e20), MonitorStatus.RateLimited);
+
+        Assert.True(text.Length <= TrayTooltip.MaxLength, $"length {text.Length}");
+        Assert.DoesNotContain("wk:", text);
+        // The base lines and the status are what's left, and they are still intact.
+        Assert.StartsWith("ClaudeMon\n5hr: ", text);
+        Assert.EndsWith("[RateLimited]", text);
+    }
+
+    [Fact]
+    public void Compose_BaseLinesAloneOverBudget_TruncatesAtTheHardCap()
+    {
+        // The last resort. Nothing is left to drop, so the string is cut — losing the tail
+        // beats NotifyIcon.Text throwing out of a tray update.
+        var text = TrayTooltip.Compose(Inflated(1e30), MonitorStatus.RateLimited);
+
+        Assert.Equal(TrayTooltip.MaxLength, text.Length);
+        // What survives is the head of the string, not some other 127 characters.
+        Assert.StartsWith("ClaudeMon\n5hr: ", text);
+    }
+
     [Fact]
     public void Compose_NonConnectedStatus_AppendsStatusLine()
     {

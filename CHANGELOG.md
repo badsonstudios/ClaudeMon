@@ -13,6 +13,11 @@ GitHub release; the release notes are taken from these entries.
   controlled-folder-access block, or a full disk threw straight out into whichever settings
   dialog or background poll happened to trigger the save. It is now handled the same quiet,
   best-effort way as the write itself. (#145)
+- **Settings that fail to load or save now say so in the log.** Those paths are deliberately
+  best-effort — a corrupt config quietly becomes defaults, an unwritable one is retried on the
+  next save — but they left no trace at all, so "my settings didn't stick" was undiagnosable.
+  Both now record the reason and the file involved in the daily log (**View logs** in the tray
+  menu). The behaviour itself is unchanged, and a successful save still logs nothing. (#148)
 
 ### Changed
 - **Usage API requests now identify ClaudeMon.** Every poll of the Anthropic usage endpoint

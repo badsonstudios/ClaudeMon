@@ -3,6 +3,7 @@ namespace ClaudeMon.Configuration;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeMon.Models;
+using ClaudeMon.Services;
 using Microsoft.Win32;
 
 public sealed class ConfigManager
@@ -16,7 +17,15 @@ public sealed class ConfigManager
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
+    // The app loads its settings before TrayApplication builds anything else, so there is no
+    // Logger to inject at the only construction site. This instance writes to the same daily
+    // file as that one; the two don't share a lock, so a simultaneous write drops the line
+    // (Logger is best-effort by design) — acceptable for a path that only fires on failure.
+    // Constructing a Logger touches no disk, so this costs nothing until something goes wrong.
+    private static readonly Logger DefaultLogger = new();
+
     private readonly string _configPath;
+    private readonly Action<string> _logWarning;
 
     public AppSettings Settings { get; private set; } = new();
 
@@ -24,8 +33,18 @@ public sealed class ConfigManager
     internal string ConfigPath => _configPath;
 
     public ConfigManager(string? configPath = null)
+        : this(configPath, DefaultLogger.Warn)
+    {
+    }
+
+    /// <summary>
+    /// Test seam: <paramref name="logWarning"/> receives the diagnostics that the parameterless
+    /// path sends to <see cref="Logger"/>, so failure paths can be asserted without a real log file.
+    /// </summary>
+    internal ConfigManager(string? configPath, Action<string> logWarning)
     {
         _configPath = configPath ?? GetDefaultConfigPath();
+        _logWarning = logWarning;
     }
 
     public void Load()
@@ -42,9 +61,12 @@ public sealed class ConfigManager
             var json = File.ReadAllText(_configPath);
             Settings = Migrate(JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings());
         }
-        catch
+        catch (Exception ex)
         {
+            // Corrupt or unreadable config silently becomes defaults, which looks exactly like
+            // "my settings didn't stick" from the outside — so leave a trace of why.
             Settings = new AppSettings();
+            LogFailure($"Could not read settings from {_configPath} — using defaults: {ex.Message}");
         }
     }
 
@@ -99,6 +121,21 @@ public sealed class ConfigManager
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             TryDeleteTemp(tempPath);
+            LogFailure($"Could not save settings to {_configPath}: {ex.Message}");
+        }
+    }
+
+    // Diagnostics are strictly best-effort here: load and save deliberately survive a broken
+    // settings file, so a broken log sink must not be the thing that finally throws.
+    private void LogFailure(string message)
+    {
+        try
+        {
+            _logWarning(message);
+        }
+        catch
+        {
+            // Nothing left to report it to.
         }
     }
 

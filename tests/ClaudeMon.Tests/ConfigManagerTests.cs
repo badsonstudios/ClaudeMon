@@ -1,10 +1,21 @@
 namespace ClaudeMon.Tests;
 
+using System.Text.Json;
 using ClaudeMon.Configuration;
 using ClaudeMon.Models;
 
 public class ConfigManagerTests : IDisposable
 {
+    /// <summary>
+    /// Discarding log sink for the failure-path tests. Without it they'd fall through to the
+    /// default sink and append to the developer's real ClaudeMon log file.
+    /// </summary>
+    private static readonly Action<string> NoLog = _ => { };
+
+    /// <summary>A log sink that is itself broken — diagnostics must not become a new throw path.</summary>
+    private static readonly Action<string> ThrowingLog =
+        _ => throw new InvalidOperationException("log is broken");
+
     private readonly string _tempDir;
 
     public ConfigManagerTests()
@@ -113,7 +124,7 @@ public class ConfigManagerTests : IDisposable
         var path = Path.Combine(_tempDir, "config.json");
         File.WriteAllText(path, "this is not valid json {{{}}}");
 
-        var manager = new ConfigManager(path);
+        var manager = new ConfigManager(path, NoLog);
         manager.Load();
 
         Assert.Equal(5, manager.Settings.PollIntervalMinutes);
@@ -458,7 +469,7 @@ public class ConfigManagerTests : IDisposable
         var blocker = Path.Combine(_tempDir, "blocked");
         File.WriteAllText(blocker, "not a directory");
         var path = Path.Combine(blocker, "config.json");
-        var manager = new ConfigManager(path);
+        var manager = new ConfigManager(path, NoLog);
 
         manager.Update(new AppSettings { PollIntervalMinutes = 13 });
 
@@ -474,7 +485,7 @@ public class ConfigManagerTests : IDisposable
         // Save() through the startup path — the one place a throw would take the app down.
         var blocker = Path.Combine(_tempDir, "blocked");
         File.WriteAllText(blocker, "not a directory");
-        var manager = new ConfigManager(Path.Combine(blocker, "config.json"));
+        var manager = new ConfigManager(Path.Combine(blocker, "config.json"), NoLog);
 
         manager.Load();
 
@@ -521,7 +532,7 @@ public class ConfigManagerTests : IDisposable
         // must not crash the app: the in-memory settings still serve this session and the next
         // Save retries. The lock also blocks the best-effort cleanup, which is equally silent.
         var path = Path.Combine(_tempDir, "config.json");
-        var manager = new ConfigManager(path);
+        var manager = new ConfigManager(path, NoLog);
         using var blocker = new FileStream(
             path + ".tmp", FileMode.Create, FileAccess.Write, FileShare.None);
 
@@ -537,7 +548,7 @@ public class ConfigManagerTests : IDisposable
         // The temp write succeeds but the atomic swap can't take the destination. The previous
         // config survives untouched and the orphaned temp is cleaned up.
         var path = Path.Combine(_tempDir, "config.json");
-        var manager = new ConfigManager(path);
+        var manager = new ConfigManager(path, NoLog);
         manager.Update(new AppSettings { PollIntervalMinutes = 6 });
 
         using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -551,6 +562,124 @@ public class ConfigManagerTests : IDisposable
         var reloaded = new ConfigManager(path);
         reloaded.Load();
         Assert.Equal(6, reloaded.Settings.PollIntervalMinutes); // the on-disk file was preserved
+    }
+
+    [Fact]
+    public void Load_CorruptedFile_LogsThePathAndTheException()
+    {
+        // "My settings reset themselves" is undiagnosable if the parse failure leaves no trace.
+        var path = Path.Combine(_tempDir, "config.json");
+        const string garbage = "this is not valid json {{{}}}";
+        File.WriteAllText(path, garbage);
+        var logs = new List<string>();
+
+        new ConfigManager(path, logs.Add).Load();
+
+        var entry = Assert.Single(logs);
+        Assert.Contains(path, entry);
+        // The real parser text, not a generic "load failed" — reproduced here so the assertion
+        // doesn't hard-code a framework message that could be reworded or localized.
+        var expected = Assert.ThrowsAny<Exception>(
+            () => { JsonSerializer.Deserialize<AppSettings>(garbage); }).Message;
+        Assert.Contains(expected, entry);
+    }
+
+    [Fact]
+    public void Save_DirectoryUncreatable_LogsThePathAndTheException()
+    {
+        var blocker = Path.Combine(_tempDir, "blocked");
+        File.WriteAllText(blocker, "not a directory");
+        var path = Path.Combine(blocker, "config.json");
+        var logs = new List<string>();
+
+        new ConfigManager(path, logs.Add).Update(new AppSettings());
+
+        var entry = Assert.Single(logs);
+        Assert.Contains(path, entry);
+        var expected = Assert.ThrowsAny<Exception>(
+            () => { Directory.CreateDirectory(blocker); }).Message;
+        Assert.Contains(expected, entry);
+    }
+
+    [Fact]
+    public void Save_TempFileUnwritable_LogsThePathAndTheException()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var logs = new List<string>();
+        using var blocker = new FileStream(
+            path + ".tmp", FileMode.Create, FileAccess.Write, FileShare.None);
+
+        new ConfigManager(path, logs.Add).Update(new AppSettings());
+
+        AssertSaveFailureLogged(Assert.Single(logs), path);
+    }
+
+    [Fact]
+    public void Save_ExistingConfigLocked_LogsThePathAndTheException()
+    {
+        // The swap-into-place failure, as opposed to the write failure above.
+        var path = Path.Combine(_tempDir, "config.json");
+        var logs = new List<string>();
+        var manager = new ConfigManager(path, logs.Add);
+        manager.Update(new AppSettings());
+
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            manager.Update(new AppSettings { PollIntervalMinutes = 8 });
+        }
+
+        AssertSaveFailureLogged(Assert.Single(logs), path);
+    }
+
+    // The Win32 text behind a locked file is localized, so assert the shape instead: our own
+    // prefix, then whatever the OS called the failure.
+    private static void AssertSaveFailureLogged(string entry, string path)
+    {
+        var prefix = $"Could not save settings to {path}: ";
+        Assert.StartsWith(prefix, entry);
+        Assert.NotEmpty(entry[prefix.Length..]);
+    }
+
+    [Fact]
+    public void LoadAndSave_Succeeding_LogNothing()
+    {
+        // Successful persistence must stay silent — a settings file written every few minutes
+        // would otherwise bury the diagnostics this log exists for.
+        var path = Path.Combine(_tempDir, "config.json");
+        var logs = new List<string>();
+
+        var manager = new ConfigManager(path, logs.Add);
+        manager.Load();                                              // creates the file
+        manager.Update(new AppSettings { PollIntervalMinutes = 9 }); // overwrites it
+        new ConfigManager(path, logs.Add).Load();                    // reads it back
+
+        Assert.Empty(logs);
+    }
+
+    [Fact]
+    public void Load_LogSinkThrows_StillFallsBackToDefaults()
+    {
+        // Logging is diagnostics for a best-effort path; it must never become the thing that
+        // finally throws out of Load.
+        var path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path, "this is not valid json {{{}}}");
+        var manager = new ConfigManager(path, ThrowingLog);
+
+        manager.Load();
+
+        Assert.Equal(new AppSettings().PollIntervalMinutes, manager.Settings.PollIntervalMinutes);
+    }
+
+    [Fact]
+    public void Save_LogSinkThrows_StillKeepsSettingsInMemory()
+    {
+        var blocker = Path.Combine(_tempDir, "blocked");
+        File.WriteAllText(blocker, "not a directory");
+        var manager = new ConfigManager(Path.Combine(blocker, "config.json"), ThrowingLog);
+
+        manager.Update(new AppSettings { PollIntervalMinutes = 13 });
+
+        Assert.Equal(13, manager.Settings.PollIntervalMinutes);
     }
 
     [Fact]

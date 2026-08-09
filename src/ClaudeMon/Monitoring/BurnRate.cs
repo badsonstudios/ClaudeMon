@@ -20,88 +20,104 @@ public static class BurnRate
     ///
     /// 24 hours: nearly five times the window being projected, so it can't discard an
     /// estimate anyone would act on, while still being six orders of magnitude inside
-    /// TimeSpan's range. It only ever applies when the reset time is unknown — a known
-    /// reset is a tighter bound already (see the caller-supplied check below) — and there
-    /// a multi-day "~144h to limit" readout would be noise wearing an estimate's clothes.
+    /// TimeSpan's range. With the reset time unknown, a multi-day "~144h to limit" readout
+    /// would be noise wearing an estimate's clothes. With it known, this ceiling running
+    /// before the reset comparison is what keeps a near-flat trend classified as "no
+    /// estimate" rather than promoted to "safe" (#158) — a projection too absurd to show
+    /// is also too absurd to draw conclusions from.
     /// </summary>
     private const double MaxProjectionMinutes = 24 * 60;
 
     /// <summary>
-    /// Estimates the time until the 5-hour window hits 100%, or <c>null</c> when no
-    /// meaningful estimate can be made: fewer than two samples, no time span,
-    /// a flat/declining rate, a projection so distant it carries no information
-    /// (see <see cref="MaxProjectionMinutes"/>), or one that lands after the window
-    /// resets (you won't reach the cap this window).
+    /// Estimates the time until the 5-hour window hits 100%, as a typed result (#158): a
+    /// <see cref="TimeToLimitKind.Projection"/> with the remaining span,
+    /// <see cref="TimeToLimitKind.Safe"/> when the projection lands after the window resets
+    /// (you won't reach the cap this window — good news, not a missing estimate), or
+    /// <see cref="TimeToLimitKind.NoEstimate"/> when no meaningful estimate can be made:
+    /// fewer than three samples, no time span, a flat/declining rate, or a projection so
+    /// distant it carries no information (see <see cref="MaxProjectionMinutes"/>).
     /// </summary>
     /// <param name="recent">Recent samples (oldest first) over the burn window.</param>
     /// <param name="currentPct">The latest 5-hour utilization percentage.</param>
     /// <param name="timeUntilReset">Time until the 5-hour window resets, if known.</param>
-    public static TimeSpan? EstimateTimeToLimit(
+    public static TimeToLimitEstimate EstimateTimeToLimit(
         IReadOnlyList<UsageSample> recent, double currentPct, TimeSpan? timeUntilReset)
     {
         // Already maxed out — no projection needed.
         if (currentPct >= LimitPct)
-            return TimeSpan.Zero;
+            return TimeToLimitEstimate.AtLimit;
 
         // Three samples is the floor: two points fit any noise perfectly (zero
         // residual), so the slope — and the resulting ETA — would be untrustworthy.
         if (recent is null || recent.Count < 3)
-            return null;
+            return TimeToLimitEstimate.NoEstimate;
 
         var slopePerMinute = SlopePctPerMinute(recent);
         if (slopePerMinute is null or <= 0)
-            return null;
+            return TimeToLimitEstimate.NoEstimate;
 
         var minutesToLimit = (LimitPct - currentPct) / slopePerMinute.Value;
 
         // NaN first — it compares false against everything, so it has to be excluded
         // explicitly. The upper bound covers infinity as well as the finite-but-absurd
-        // projections a near-zero slope produces (see MaxProjectionMinutes).
+        // projections a near-zero slope produces (see MaxProjectionMinutes). This guard
+        // runs before the reset check on purpose: an epsilon-above-flat trend stays "no
+        // estimate" like an exactly-flat one, rather than flipping to "safe".
         if (double.IsNaN(minutesToLimit) || minutesToLimit < 0 || minutesToLimit > MaxProjectionMinutes)
-            return null;
+            return TimeToLimitEstimate.NoEstimate;
 
         var eta = TimeSpan.FromMinutes(minutesToLimit);
 
-        // When the reset time is known (non-null), don't project past it: a window
-        // that resets first won't reach the cap, and one that is already resetting
-        // (reset <= 0) has no meaningful "time to limit". Callers pass null when the
-        // reset time is unknown, so a non-null value here is authoritative.
+        // When the reset time is known (non-null), don't project past it: a window that
+        // resets first won't reach the cap this window — that's the safe case, not a
+        // missing estimate — and one already resetting (reset <= 0) is beaten by the reset
+        // no matter the trend. Callers pass null when the reset time is unknown, so a
+        // non-null value here is authoritative.
         if (timeUntilReset is { } reset)
         {
             if (reset <= TimeSpan.Zero || eta > reset)
-                return null;
+                return TimeToLimitEstimate.Safe;
         }
 
-        return eta;
-    }
-
-    /// <summary>Formats an estimate for display in the flyout.</summary>
-    public static string FormatTimeToLimit(TimeSpan? eta)
-    {
-        var compact = FormatTimeToLimitCompact(eta);
-
-        // "—" and "at limit" already say what they mean; only the spans take the suffix.
-        return IsSpan(eta) ? $"{compact} to limit" : compact;
+        return TimeToLimitEstimate.Projection(eta);
     }
 
     /// <summary>
-    /// The same estimate without the "to limit" suffix, for the taskbar readout's optional
-    /// element — where the space is a fraction of the flyout's and the "Claude" label above it
-    /// supplies the context. Shares every rounding and wording decision with
-    /// <see cref="FormatTimeToLimit"/>, so the flyout and the readout can never show two
-    /// different numbers for the same projection. The leading <c>~</c> is what distinguishes an
-    /// estimate from the reset countdown beside it, which is a known clock time.
+    /// Formats an estimate for display in the flyout. The safe case gets room to say why
+    /// ("safe (resets first)"); the fixed states already say what they mean; only the spans
+    /// take the "to limit" suffix.
     /// </summary>
-    public static string FormatTimeToLimitCompact(TimeSpan? eta)
+    public static string FormatTimeToLimit(TimeToLimitEstimate estimate) => estimate.Kind switch
     {
-        if (eta is null)
-            return "—";
+        TimeToLimitKind.Safe => "safe (resets first)",
+        TimeToLimitKind.Projection when estimate.Eta is { } eta && eta > TimeSpan.Zero =>
+            $"{FormatTimeToLimitCompact(estimate)} to limit",
+        _ => FormatTimeToLimitCompact(estimate),
+    };
 
-        var value = eta.Value;
-        if (value <= TimeSpan.Zero)
+    /// <summary>
+    /// The same estimate for the taskbar readout's optional element — where the space is a
+    /// fraction of the flyout's and the "Claude" label above it supplies the context. The safe
+    /// case shows a bare "safe" (lower-case word style, cf. the countdown's "idle"); spans drop
+    /// the "to limit" suffix. Shares every state, rounding, and wording decision with
+    /// <see cref="FormatTimeToLimit"/>, so the flyout and the readout can never disagree about
+    /// the same projection. The leading <c>~</c> is what distinguishes an estimate from the
+    /// reset countdown beside it, which is a known clock time.
+    /// </summary>
+    public static string FormatTimeToLimitCompact(TimeToLimitEstimate estimate) => estimate.Kind switch
+    {
+        TimeToLimitKind.Safe => "safe",
+        TimeToLimitKind.AtLimit => "at limit",
+        TimeToLimitKind.Projection when estimate.Eta is { } eta => FormatSpan(eta),
+        _ => "—",
+    };
+
+    private static string FormatSpan(TimeSpan eta)
+    {
+        if (eta <= TimeSpan.Zero)
             return "at limit";
 
-        var totalMinutes = (int)Math.Round(value.TotalMinutes);
+        var totalMinutes = (int)Math.Round(eta.TotalMinutes);
         if (totalMinutes < 1)
             return "<1m";
 
@@ -112,9 +128,6 @@ public static class BurnRate
         var minutes = totalMinutes % 60;
         return minutes == 0 ? $"~{hours}h" : $"~{hours}h {minutes}m";
     }
-
-    // Whether the estimate is an actual remaining span rather than one of the two fixed states.
-    private static bool IsSpan(TimeSpan? eta) => eta is { } value && value > TimeSpan.Zero;
 
     // Least-squares slope of utilization (percent) over time (minutes). Returns
     // null when the samples share a single instant (no time span to divide by).

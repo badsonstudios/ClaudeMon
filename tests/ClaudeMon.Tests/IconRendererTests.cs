@@ -258,7 +258,8 @@ public class IconRendererTests
         // the estimate's leading "~" is the only thing telling it from the known clock time.
         var span = TimeSpan.FromMinutes(83);
         Assert.NotEqual(
-            IconRenderer.FormatTaskbarCountdown(span), BurnRate.FormatTimeToLimitCompact(span));
+            IconRenderer.FormatTaskbarCountdown(span),
+            BurnRate.FormatTimeToLimitCompact(TimeToLimitEstimate.Projection(span)));
     }
 
     [Theory]

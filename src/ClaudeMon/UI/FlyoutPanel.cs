@@ -18,7 +18,7 @@ public sealed class FlyoutPanel : Form
     private MonitorStatus _status = MonitorStatus.Initializing;
     private DateTimeOffset? _lastUpdated;
     private IReadOnlyList<double> _history = Array.Empty<double>();
-    private TimeSpan? _timeToLimit;
+    private TimeToLimitEstimate _timeToLimit;
     private UsageColorMode _colorMode = UsageColorMode.Pace;
     // Composed once per data update; null = no local cost data, line not drawn.
     private string? _localCostLine;
@@ -107,7 +107,7 @@ public sealed class FlyoutPanel : Form
         MonitorStatus status,
         DateTimeOffset? lastUpdated,
         IReadOnlyList<double>? history = null,
-        TimeSpan? timeToLimit = null,
+        TimeToLimitEstimate timeToLimit = default,
         UsageColorMode colorMode = UsageColorMode.Pace,
         LocalUsageSnapshot? localUsage = null,
         ServiceStatus? serviceStatus = null)

@@ -54,6 +54,35 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void ServiceIncidentLevel_RoundTrips_AndIsAbsentByDefault()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        manager.Load();
+
+        // Nothing latched on a fresh (or upgraded) config — the first incident must alert.
+        Assert.Null(manager.Settings.ServiceIncidentLevel);
+
+        manager.Update(manager.Settings with { ServiceIncidentLevel = ServiceStatusLevel.Major });
+
+        // Written by name, so a hand-read config stays legible and reordering the enum can't
+        // silently reinterpret a saved latch.
+        Assert.Contains("\"Major\"", File.ReadAllText(path));
+
+        var reloaded = new ConfigManager(path);
+        reloaded.Load();
+
+        Assert.Equal(ServiceStatusLevel.Major, reloaded.Settings.ServiceIncidentLevel);
+
+        reloaded.Update(reloaded.Settings with { ServiceIncidentLevel = null });
+
+        var cleared = new ConfigManager(path);
+        cleared.Load();
+
+        Assert.Null(cleared.Settings.ServiceIncidentLevel);
+    }
+
+    [Fact]
     public void Load_NoConfigFile_CreatesDefaults()
     {
         var path = Path.Combine(_tempDir, "config.json");
@@ -505,6 +534,39 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void Save_DirectoryUncreatable_DoesNotThrowAndKeepsSettingsInMemory()
+    {
+        // Creating the settings directory can fail for the same reasons the write can (ACL denial,
+        // a folder lock, disk full). Simulated here by parking a *file* where the directory needs
+        // to go, which makes Directory.CreateDirectory throw. Save is best-effort: the in-memory
+        // settings still serve this session and the next Save retries.
+        var blocker = Path.Combine(_tempDir, "blocked");
+        File.WriteAllText(blocker, "not a directory");
+        var path = Path.Combine(blocker, "config.json");
+        var manager = new ConfigManager(path);
+
+        manager.Update(new AppSettings { PollIntervalMinutes = 13 });
+
+        Assert.Equal(13, manager.Settings.PollIntervalMinutes);
+        Assert.False(File.Exists(path)); // nothing was written
+        Assert.Empty(Directory.GetFiles(_tempDir, "*.tmp")); // and no temp was orphaned
+    }
+
+    [Fact]
+    public void Load_DirectoryUncreatable_DoesNotThrowAndFallsBackToDefaults()
+    {
+        // Load() saves a fresh config when none exists, so the same unwritable directory reaches
+        // Save() through the startup path — the one place a throw would take the app down.
+        var blocker = Path.Combine(_tempDir, "blocked");
+        File.WriteAllText(blocker, "not a directory");
+        var manager = new ConfigManager(Path.Combine(blocker, "config.json"));
+
+        manager.Load();
+
+        Assert.Equal(new AppSettings().PollIntervalMinutes, manager.Settings.PollIntervalMinutes);
+    }
+
+    [Fact]
     public void Save_IsAtomic_LeavesNoTempFileAndPreservesConfigOnRewrite()
     {
         var path = Path.Combine(_tempDir, "config.json");
@@ -535,6 +597,60 @@ public class ConfigManagerTests : IDisposable
         var reloaded = new ConfigManager(path);
         reloaded.Load();
         Assert.Equal(4, reloaded.Settings.PollIntervalMinutes);
+    }
+
+    [Fact]
+    public void Save_TempFileUnwritable_DoesNotThrowAndKeepsSettingsInMemory()
+    {
+        // A transient lock on the temp file (AV scanner, an earlier write still being flushed)
+        // must not crash the app: the in-memory settings still serve this session and the next
+        // Save retries. The lock also blocks the best-effort cleanup, which is equally silent.
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        using var blocker = new FileStream(
+            path + ".tmp", FileMode.Create, FileAccess.Write, FileShare.None);
+
+        manager.Update(new AppSettings { PollIntervalMinutes = 11 });
+
+        Assert.Equal(11, manager.Settings.PollIntervalMinutes);
+        Assert.False(File.Exists(path)); // nothing was swapped into place
+    }
+
+    [Fact]
+    public void Save_ExistingConfigLocked_DoesNotThrowAndCleansUpTheTemp()
+    {
+        // The temp write succeeds but the atomic swap can't take the destination. The previous
+        // config survives untouched and the orphaned temp is cleaned up.
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        manager.Update(new AppSettings { PollIntervalMinutes = 6 });
+
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            manager.Update(new AppSettings { PollIntervalMinutes = 8 });
+        }
+
+        Assert.Equal(8, manager.Settings.PollIntervalMinutes);
+        Assert.Empty(Directory.GetFiles(_tempDir, "*.tmp"));
+
+        var reloaded = new ConfigManager(path);
+        reloaded.Load();
+        Assert.Equal(6, reloaded.Settings.PollIntervalMinutes); // the on-disk file was preserved
+    }
+
+    [Fact]
+    public void DefaultConfigPath_IsUnderLocalAppData_AndResolvesWithoutTouchingDisk()
+    {
+        // Constructing with no path must only resolve a location — the real user config is not
+        // read or written here (this test would otherwise stomp the developer's own settings).
+        var manager = new ConfigManager();
+
+        var expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ClaudeMon",
+            "config.json");
+        Assert.Equal(expected, manager.ConfigPath);
+        Assert.Equal(new AppSettings().PollIntervalMinutes, manager.Settings.PollIntervalMinutes);
     }
 
     [Fact]

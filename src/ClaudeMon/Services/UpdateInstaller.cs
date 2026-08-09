@@ -177,11 +177,17 @@ public sealed class UpdateInstaller : IDisposable
     /// that just completed is finished and unlocked; one still mid-run just fails to delete and
     /// is retried next launch.
     /// </summary>
-    public static void CleanUpStaleDownloads()
+    public static void CleanUpStaleDownloads() => CleanUpStaleDownloads(Path.GetTempPath());
+
+    /// <summary>
+    /// The sweep itself, with the directory injected so tests can point it at their own temp
+    /// directory instead of deleting whatever the developer's <c>%TEMP%</c> happens to hold.
+    /// </summary>
+    internal static void CleanUpStaleDownloads(string directory)
     {
         try
         {
-            foreach (var file in Directory.EnumerateFiles(Path.GetTempPath(), SetupFilePrefix + "*.exe"))
+            foreach (var file in Directory.EnumerateFiles(directory, SetupFilePrefix + "*.exe"))
                 TryDelete(file);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

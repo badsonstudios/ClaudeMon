@@ -19,10 +19,16 @@ public class UpdateInstallerTests : IDisposable
     private readonly string _downloadPath =
         Path.Combine(Path.GetTempPath(), "ClaudeMon-Setup-0.0.0-test.exe");
 
+    // A private scratch directory for the sweep/launch tests, so they never touch whatever the
+    // developer's real %TEMP% happens to hold.
+    private readonly string _scratchDir =
+        Path.Combine(Path.GetTempPath(), $"claudemon-installer-{Guid.NewGuid():N}");
+
     public UpdateInstallerTests()
     {
         _handler = new MockHttpHandler();
         _installer = new UpdateInstaller(new HttpClient(_handler));
+        Directory.CreateDirectory(_scratchDir);
     }
 
     public void Dispose()
@@ -31,6 +37,8 @@ public class UpdateInstallerTests : IDisposable
         _handler.Dispose();
         if (File.Exists(_downloadPath))
             File.Delete(_downloadPath);
+        if (Directory.Exists(_scratchDir))
+            Directory.Delete(_scratchDir, true);
     }
 
     [Fact]
@@ -187,6 +195,70 @@ public class UpdateInstallerTests : IDisposable
         Assert.Contains("/SUPPRESSMSGBOXES", args);
         Assert.Contains("/NORESTART", args);
         Assert.Contains(expectedTask, args);
+    }
+
+    [Fact]
+    public void LaunchInstaller_MissingFile_ReturnsNullInsteadOfThrowing()
+    {
+        // The caller's fallback (open the release page) depends on this being a null, not an
+        // exception thrown out of a click handler.
+        var missing = Path.Combine(_scratchDir, "ClaudeMon-Setup-does-not-exist.exe");
+
+        var process = UpdateInstaller.LaunchInstaller(
+            missing, UpdateInstaller.BuildInstallerArguments(runAtStartupEnabled: false));
+
+        Assert.Null(process);
+    }
+
+    [Fact]
+    public void CleanUpStaleDownloads_DeletesLeftoverInstallers_AndLeavesEverythingElse()
+    {
+        var stale = Path.Combine(_scratchDir, "ClaudeMon-Setup-0.1.0.exe");
+        var unrelated = Path.Combine(_scratchDir, "some-other-tool.exe");
+        var notAnExe = Path.Combine(_scratchDir, "ClaudeMon-Setup-0.1.0.exe.sha256");
+        File.WriteAllText(stale, "x");
+        File.WriteAllText(unrelated, "x");
+        File.WriteAllText(notAnExe, "x");
+
+        UpdateInstaller.CleanUpStaleDownloads(_scratchDir);
+
+        Assert.False(File.Exists(stale));
+        Assert.True(File.Exists(unrelated));
+        Assert.True(File.Exists(notAnExe));
+    }
+
+    [Fact]
+    public void CleanUpStaleDownloads_LockedInstaller_IsSkippedSilently()
+    {
+        // The installer that is mid-run holds its own file open; failing to delete it must be a
+        // no-op that gets retried next launch, not an exception at startup.
+        var locked = Path.Combine(_scratchDir, "ClaudeMon-Setup-0.2.0.exe");
+        File.WriteAllText(locked, "x");
+        using var handle = new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None);
+
+        UpdateInstaller.CleanUpStaleDownloads(_scratchDir);
+
+        Assert.True(File.Exists(locked));
+    }
+
+    [Fact]
+    public void CleanUpStaleDownloads_MissingDirectory_IsSwallowed()
+    {
+        var ex = Record.Exception(() =>
+            UpdateInstaller.CleanUpStaleDownloads(Path.Combine(_scratchDir, "no-such-directory")));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void Dispose_OwnedHttpClient_IsDisposedIdempotently()
+    {
+        // Constructed without a caller-supplied client, so this one owns (and must dispose) it.
+        // The update flow can reach Dispose on more than one path, so it has to be repeatable.
+        var installer = new UpdateInstaller();
+
+        Assert.Null(Record.Exception(installer.Dispose));
+        Assert.Null(Record.Exception(installer.Dispose));
     }
 
     private sealed class CollectingProgress(List<double> reports) : IProgress<double>

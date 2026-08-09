@@ -284,8 +284,8 @@ public sealed class TrayApplication : IDisposable
     /// <summary>
     /// The optional incident notification (off by default). The decision — including the
     /// opt-in toggle, the master notifications switch, and the snooze — is pure
-    /// (<see cref="ServiceStatusAlerts"/>); this handler only marshals to the UI thread and
-    /// shows what comes back.
+    /// (<see cref="ServiceStatusAlerts"/>); this handler only marshals to the UI thread, shows
+    /// what comes back, and persists the latch so a restart mid-incident stays quiet (#138).
     /// </summary>
     private void OnServiceStatusUpdated(object? sender, ServiceStatusUpdatedEventArgs e)
     {
@@ -295,10 +295,18 @@ public sealed class TrayApplication : IDisposable
         {
             if (_disposed) return;
 
-            var alert = ServiceStatusAlerts.Evaluate(
-                e.Previous, e.Current, _configManager.Settings.Notifications, DateTimeOffset.UtcNow);
+            var (latch, alert) = ServiceStatusAlerts.Evaluate(
+                _configManager.Settings.ServiceIncidentLevel, e.Current,
+                _configManager.Settings.Notifications, DateTimeOffset.UtcNow);
+
             if (alert is not null)
                 ShowAlert(alert.Title, alert.Text, alert.Icon);
+
+            // Runs on the UI thread (the _configManager.Update contract). The status only
+            // changes rarely, and the latch rarer still, so this is a handful of saves per
+            // incident rather than one per poll.
+            if (latch != _configManager.Settings.ServiceIncidentLevel)
+                _configManager.Update(_configManager.Settings with { ServiceIncidentLevel = latch });
         }, null);
     }
 

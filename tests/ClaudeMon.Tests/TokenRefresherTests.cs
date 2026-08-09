@@ -112,10 +112,113 @@ public class TokenRefresherTests
         Assert.Null(handler.LastRequest);
     }
 
+    // --- Failure branches (issue #103). A refresh that can't complete must classify itself:
+    // transient (keep the last known state and retry) versus sign-in-expired (tell the user).
+
+    [Theory]
+    [InlineData("{}")]                                             // no access_token at all
+    [InlineData("""{"access_token": "", "expires_in": 100}""")]    // present but empty
+    [InlineData("""{"access_token": "   ", "expires_in": 100}""")] // whitespace only
+    [InlineData("null")]                                           // deserializes to null
+    public async Task Refresh_ResponseWithoutUsableAccessToken_IsTransient(string body)
+    {
+        var handler = new MockHttpHandler(HttpStatusCode.OK, body);
+        using var refresher = new TokenRefresher(new HttpClient(handler));
+
+        var result = await refresher.RefreshAsync(ExpiredCredential());
+
+        Assert.False(result.IsSuccess);
+        Assert.False(result.IsSignInExpired); // a broken response is not a dead refresh token
+        Assert.Contains("no access token", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Refresh_MalformedJson_IsTransientAndNeverEchoesTheBody()
+    {
+        // The body of a token response carries the fresh access and refresh tokens, so the
+        // parse error's message must never be interpolated into the reported error.
+        var handler = new MockHttpHandler(HttpStatusCode.OK, """{"access_token": "sk-ant-oat01-leak""");
+        using var refresher = new TokenRefresher(new HttpClient(handler));
+
+        var result = await refresher.RefreshAsync(ExpiredCredential());
+
+        Assert.False(result.IsSuccess);
+        Assert.False(result.IsSignInExpired);
+        Assert.NotNull(result.Error);
+        // Pins the constant message: interpolating the JsonException's own text here would echo
+        // the fragment of the body it choked on, which is where the tokens live.
+        Assert.DoesNotContain("sk-ant-", result.Error);
+    }
+
+    [Fact]
+    public async Task Refresh_NetworkFailure_IsTransient()
+    {
+        var handler = new MockHttpHandler(new HttpRequestException("no such host"));
+        using var refresher = new TokenRefresher(new HttpClient(handler));
+
+        var result = await refresher.RefreshAsync(ExpiredCredential());
+
+        Assert.False(result.IsSuccess);
+        Assert.False(result.IsSignInExpired);
+        Assert.Contains("Network error", result.Error);
+    }
+
+    [Fact]
+    public async Task Refresh_Timeout_IsTransient()
+    {
+        // HttpClient reports its own timeout as a TaskCanceledException with nothing cancelled.
+        var handler = new MockHttpHandler(new TaskCanceledException("The request timed out."));
+        using var refresher = new TokenRefresher(new HttpClient(handler));
+
+        var result = await refresher.RefreshAsync(ExpiredCredential());
+
+        Assert.False(result.IsSuccess);
+        Assert.False(result.IsSignInExpired);
+        Assert.Contains("timed out", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Refresh_Cancelled_PropagatesInsteadOfBeingClassified()
+    {
+        var handler = new MockHttpHandler(HttpStatusCode.OK, "{}");
+        using var refresher = new TokenRefresher(new HttpClient(handler));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => refresher.RefreshAsync(ExpiredCredential(), cts.Token));
+    }
+
+    [Fact]
+    public void Dispose_OwnedHttpClient_IsDisposedIdempotently()
+    {
+        var refresher = new TokenRefresher();
+
+        Assert.Null(Record.Exception(refresher.Dispose));
+        Assert.Null(Record.Exception(refresher.Dispose));
+    }
+
+    [Fact]
+    public async Task Dispose_CallerSuppliedHttpClient_IsLeftAlone()
+    {
+        // UsageMonitor hands the same HttpClient to the API client and the refresher; disposing
+        // one must not break the other.
+        var handler = new MockHttpHandler(HttpStatusCode.OK,
+            """{"access_token":"sk-ant-oat01-new","refresh_token":"sk-ant-ort01-new","expires_in":28800}""");
+        using var shared = new HttpClient(handler);
+        new TokenRefresher(shared).Dispose();
+
+        using var second = new TokenRefresher(shared);
+        var result = await second.RefreshAsync(ExpiredCredential());
+
+        Assert.True(result.IsSuccess);
+    }
+
     private sealed class MockHttpHandler : HttpMessageHandler
     {
         private readonly HttpStatusCode _statusCode;
         private readonly string _responseBody;
+        private readonly Exception? _exception;
 
         public HttpRequestMessage? LastRequest { get; private set; }
         public string? LastBody { get; private set; }
@@ -126,12 +229,24 @@ public class TokenRefresherTests
             _responseBody = responseBody;
         }
 
+        /// <summary>Makes the send fail the way the transport would.</summary>
+        public MockHttpHandler(Exception exception)
+            : this(HttpStatusCode.OK, "")
+        {
+            _exception = exception;
+        }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequest = request;
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (request.Content is not null)
                 LastBody = await request.Content.ReadAsStringAsync(cancellationToken);
+
+            if (_exception is not null)
+                throw _exception;
 
             return new HttpResponseMessage(_statusCode)
             {

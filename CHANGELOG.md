@@ -40,7 +40,20 @@ GitHub release; the release notes are taken from these entries.
   silently ignored — the status of the status page is not itself an alert — and the last known
   state stays on screen. (#132)
 
+### Changed
+- **Usage API requests now identify ClaudeMon.** Every poll of the Anthropic usage endpoint
+  previously went out with no `User-Agent` at all; it now sends `ClaudeMon/<version>`, along
+  with `Accept: application/json` and the `anthropic-beta: oauth-2025-04-20` header that Claude
+  Code attaches to its own OAuth-authenticated calls. Deliberately honest identification rather
+  than impersonating the Claude Code CLI — live testing found the endpoint's rate limit is keyed
+  on your token, not on who claims to be asking, so there is nothing to gain by pretending.
+  Nothing about polling, alerts, or the 401/429 paths changed. (#136)
+
 ### Fixed
+- **Service-incident notifications no longer repeat after a restart** — the "already told you
+  about this incident" state now persists with your settings, so restarting ClaudeMon during a
+  long Anthropic incident stays quiet instead of raising the same balloon again. An incident that
+  gets worse still notifies, and recovery re-arms it for the next one. (#138)
 - **The Settings window can no longer run off the bottom of your screen** — it sized itself
   purely from the tab you were on and grew downwards, so on a short display (or at a large scale
   factor) switching from a short tab to a long one could push OK and Cancel below the desktop
@@ -49,6 +62,13 @@ GitHub release; the release notes are taken from these entries.
   is scrolling, the mouse wheel scrolls the dialog instead of quietly changing whichever
   dropdown or spinner you last clicked. On a screen where it already fitted, nothing
   changes. (#139)
+- **Saving settings can no longer crash ClaudeMon when its settings folder can't be created.**
+  The rest of the save path was already best-effort — if the file is locked or unwritable the
+  in-memory settings still serve the session and the next save retries — but creating the
+  `%LOCALAPPDATA%\ClaudeMon` folder sat outside that guard, so an ACL denial, a
+  controlled-folder-access block, or a full disk threw straight out into whichever settings
+  dialog or background poll happened to trigger the save. It is now handled the same quiet,
+  best-effort way as the write itself. (#145)
 - **Saving Settings no longer resets taskbar options the dialog doesn't show** — OK rebuilt the
   taskbar display settings from the controls alone, so anything stored there without a control of
   its own was quietly dropped on every save. It is now layered onto your saved settings, the way

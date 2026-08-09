@@ -1,17 +1,25 @@
 namespace ClaudeMon.Models;
 
+using System.Text.Json.Serialization;
+
 /// <summary>
 /// Which metrics the taskbar readout shows, as one value — the four Settings display toggles
 /// bundled so they travel together instead of as a growing list of adjacent <c>bool</c>
 /// parameters. More than one can be on at a time (a composition, dot-separated in the Numbers
-/// style); the click-to-cycle gesture works in terms of single-metric selections (see
-/// <c>UI.TaskbarMetricCycle</c>).
+/// style); the click-to-cycle gesture mostly works in terms of single-metric selections, but
+/// remembers a whole composition as the stop it wraps back to (see <c>UI.TaskbarMetricCycle</c>).
 /// </summary>
+/// <remarks>
+/// The live selection is stored as the four toggles on <see cref="TaskbarDisplaySettings"/>, not
+/// as this type — but <see cref="TaskbarDisplaySettings.CycleHome"/> persists a whole selection,
+/// so the properties carry their own JSON names rather than defaulting to PascalCase in a file
+/// that is camelCase everywhere else.
+/// </remarks>
 public readonly record struct TaskbarMetricSelection(
-    bool Session,
-    bool Weekly,
-    bool TimeToLimit,
-    bool TimeToReset)
+    [property: JsonPropertyName("session")] bool Session,
+    [property: JsonPropertyName("weekly")] bool Weekly,
+    [property: JsonPropertyName("timeToLimit")] bool TimeToLimit,
+    [property: JsonPropertyName("timeToReset")] bool TimeToReset)
 {
     /// <summary>The default readout: session usage only.</summary>
     public static TaskbarMetricSelection SessionOnly => For(TaskbarMetric.Session);
@@ -34,6 +42,8 @@ public readonly record struct TaskbarMetricSelection(
     };
 
     /// <summary>How many metrics are shown (0 when the user turned everything off).</summary>
+    // Derived, so kept out of the persisted form: read-only dead weight in the config file.
+    [JsonIgnore]
     public int Count =>
         (Session ? 1 : 0) + (Weekly ? 1 : 0) + (TimeToLimit ? 1 : 0) + (TimeToReset ? 1 : 0);
 

@@ -127,8 +127,9 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 
 **Middle-click** the readout — or **Ctrl+left-click**, for mice without a usable middle button —
 to switch which metric it shows, without opening Settings. Plain left-click still opens the
-detail flyout. The readout briefly flashes the name of the metric you landed on (`session`,
-`weekly`, `to limit`, `resets`) so you can tell at a glance what changed.
+detail flyout. The readout briefly flashes the name of the stop you landed on (`session`,
+`weekly`, `to limit`, `resets`, or `custom` for your own multi-element layout) so you can tell at
+a glance what changed.
 
 The gesture is a shortcut over the four display toggles above, not a separate setting — cycling
 writes those toggles, so Settings always shows what you're looking at, and the choice survives a
@@ -137,9 +138,10 @@ restart. That means:
 | Behaviour | What happens |
 |---|---|
 | **Cycle order** | session → weekly → to limit → resets → back to session |
-| **From a multi-element readout** | The toggles can show several metrics at once, which has no single position in the ring. The first click collapses the readout onto its *leftmost* element rather than skipping past it; every click after that advances by one |
-| **Cycling replaces the composition** | Landing on a metric turns the others off. To get a multi-element readout back, tick the toggles in Settings again |
-| **Bar style** | The bar draws no text, so it cycles only the two metrics it can draw as a bar (session ↔ weekly) — the time metrics would cycle to an identical-looking readout. The bar style always shows a bar (apart from the brief name flash), and the two time toggles it can't display are left exactly as you set them, so switching back to Numbers restores your composition |
+| **From a multi-element readout** | Your layout is a stop on the ring in its own right, so cycling focuses one metric temporarily instead of throwing the layout away: `[your layout] → session → weekly → to limit → resets → [your layout]`. The first click collapses onto the *leftmost* element already on screen rather than skipping past it, each click after that advances by one, and one lap brings back exactly what you had — flashed as `custom`. The lap always covers all four metrics, whichever one your layout leads with |
+| **From a single-metric readout** | Nothing to protect, so it's the plain four-stop ring above — a `custom` stop would just be a second, identical-looking copy of one you already have |
+| **Settings wins** | Change the display toggles in Settings and they become your layout, replacing whatever the gesture had remembered — the gesture can never restore something you edited away. Saving Settings *without* touching those toggles (to change the poll interval, say) leaves a cycle in progress alone |
+| **Bar style** | The bar draws no text, so it cycles only the two metrics it can draw as a bar (session ↔ weekly) — the time metrics would cycle to an identical-looking readout. Same principle over that shorter ring: both bars at once is a layout of its own (`[both bars] → session → weekly → [both bars]`). The bar style always shows a bar (apart from the brief name flash), and the two time toggles it can't display are left exactly as you set them, so switching back to Numbers restores your composition — including a layout the bar had no way to draw, which simply doesn't get a stop until you switch back |
 | **Multiple monitors** | The metric is one setting, so cycling on any taskbar moves every readout together |
 | **While Settings is open** | The gesture does nothing — the readouts are that dialog's live preview, so Settings alone drives them until you close it |
 | **What it doesn't touch** | The **% sign**, style, size, colours, and position settings are untouched by cycling |

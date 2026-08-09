@@ -363,10 +363,11 @@ public sealed class TrayApplication : IDisposable
     }
 
     /// <summary>
-    /// Advances the taskbar readout to the next metric in the cycle (issue #71), persists the
+    /// Advances the taskbar readout to the next stop in the cycle (issue #71), persists the
     /// choice, and flashes its name on every readout. The gesture writes the same display
-    /// toggles Settings edits — <see cref="TaskbarMetricCycle"/> owns the ordering — so the two
-    /// can never drift apart, and a restart comes back on the metric you left it on.
+    /// toggles Settings edits — <see cref="TaskbarMetricCycle"/> owns every decision, including
+    /// which composition the ring wraps back to (#156) — so the two can never drift apart, and a
+    /// restart comes back exactly where you left the cycle.
     /// </summary>
     private void CycleTaskbarMetric()
     {
@@ -378,13 +379,16 @@ public sealed class TrayApplication : IDisposable
             return;
 
         var taskbar = _configManager.Settings.TaskbarDisplay;
-        var next = TaskbarMetricCycle.NextMetric(taskbar.Metrics, taskbar.Style);
-        var updated = taskbar.WithMetrics(TaskbarMetricCycle.Select(taskbar.Metrics, next, taskbar.Style));
+        var step = TaskbarMetricCycle.Step(taskbar.Metrics, taskbar.CycleHome, taskbar.Style);
+        // Home is saved in the same write as the toggles it describes: a crash between the two
+        // would leave a collapsed readout with no record of what to restore — exactly the loss
+        // this ticket exists to prevent.
+        var updated = taskbar.WithMetrics(step.Metrics) with { CycleHome = step.Home };
 
         _configManager.Update(_configManager.Settings with { TaskbarDisplay = updated });
         // Hint first: it outranks the readout either way, so raising it before the new metric
         // lands makes the intermediate frame structurally impossible rather than merely unlikely.
-        _taskbarOverlay.ShowMetricHint(TaskbarMetricCycle.Label(next));
+        _taskbarOverlay.ShowMetricHint(step.Label);
         _taskbarOverlay.SetDisplay(updated.Metrics, updated.ShowPercentSign);
     }
 

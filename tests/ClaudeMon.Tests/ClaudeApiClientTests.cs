@@ -223,10 +223,90 @@ public class ClaudeApiClientTests : IDisposable
         Assert.InRange(fraction.Value, 0.49, 0.51);
     }
 
+    // --- Error paths: everything below the happy path must come back as a result record, never
+    // as an exception thrown into the poll loop (issue #103).
+
+    [Fact]
+    public async Task GetUsage_JsonNullBody_ReturnsEmptyResponseError()
+    {
+        // Well-formed JSON that deserializes to null — distinct from a parse failure.
+        _handler.SetResponse(HttpStatusCode.OK, "null");
+
+        var result = await _client.GetUsageAsync("test-token");
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("empty", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetUsage_NetworkFailure_ReturnsErrorWithoutThrowing()
+    {
+        _handler.SetException(new HttpRequestException("no such host"));
+
+        var result = await _client.GetUsageAsync("test-token");
+
+        Assert.False(result.IsSuccess);
+        Assert.False(result.IsAuthError);
+        Assert.False(result.IsRateLimited);
+        Assert.Contains("Network error", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task GetUsage_Timeout_ReturnsTimedOutError()
+    {
+        // HttpClient surfaces its own timeout as a TaskCanceledException with no cancellation
+        // requested — which must read as "timed out", not as a shutdown.
+        _handler.SetException(new TaskCanceledException("The request timed out."));
+
+        var result = await _client.GetUsageAsync("test-token");
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("timed out", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetUsage_Cancelled_PropagatesInsteadOfReportingAnError()
+    {
+        // Shutdown is not a poll failure: the monitor's own catch handles it, and reporting it
+        // as an error would flap the tray icon on the way out.
+        _handler.SetResponse(HttpStatusCode.OK, "{}");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => _client.GetUsageAsync("test-token", cts.Token));
+    }
+
+    [Fact]
+    public void Dispose_OwnedHttpClient_IsDisposedIdempotently()
+    {
+        // Constructed without a caller-supplied client, so this one owns (and must dispose) it.
+        var client = new ClaudeApiClient();
+
+        Assert.Null(Record.Exception(client.Dispose));
+        Assert.Null(Record.Exception(client.Dispose));
+    }
+
+    [Fact]
+    public async Task Dispose_CallerSuppliedHttpClient_IsLeftAlone()
+    {
+        // The monitor shares one HttpClient across the API client and the token refresher, so
+        // disposing either must not pull the socket handler out from under the other.
+        using var shared = new HttpClient(_handler);
+        new ClaudeApiClient(shared).Dispose();
+
+        _handler.SetResponse(HttpStatusCode.OK, """{"five_hour":{"utilization":1,"resets_at":"2026-01-01T00:00:00Z"}}""");
+        using var second = new ClaudeApiClient(shared);
+        var result = await second.GetUsageAsync("test-token");
+
+        Assert.True(result.IsSuccess);
+    }
+
     private sealed class MockHttpHandler : HttpMessageHandler
     {
         private HttpStatusCode _statusCode = HttpStatusCode.OK;
         private string _responseBody = "";
+        private Exception? _exception;
 
         public HttpRequestMessage? LastRequest { get; private set; }
 
@@ -236,10 +316,17 @@ public class ClaudeApiClientTests : IDisposable
             _responseBody = body;
         }
 
+        /// <summary>Makes the next send fail the way the transport would.</summary>
+        public void SetException(Exception exception) => _exception = exception;
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequest = request;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_exception is not null)
+                return Task.FromException<HttpResponseMessage>(_exception);
+
             var response = new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(_responseBody),

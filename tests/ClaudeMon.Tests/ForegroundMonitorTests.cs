@@ -6,6 +6,7 @@ using ClaudeMon.UI;
 /// The fallback rules that decide whether the foreground window is a usable "the user is over
 /// here" signal (#108). Pure — no desktop required.
 /// </summary>
+[Collection("Desktop metrics")] // shares WinForms' Screen/SystemInformation statics — see DesktopMetricsCollection
 public class ForegroundMonitorTests
 {
     private static readonly IntPtr Shell = new(0x1000);

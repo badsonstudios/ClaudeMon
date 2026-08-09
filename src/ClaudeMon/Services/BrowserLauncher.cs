@@ -32,13 +32,23 @@ internal static class BrowserLauncher
     /// that can't open the URL is not an error the caller can act on.
     /// </summary>
     public static void TryOpenHttp(string? url)
+        => TryOpenHttp(url, static uri =>
+            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }));
+
+    /// <summary>
+    /// The guard-and-swallow policy, with the shell-execute injected. Exists so tests can
+    /// exercise the accept/reject decision and the swallow-on-failure contract without a real
+    /// browser being launched; production always passes the <see cref="Process.Start(ProcessStartInfo)"/>
+    /// lambda above.
+    /// </summary>
+    internal static void TryOpenHttp(string? url, Action<Uri> open)
     {
         if (!IsSafeHttpUrl(url, out var uri))
             return;
 
         try
         {
-            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+            open(uri);
         }
         catch
         {

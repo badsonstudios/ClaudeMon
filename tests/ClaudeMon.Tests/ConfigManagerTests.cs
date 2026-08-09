@@ -538,6 +538,60 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void Save_TempFileUnwritable_DoesNotThrowAndKeepsSettingsInMemory()
+    {
+        // A transient lock on the temp file (AV scanner, an earlier write still being flushed)
+        // must not crash the app: the in-memory settings still serve this session and the next
+        // Save retries. The lock also blocks the best-effort cleanup, which is equally silent.
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        using var blocker = new FileStream(
+            path + ".tmp", FileMode.Create, FileAccess.Write, FileShare.None);
+
+        manager.Update(new AppSettings { PollIntervalMinutes = 11 });
+
+        Assert.Equal(11, manager.Settings.PollIntervalMinutes);
+        Assert.False(File.Exists(path)); // nothing was swapped into place
+    }
+
+    [Fact]
+    public void Save_ExistingConfigLocked_DoesNotThrowAndCleansUpTheTemp()
+    {
+        // The temp write succeeds but the atomic swap can't take the destination. The previous
+        // config survives untouched and the orphaned temp is cleaned up.
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        manager.Update(new AppSettings { PollIntervalMinutes = 6 });
+
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            manager.Update(new AppSettings { PollIntervalMinutes = 8 });
+        }
+
+        Assert.Equal(8, manager.Settings.PollIntervalMinutes);
+        Assert.Empty(Directory.GetFiles(_tempDir, "*.tmp"));
+
+        var reloaded = new ConfigManager(path);
+        reloaded.Load();
+        Assert.Equal(6, reloaded.Settings.PollIntervalMinutes); // the on-disk file was preserved
+    }
+
+    [Fact]
+    public void DefaultConfigPath_IsUnderLocalAppData_AndResolvesWithoutTouchingDisk()
+    {
+        // Constructing with no path must only resolve a location — the real user config is not
+        // read or written here (this test would otherwise stomp the developer's own settings).
+        var manager = new ConfigManager();
+
+        var expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ClaudeMon",
+            "config.json");
+        Assert.Equal(expected, manager.ConfigPath);
+        Assert.Equal(new AppSettings().PollIntervalMinutes, manager.Settings.PollIntervalMinutes);
+    }
+
+    [Fact]
     public void PollInterval_ReturnsCorrectTimeSpan()
     {
         var settings = new AppSettings { PollIntervalMinutes = 3 };

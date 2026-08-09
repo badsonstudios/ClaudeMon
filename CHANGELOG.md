@@ -40,6 +40,15 @@ GitHub release; the release notes are taken from these entries.
   silently ignored — the status of the status page is not itself an alert — and the last known
   state stays on screen. (#132)
 
+### Changed
+- **Usage API requests now identify ClaudeMon.** Every poll of the Anthropic usage endpoint
+  previously went out with no `User-Agent` at all; it now sends `ClaudeMon/<version>`, along
+  with `Accept: application/json` and the `anthropic-beta: oauth-2025-04-20` header that Claude
+  Code attaches to its own OAuth-authenticated calls. Deliberately honest identification rather
+  than impersonating the Claude Code CLI — live testing found the endpoint's rate limit is keyed
+  on your token, not on who claims to be asking, so there is nothing to gain by pretending.
+  Nothing about polling, alerts, or the 401/429 paths changed. (#136)
+
 ## [0.25.0] - 2026-08-09
 
 ### Fixed

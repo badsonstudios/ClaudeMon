@@ -449,6 +449,39 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void Save_DirectoryUncreatable_DoesNotThrowAndKeepsSettingsInMemory()
+    {
+        // Creating the settings directory can fail for the same reasons the write can (ACL denial,
+        // a folder lock, disk full). Simulated here by parking a *file* where the directory needs
+        // to go, which makes Directory.CreateDirectory throw. Save is best-effort: the in-memory
+        // settings still serve this session and the next Save retries.
+        var blocker = Path.Combine(_tempDir, "blocked");
+        File.WriteAllText(blocker, "not a directory");
+        var path = Path.Combine(blocker, "config.json");
+        var manager = new ConfigManager(path);
+
+        manager.Update(new AppSettings { PollIntervalMinutes = 13 });
+
+        Assert.Equal(13, manager.Settings.PollIntervalMinutes);
+        Assert.False(File.Exists(path)); // nothing was written
+        Assert.Empty(Directory.GetFiles(_tempDir, "*.tmp")); // and no temp was orphaned
+    }
+
+    [Fact]
+    public void Load_DirectoryUncreatable_DoesNotThrowAndFallsBackToDefaults()
+    {
+        // Load() saves a fresh config when none exists, so the same unwritable directory reaches
+        // Save() through the startup path — the one place a throw would take the app down.
+        var blocker = Path.Combine(_tempDir, "blocked");
+        File.WriteAllText(blocker, "not a directory");
+        var manager = new ConfigManager(Path.Combine(blocker, "config.json"));
+
+        manager.Load();
+
+        Assert.Equal(new AppSettings().PollIntervalMinutes, manager.Settings.PollIntervalMinutes);
+    }
+
+    [Fact]
     public void Save_IsAtomic_LeavesNoTempFileAndPreservesConfigOnRewrite()
     {
         var path = Path.Combine(_tempDir, "config.json");

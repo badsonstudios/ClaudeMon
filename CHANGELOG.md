@@ -5,6 +5,15 @@ GitHub release; the release notes are taken from these entries.
 
 ## [0.26.0] - Unreleased
 
+### Fixed
+- **Saving settings can no longer crash ClaudeMon when its settings folder can't be created.**
+  The rest of the save path was already best-effort — if the file is locked or unwritable the
+  in-memory settings still serve the session and the next save retries — but creating the
+  `%LOCALAPPDATA%\ClaudeMon` folder sat outside that guard, so an ACL denial, a
+  controlled-folder-access block, or a full disk threw straight out into whichever settings
+  dialog or background poll happened to trigger the save. It is now handled the same quiet,
+  best-effort way as the write itself. (#145)
+
 ### Changed
 - **Usage API requests now identify ClaudeMon.** Every poll of the Anthropic usage endpoint
   previously went out with no `User-Agent` at all; it now sends `ClaudeMon/<version>`, along

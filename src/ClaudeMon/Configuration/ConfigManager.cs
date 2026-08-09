@@ -72,10 +72,6 @@ public sealed class ConfigManager
 
     public void Save()
     {
-        var dir = Path.GetDirectoryName(_configPath);
-        if (dir is not null && !Directory.Exists(dir))
-            Directory.CreateDirectory(dir);
-
         // Write atomically and best-effort: serialize to a temp file in the same directory, then
         // swap it into place so a crash mid-write can't truncate config.json and make Load()
         // silently reset to defaults. File.Replace is a true atomic, ACL-preserving swap (used once
@@ -83,10 +79,17 @@ public sealed class ConfigManager
         // transient lock (AV scanner, another reader) must not crash the app or orphan the temp —
         // the in-memory Settings still serve this session and the next Save retries. Mirrors
         // CredentialReader.WriteBack (which is where the credentials file gets the same treatment).
+        // Creating the settings directory is guarded too — an ACL denial, a controlled-folder-access
+        // block, or a full disk would otherwise throw straight out of this best-effort method into
+        // whichever UI or poll path triggered the save.
         var json = JsonSerializer.Serialize(Settings, JsonOptions);
         var tempPath = _configPath + ".tmp";
         try
         {
+            var dir = Path.GetDirectoryName(_configPath);
+            if (dir is not null && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
             File.WriteAllText(tempPath, json);
             if (File.Exists(_configPath))
                 File.Replace(tempPath, _configPath, destinationBackupFileName: null);

@@ -5,16 +5,6 @@ GitHub release; the release notes are taken from these entries.
 
 ## [0.26.0] - Unreleased
 
-<<<<<<< HEAD
-### Fixed
-- **Saving settings can no longer crash ClaudeMon when its settings folder can't be created.**
-  The rest of the save path was already best-effort — if the file is locked or unwritable the
-  in-memory settings still serve the session and the next save retries — but creating the
-  `%LOCALAPPDATA%\ClaudeMon` folder sat outside that guard, so an ACL denial, a
-  controlled-folder-access block, or a full disk threw straight out into whichever settings
-  dialog or background poll happened to trigger the save. It is now handled the same quiet,
-  best-effort way as the write itself. (#145)
-=======
 ### Added
 - **Middle-click the taskbar readout to cycle what it shows** — deciding mid-session that you'd
   rather be watching the weekly number than the session one meant opening Settings for a change
@@ -49,7 +39,6 @@ GitHub release; the release notes are taken from these entries.
   it also pauses while the workstation is locked. A status page that can't be reached is
   silently ignored — the status of the status page is not itself an alert — and the last known
   state stays on screen. (#132)
->>>>>>> origin/main
 
 ### Changed
 - **Usage API requests now identify ClaudeMon.** Every poll of the Anthropic usage endpoint
@@ -73,6 +62,13 @@ GitHub release; the release notes are taken from these entries.
   is scrolling, the mouse wheel scrolls the dialog instead of quietly changing whichever
   dropdown or spinner you last clicked. On a screen where it already fitted, nothing
   changes. (#139)
+- **Saving settings can no longer crash ClaudeMon when its settings folder can't be created.**
+  The rest of the save path was already best-effort — if the file is locked or unwritable the
+  in-memory settings still serve the session and the next save retries — but creating the
+  `%LOCALAPPDATA%\ClaudeMon` folder sat outside that guard, so an ACL denial, a
+  controlled-folder-access block, or a full disk threw straight out into whichever settings
+  dialog or background poll happened to trigger the save. It is now handled the same quiet,
+  best-effort way as the write itself. (#145)
 
 ## [0.25.0] - 2026-08-09
 

@@ -54,6 +54,14 @@ GitHub release; the release notes are taken from these entries.
   about this incident" state now persists with your settings, so restarting ClaudeMon during a
   long Anthropic incident stays quiet instead of raising the same balloon again. An incident that
   gets worse still notifies, and recovery re-arms it for the next one. (#138)
+- **The Settings window can no longer run off the bottom of your screen** — it sized itself
+  purely from the tab you were on and grew downwards, so on a short display (or at a large scale
+  factor) switching from a short tab to a long one could push OK and Cancel below the desktop
+  with no way to reach them. The window now slides up to stay inside the working area of the
+  monitor it is on, caps its height there, and scrolls whatever still doesn't fit — and while it
+  is scrolling, the mouse wheel scrolls the dialog instead of quietly changing whichever
+  dropdown or spinner you last clicked. On a screen where it already fitted, nothing
+  changes. (#139)
 
 ## [0.25.0] - 2026-08-09
 

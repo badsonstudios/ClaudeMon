@@ -3,6 +3,18 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.25.0] - 2026-08-09
+
+### Fixed
+- **The taskbar readout no longer floats on top of fullscreen apps** — when a game, a
+  fullscreen RDP session, or any other app covers a monitor edge to edge, that monitor's
+  readout now hides along with the taskbar it lives on, and returns within about a second of
+  the app closing or losing focus. Previously the readout re-asserted itself above
+  everything, so a machine with quiet usage could stamp a permanent "0%" over your game (or
+  over a fullscreen remote-desktop view of another machine, where it masquerades as the
+  remote machine's UI and is genuinely confusing). Readouts on other monitors are unaffected,
+  and a maximized window — which leaves the taskbar visible — never hides it. (#123)
+
 ## [0.24.0] - 2026-08-04
 
 ### Added

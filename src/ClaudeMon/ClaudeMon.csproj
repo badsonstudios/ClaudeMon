@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>0.24.0</Version>
+    <Version>0.25.0</Version>
     <AssemblyTitle>ClaudeMon</AssemblyTitle>
     <Description>Windows system tray monitor for Claude AI usage</Description>
     <!-- The app icon for every window's taskbar button and Alt-Tab entry (#108). WinForms sets

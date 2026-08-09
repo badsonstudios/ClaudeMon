@@ -29,6 +29,7 @@ public sealed class TrayApplication : IDisposable
     private readonly FlyoutPanel _flyout;
     private readonly TaskbarOverlayManager _taskbarOverlay;
     private readonly AlertManager _alertManager;
+    private readonly PushNotifier _pushNotifier;
     private readonly UpdateChecker _updateChecker;
     private readonly UpdateInstaller _updateInstaller;
     private readonly System.Timers.Timer _updateTimer;
@@ -144,7 +145,10 @@ public sealed class TrayApplication : IDisposable
             ContextMenuStrip = _contextMenu,
         };
         _notifyIcon.MouseClick += OnTrayMouseClick;
-        _alertManager = new AlertManager(_notifyIcon);
+        _pushNotifier = new PushNotifier(_logger);
+        // Route every AlertManager notification through both the desktop balloon and, when a
+        // push topic is configured, ntfy — so a rate-limit warning reaches your phone too.
+        _alertManager = new AlertManager(_notifyIcon, ShowAlert, _configManager.Settings.AlertLatchState);
 
         _updateChecker = new UpdateChecker();
         _updateInstaller = new UpdateInstaller();
@@ -246,6 +250,12 @@ public sealed class TrayApplication : IDisposable
                 _notifyIcon.Text = TrayTooltip.Compose(e.Usage, e.Status);
 
                 _alertManager.Check(e.Usage, _configManager.Settings);
+                // Persisted unconditionally, unlike BudgetAlertState's Equals-guard — the
+                // per-bucket Dictionary here doesn't get structural equality from the record,
+                // so a reference comparison would always look "changed" anyway. The write is a
+                // small atomic JSON save on the normal 2-10 minute poll cadence, not a hot loop.
+                _configManager.Update(
+                    _configManager.Settings with { AlertLatchState = _alertManager.GetLatchState() });
             }
             else if (e.Error is not null)
             {
@@ -322,6 +332,15 @@ public sealed class TrayApplication : IDisposable
         // The cost-breakdown window (issue #74): per-model / per-project tables
         // from the local transcripts, with CSV export.
         menu.Items.Add("Usage && costs...", null, (_, _) => ShowUsageBreakdown());
+
+        // Fires the exact same two channels a real alert would (balloon + push), so this is a
+        // way to confirm end-to-end delivery — including to your phone — without waiting for
+        // an actual threshold to trip. Deliberately does not touch AlertManager's fired/latch
+        // state, so sending a test never suppresses or delays the next real alert.
+        menu.Items.Add("Send test alert", null, (_, _) => ShowAlert(
+            "Test Alert",
+            "This is a test alert from ClaudeMon — if it reached your phone, push notifications are working.",
+            ToolTipIcon.Info));
 
         // Snooze (issue #14): quiet the alert balloons for a while; polling and the
         // tray/taskbar readouts keep updating. The submenu's header doubles as the snoozed
@@ -767,6 +786,18 @@ public sealed class TrayApplication : IDisposable
         }
     }
 
+    /// <summary>
+    /// Shows one alert through both channels a real one uses — the desktop balloon, and,
+    /// when a push topic is configured, ntfy — so <see cref="AlertManager"/>'s callback and
+    /// the "Send test alert" menu item exercise identical delivery code, not a parallel copy
+    /// that could silently drift from what real alerts actually do.
+    /// </summary>
+    private void ShowAlert(string title, string text, ToolTipIcon icon)
+    {
+        _notifyIcon.ShowBalloonTip(5000, title, text, icon);
+        _pushNotifier.Notify(_configManager.Settings.Notifications, title, text);
+    }
+
     /// <summary>Snoozes alert notifications for <paramref name="duration"/> from now.</summary>
     private void Snooze(TimeSpan duration) => SetSnooze(DateTimeOffset.UtcNow + duration);
 
@@ -917,6 +948,7 @@ public sealed class TrayApplication : IDisposable
         _localUsage.Dispose();
         _apiClient.Dispose();
         _tokenRefresher.Dispose();
+        _pushNotifier.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _contextMenu.Dispose();

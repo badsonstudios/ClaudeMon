@@ -104,6 +104,17 @@ public record AppSettings
     [JsonPropertyName("budgetAlertState")]
     public BudgetAlertState? BudgetAlertState { get; init; }
 
+    /// <summary>
+    /// The 5-hour and weekly alert fired/latch state (see <see cref="Monitoring.AlertManager"/>),
+    /// persisted so a routine app restart doesn't re-fire an alert for a condition you've
+    /// already been notified about and that's still true — before this existed, the latch only
+    /// lived in memory, so every restart re-armed everything from scratch. Internal state, not a
+    /// user setting — kept top-level like <see cref="BudgetAlertState"/>, for the same reason:
+    /// the Settings dialog's <c>with</c>-expression save must not silently drop it.
+    /// </summary>
+    [JsonPropertyName("alertLatchState")]
+    public AlertLatchState? AlertLatchState { get; init; }
+
     [JsonPropertyName("taskbarDisplay")]
     public TaskbarDisplaySettings TaskbarDisplay { get; init; } = new();
 
@@ -324,6 +335,20 @@ public record BudgetAlertState(
     [property: JsonPropertyName("week")] string? WeeklyPeriod,
     [property: JsonPropertyName("weekPct")] int WeeklyFiredPct);
 
+/// <summary>
+/// See <see cref="AppSettings.AlertLatchState"/>. <see cref="WeeklyBuckets"/> is keyed the same
+/// way <c>AlertManager</c>'s own in-memory dictionary is — the bucket's kind, or its model for
+/// a per-model cap — so a saved latch reattaches to the right bucket after a restart.
+/// </summary>
+public record AlertLatchState(
+    [property: JsonPropertyName("paceWarningFired")] bool PaceWarningFired,
+    [property: JsonPropertyName("nearCapFired")] bool NearCapFired,
+    [property: JsonPropertyName("weeklyBuckets")] Dictionary<string, WeeklyBucketLatch> WeeklyBuckets);
+
+public record WeeklyBucketLatch(
+    [property: JsonPropertyName("warningFired")] bool WarningFired,
+    [property: JsonPropertyName("criticalFired")] bool CriticalFired);
+
 public record NotificationSettings
 {
     [JsonPropertyName("enabled")]
@@ -342,4 +367,21 @@ public record NotificationSettings
 
     /// <summary>True while <see cref="SnoozeUntil"/> is in the future.</summary>
     public bool IsSnoozed(DateTimeOffset now) => SnoozeUntil is { } until && until > now;
+
+    /// <summary>
+    /// ntfy (https://ntfy.sh) topic to push alerts to your phone, in addition to the desktop
+    /// balloon — see <see cref="Services.PushNotifier"/>. Null or empty disables push entirely
+    /// (the default): an ntfy topic is effectively a shared secret, since anyone who knows an
+    /// unauthenticated topic's name can read it, so this has to be something the user opts into
+    /// and picks themselves rather than something ClaudeMon generates or ships with.
+    /// </summary>
+    [JsonPropertyName("pushTopic")]
+    public string? PushTopic { get; init; }
+
+    /// <summary>
+    /// The ntfy server to push to. Defaults to the public https://ntfy.sh; point this at a
+    /// self-hosted instance to keep alerts off the public server entirely.
+    /// </summary>
+    [JsonPropertyName("pushServerUrl")]
+    public string PushServerUrl { get; init; } = "https://ntfy.sh";
 }

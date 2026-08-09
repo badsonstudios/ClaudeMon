@@ -93,6 +93,7 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | **Critical alert near the limit at** | The near-cap backstop — a critical "almost out" alert once 5-hour usage reaches this percentage, regardless of pace (default 90%) |
 | **Weekly (7-day) warning at** | Notification when a weekly bucket crosses this percentage — the overall 7-day cap *and* each per-model weekly cap ("Weekly (Fable)"), each alerting once per window. Escalates to a critical alert past the near-cap percentage above, or when Anthropic flags that bucket critical |
 | **Notify when the rate limit resets** | Notify when your 5-hour limit resets to full capacity |
+| **Push notification topic (ntfy.sh)** | Optional [ntfy](https://ntfy.sh) topic — when set, every alert that shows a desktop balloon (pace warning, near-cap, weekly, reset) also pushes to this topic, so it reaches your phone via the free ntfy Android/iOS app. Blank disables it (the default). Pick a random, unguessable topic name rather than something obvious — unauthenticated ntfy topics are readable by anyone who knows the name. Points at the public `ntfy.sh` server unless a self-hosted server URL is set in the config file (`pushServerUrl`) |
 
 ### Taskbar
 

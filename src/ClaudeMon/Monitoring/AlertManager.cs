@@ -71,16 +71,45 @@ public sealed class AlertManager
     private bool _resetNotificationFired;
     private double _previousFiveHourPct = -1;
 
-    public AlertManager(NotifyIcon notifyIcon)
-        : this(notifyIcon, null)
+    public AlertManager(NotifyIcon notifyIcon, AlertLatchState? initialState = null)
+        : this(notifyIcon, null, initialState)
     {
     }
 
-    internal AlertManager(NotifyIcon notifyIcon, Action<string, string, ToolTipIcon>? onNotification)
+    internal AlertManager(
+        NotifyIcon notifyIcon,
+        Action<string, string, ToolTipIcon>? onNotification,
+        AlertLatchState? initialState = null)
     {
         _notifyIcon = notifyIcon;
         _onNotification = onNotification;
+
+        if (initialState is null)
+            return;
+
+        _paceWarningFired = initialState.PaceWarningFired;
+        _nearCapFired = initialState.NearCapFired;
+        foreach (var (key, latch) in initialState.WeeklyBuckets)
+        {
+            _weeklyState[key] = new WeeklyBucketState
+            {
+                WarningFired = latch.WarningFired,
+                CriticalFired = latch.CriticalFired,
+            };
+        }
     }
+
+    /// <summary>
+    /// Snapshots the current fired/latch flags for persistence (see
+    /// <see cref="AppSettings.AlertLatchState"/>) — called after every <see cref="Check"/> so a
+    /// restart can reattach to whatever was already true instead of re-arming from scratch.
+    /// </summary>
+    public AlertLatchState GetLatchState() => new(
+        _paceWarningFired,
+        _nearCapFired,
+        _weeklyState.ToDictionary(
+            kv => kv.Key,
+            kv => new WeeklyBucketLatch(kv.Value.WarningFired, kv.Value.CriticalFired)));
 
     public void Check(UsageResponse usage, AppSettings settings)
     {

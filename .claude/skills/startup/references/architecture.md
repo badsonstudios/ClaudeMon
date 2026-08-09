@@ -39,8 +39,14 @@ ClaudeMon/
   `WeeklyAlertTargets`, into the weekly buckets `AlertManager` alerts on — one source for
   both, so they can't disagree (legacy 5h/7d fallback included); `TrayTooltip` composes the tray hover text under the
   127-char `NotifyIcon` cap, and `LocalCostText` composes the flyout's "Today: ~$…" cost
-  line — all pure and unit-tested, consumed by the UI layer.
+  line — all pure and unit-tested, consumed by the UI layer. `ServiceStatusText` composes the
+  flyout's Anthropic-service line (null while healthy, so a healthy service draws nothing) and
+  `ServiceStatusAlerts` is the pure incident-start/escalation decision behind the optional
+  outage notification, settings gate (opt-in toggle, notifications switch, snooze) included.
 - **Services** (`Services/`) — `ClaudeApiClient` calls the Anthropic usage API;
+  `ServiceStatusClient` reads the public status page (`status.claude.com/api/v2/status.json`,
+  unauthenticated, silent on any failure) with a pure `Parse`, fetched by `UsageMonitor` on the
+  usage poll's own cadence rather than a second timer;
   `CredentialReader` loads the OAuth token from `~/.claude/.credentials.json`;
   `TokenRefresher` renews it; `UpdateChecker`/`UpdateInstaller` drive in-app updates;
   `SessionEvents` wraps lock/unlock notifications; `BrowserLauncher` is the sole
@@ -56,7 +62,8 @@ ClaudeMon/
   (state persisted in `AppSettings.BudgetAlertState`).
 - **Configuration** (`Configuration/`) — `ConfigManager` persists `AppSettings` as JSON and
   manages the "Start with Windows" registry entry.
-- **Models** (`Models/`) — immutable `record` types for settings and API payloads.
+- **Models** (`Models/`) — immutable `record` types for settings and API payloads (including
+  `ServiceStatus`, the status page's overall indicator and its wording).
 
 ## Patterns & conventions
 

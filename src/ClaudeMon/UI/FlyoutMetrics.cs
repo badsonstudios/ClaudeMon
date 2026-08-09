@@ -35,6 +35,8 @@ public sealed class FlyoutMetrics
     internal const int BaseForecastHeight = 16;
     internal const int BaseLocalCostGap = 6;
     internal const int BaseLocalCostHeight = 16;
+    internal const int BaseServiceStatusGap = 6;
+    internal const int BaseServiceStatusHeight = 16;
 
     public int LeftInset { get; }
     public int TopPadding { get; }
@@ -55,6 +57,8 @@ public sealed class FlyoutMetrics
     public int ForecastHeight { get; }
     public int LocalCostGap { get; }
     public int LocalCostHeight { get; }
+    public int ServiceStatusGap { get; }
+    public int ServiceStatusHeight { get; }
 
     private FlyoutMetrics(int dpi)
     {
@@ -80,6 +84,8 @@ public sealed class FlyoutMetrics
         ForecastHeight = S(BaseForecastHeight);
         LocalCostGap = S(BaseLocalCostGap);
         LocalCostHeight = S(BaseLocalCostHeight);
+        ServiceStatusGap = S(BaseServiceStatusGap);
+        ServiceStatusHeight = S(BaseServiceStatusHeight);
     }
 
     /// <summary>Builds the scaled metrics for the given device DPI (96 = 100%).</summary>
@@ -92,7 +98,8 @@ public sealed class FlyoutMetrics
     /// </summary>
     public Size ContentSize(
         bool isAuthError, int usageRows,
-        bool hasForecast = false, bool hasHistory = false, bool hasLocalCost = false)
+        bool hasForecast = false, bool hasHistory = false, bool hasLocalCost = false,
+        bool hasServiceStatus = false)
     {
         int body;
         if (isAuthError)
@@ -116,6 +123,12 @@ public sealed class FlyoutMetrics
         // The local cost line ("Today: ~$…"), fed from the Claude Code transcripts.
         if (hasLocalCost && !isAuthError)
             body += LocalCostGap + LocalCostHeight;
+
+        // The Anthropic service line, present only during an incident — and then in the
+        // auth-expired state too, since "is it me or is it down?" is exactly the question a
+        // failing sign-in raises.
+        if (hasServiceStatus)
+            body += ServiceStatusGap + ServiceStatusHeight;
 
         var height = TopPadding + TitleAdvance + body + StatusGap + StatusLineHeight + BottomPadding;
         return new Size(Width, height);

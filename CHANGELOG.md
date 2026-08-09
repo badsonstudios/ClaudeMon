@@ -5,6 +5,22 @@ GitHub release; the release notes are taken from these entries.
 
 ## [0.26.0] - Unreleased
 
+### Added
+- **Anthropic service status in the flyout** — when Claude starts misbehaving, the first
+  question is "is it me, or is it down?". ClaudeMon now reads Anthropic's public status page on
+  the same schedule it already polls usage, and shows a single coloured line in the flyout —
+  `⚠ Anthropic: Partial System Outage` — whenever the page reports anything other than
+  operational, using the status page's own wording. Click the line to open the status page.
+  While everything is healthy nothing is shown at all: the flyout looks exactly as it did. The
+  line also appears in the sign-in-expired state, where "is it me or is it down?" is precisely
+  the question a failing sign-in raises. An optional **Notify on Anthropic service incidents**
+  setting (Alerts tab, **off** by default) raises one balloon when an incident starts, and
+  another only if it gets worse — never one per poll — and respects Snooze like every other
+  alert. There is no new timer and no extra polling: the status ride-alongs the usage poll, so
+  it also pauses while the workstation is locked. A status page that can't be reached is
+  silently ignored — the status of the status page is not itself an alert — and the last known
+  state stays on screen. (#132)
+
 ### Changed
 - **Usage API requests now identify ClaudeMon.** Every poll of the Anthropic usage endpoint
   previously went out with no `User-Agent` at all; it now sends `ClaudeMon/<version>`, along

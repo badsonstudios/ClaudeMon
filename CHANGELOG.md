@@ -14,11 +14,15 @@ GitHub release; the release notes are taken from these entries.
   you landed on so the gesture explains itself. Plain left-click still opens the flyout, and
   cycling on any monitor's readout moves them all. The gesture is a shortcut over the same
   Settings toggles rather than a setting of its own, so Settings always shows what you're looking
-  at and the choice survives a restart; where the toggles show several metrics at once, the first
-  click collapses onto the leftmost one and the next advances. The Bar style cycles the two
-  metrics it can draw as a bar — the bar itself stays put, and the two time toggles it has no way
-  to display are left exactly as you set them. While the Settings dialog is open it owns the
-  readouts as its live preview, so the gesture stands down until you close it. (#71)
+  at and the choice survives a restart. If your readout shows several metrics at once, that
+  layout is a stop on the ring in its own right — the first click collapses onto its leftmost
+  element, each one after that advances, and one lap brings back exactly what you had (flashed as
+  `custom`), so cycling is a temporary focus rather than an edit that eats your layout. Tick the
+  toggles in Settings and those become the layout it returns to. The Bar style cycles the two
+  metrics it can draw as a bar — the bar itself stays put, both bars at once is a layout of its
+  own, and the two time toggles it has no way to display are left exactly as you set them. While
+  the Settings dialog is open it owns the readouts as its live preview, so the gesture stands
+  down until you close it. (#71, #156)
 - **Estimated time to limit on the taskbar readout** — the burn-rate projection the flyout has
   always shown ("~1h 23m to limit") is now available as a readout element of its own (`~1h 23m`),
   tilde-marked to tell an estimate from the reset countdown's known clock time, and showing a

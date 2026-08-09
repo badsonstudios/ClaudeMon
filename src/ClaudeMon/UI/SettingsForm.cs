@@ -727,6 +727,17 @@ public sealed class SettingsForm : Form
             _ => 5,
         };
 
+        // Pulled out of the initializer below because the click-to-cycle home is derived from
+        // these and the saved toggles (see CycleHome), and a `with` initializer can't read its
+        // own members.
+        var savedTaskbar = _configManager.Settings.TaskbarDisplay;
+        var taskbarStyle = SelectedOption(_styleCombo, StyleOptions);
+        var taskbarMetrics = new TaskbarMetricSelection(
+            Session: _showSessionToggle.Checked,
+            Weekly: _showWeeklyToggle.Checked,
+            TimeToLimit: _showTimeToLimitToggle.Checked,
+            TimeToReset: _showTimeToResetToggle.Checked);
+
         return _configManager.Settings with
         {
             PollIntervalMinutes = pollMinutes,
@@ -756,17 +767,29 @@ public sealed class SettingsForm : Form
             // `with` on the existing record, not `new` — for the same reason as Notifications
             // above: a reconstruction silently resets every field the dialog doesn't edit
             // (today the migration-only LegacyShowSevenDay) on every settings save.
-            TaskbarDisplay = _configManager.Settings.TaskbarDisplay with
+            TaskbarDisplay = savedTaskbar with
             {
                 Enabled = _taskbarToggle.Checked,
-                Style = SelectedOption(_styleCombo, StyleOptions),
+                Style = taskbarStyle,
                 BarWidth = SelectedOption(_barWidthCombo, BarWidthOptions),
                 SizePercent = (int)_sizeNumeric.Value,
-                ShowSessionUsage = _showSessionToggle.Checked,
-                ShowWeeklyUsage = _showWeeklyToggle.Checked,
-                ShowTimeToLimit = _showTimeToLimitToggle.Checked,
-                ShowTimeToReset = _showTimeToResetToggle.Checked,
+                ShowSessionUsage = taskbarMetrics.Session,
+                ShowWeeklyUsage = taskbarMetrics.Weekly,
+                ShowTimeToLimit = taskbarMetrics.TimeToLimit,
+                ShowTimeToReset = taskbarMetrics.TimeToReset,
                 ShowPercentSign = _percentSignToggle.Checked,
+                // Editing these toggles also (re)sets the composition click-to-cycle wraps back
+                // to (#156): they are the source of truth for the readout, so a home left over
+                // from a composition you have since edited away must not reappear on a wrap.
+                // Leaving them alone says nothing about it, though — recomputing unconditionally
+                // would mean that opening Settings mid-cycle to change the poll interval quietly
+                // destroyed the layout the wrap was about to restore, which is the very loss
+                // this exists to prevent. Compared against the saved toggles rather than the
+                // ones the dialog loaded because the two are the same thing here: the gesture
+                // stands down while Settings is open, so only the user can make them differ.
+                CycleHome = taskbarMetrics == savedTaskbar.Metrics
+                    ? savedTaskbar.CycleHome
+                    : TaskbarMetricCycle.HomeFor(taskbarMetrics, taskbarStyle),
                 LabelColor = SelectedOption(_labelColorCombo, LabelColorOptions),
                 NumberColor = SelectedOption(_numberColorCombo, NumberColorOptions),
                 AllMonitors = _allMonitorsToggle.Checked,

@@ -3,7 +3,8 @@ namespace ClaudeMon.Models;
 /// <summary>
 /// A metric the taskbar readout can lead with. The declaration order is also the
 /// click-to-cycle ring order (issue #71): session → weekly → time-to-limit → reset
-/// countdown → back to session.
+/// countdown → back to session. A readout showing several of them at once is a stop on that
+/// ring too, but isn't a metric — see <c>UI.TaskbarMetricCycle.HomeFor</c> (issue #156).
 /// </summary>
 public enum TaskbarMetric
 {

@@ -288,6 +288,18 @@ public record TaskbarDisplaySettings
     public int PrimaryHorizontalOffset { get; init; }
 
     /// <summary>
+    /// The readout composition that click-to-cycle treats as home — the multi-element layout its
+    /// ring wraps back to, so a middle-click focuses one metric temporarily instead of destroying
+    /// what you built (issue #156). Persisted because a half-finished cycle outlives a restart.
+    /// <c>null</c> when there is nothing to remember: a readout the ring can already take you to
+    /// earns no second, identical-looking stop (see <c>UI.TaskbarMetricCycle.HomeFor</c>).
+    /// Settings rewrites this on every save — the toggles below stay the source of truth, so a
+    /// home they no longer describe can never reappear on a wrap.
+    /// </summary>
+    [JsonPropertyName("cycleHome")]
+    public TaskbarMetricSelection? CycleHome { get; init; }
+
+    /// <summary>
     /// The four display toggles as one value, for the code that treats them as a set — the
     /// overlay's element composition and the click-to-cycle gesture
     /// (<c>UI.TaskbarMetricCycle</c>). Derived, not persisted: the toggles above remain the

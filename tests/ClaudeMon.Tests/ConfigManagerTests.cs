@@ -282,6 +282,49 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void TaskbarDisplay_CycleHome_SurvivesARestartMidCycle()
+    {
+        // #156: the composition click-to-cycle wraps back to is remembered state, not a derived
+        // view, so it has to survive a restart in the middle of a cycle — otherwise quitting on
+        // the "weekly" stop still loses the layout the wrap was going to restore.
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        var composed = new TaskbarMetricSelection(
+            Session: true, Weekly: false, TimeToLimit: false, TimeToReset: true);
+
+        manager.Update(new AppSettings
+        {
+            TaskbarDisplay = new AppSettings().TaskbarDisplay
+                .WithMetrics(TaskbarMetricSelection.For(TaskbarMetric.Weekly)) with
+            {
+                CycleHome = composed,
+            },
+        });
+
+        var manager2 = new ConfigManager(path);
+        manager2.Load();
+
+        Assert.Equal(composed, manager2.Settings.TaskbarDisplay.CycleHome);
+        Assert.Equal(
+            TaskbarMetricSelection.For(TaskbarMetric.Weekly), manager2.Settings.TaskbarDisplay.Metrics);
+    }
+
+    [Fact]
+    public void TaskbarDisplay_CycleHome_IsAbsentUntilSomethingIsRemembered()
+    {
+        // Nothing to restore on a fresh or upgraded config, and the key stays out of the file
+        // rather than writing an all-false composition that would mean something different.
+        Assert.Null(new AppSettings().TaskbarDisplay.CycleHome);
+
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        manager.Load();
+
+        Assert.Null(manager.Settings.TaskbarDisplay.CycleHome);
+        Assert.DoesNotContain("cycleHome", File.ReadAllText(path));
+    }
+
+    [Fact]
     public void TaskbarDisplay_DisplayToggles_RoundTrip()
     {
         var path = Path.Combine(_tempDir, "config.json");

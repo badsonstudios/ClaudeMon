@@ -32,7 +32,10 @@ public class SettingsFormSaveTests : IDisposable
     }
 
     // Every taskbar field the dialog does edit, all away from their defaults, so a value that
-    // failed to survive the round trip can't coincide with the default.
+    // failed to survive the round trip can't coincide with the default. CycleHome stays at its
+    // default because it is derived from the toggles + style rather than being a control of its
+    // own (see BuildSettings) — under Bar these toggles show one bar, so home is null; the two
+    // tests below own that derivation.
     private static readonly TaskbarDisplaySettings EditedFields = new()
     {
         Enabled = false,
@@ -98,5 +101,81 @@ public class SettingsFormSaveTests : IDisposable
         });
 
         Assert.Equal(EditedFields with { LegacyShowSevenDay = true }, form.BuildSettings().TaskbarDisplay);
+    }
+
+    // #156's click-to-cycle home. The dialog has no control of its own for it — it is derived
+    // from the display toggles, and only when those actually change. The saved toggles are what
+    // the dialog loaded, so re-saving them changes nothing; a test makes the two disagree by
+    // moving the saved ones under the open form, which is exactly the state a real edit produces.
+    private static readonly TaskbarMetricSelection Composition = new(
+        Session: true, Weekly: false, TimeToLimit: false, TimeToReset: true);
+
+    [Fact]
+    public void BuildSettings_KeepsTheCycleHomeWhenTheDisplayTogglesAreUntouched()
+    {
+        // Mid-cycle (the toggles hold the collapsed readout, not anything the user chose), open
+        // Settings to change the poll interval and click OK. Recomputing home from those toggles
+        // would destroy the layout the next wrap was about to restore — #156 all over again, one
+        // unrelated dialog visit removed.
+        var manager = ManagerHolding(new AppSettings
+        {
+            TaskbarDisplay = new TaskbarDisplaySettings
+            {
+                ShowSessionUsage = false,
+                ShowWeeklyUsage = true,
+                CycleHome = Composition,
+            },
+        });
+        using var form = new SettingsForm(manager);
+
+        Assert.Equal(Composition, form.BuildSettings().TaskbarDisplay.CycleHome);
+    }
+
+    [Fact]
+    public void BuildSettings_MakesEditedDisplayTogglesTheNewCycleHome()
+    {
+        // Editing the toggles to a composition does replace the remembered one: Settings is the
+        // source of truth, so a home from a layout you have since edited can't come back.
+        var manager = ManagerHolding(new AppSettings
+        {
+            TaskbarDisplay = new TaskbarDisplaySettings
+            {
+                ShowSessionUsage = true,
+                ShowWeeklyUsage = true,
+                CycleHome = Composition,
+            },
+        });
+        using var form = new SettingsForm(manager);
+
+        // The dialog is holding session + weekly; make the saved toggles disagree, as an edit does.
+        manager.Update(manager.Settings with
+        {
+            TaskbarDisplay = manager.Settings.TaskbarDisplay.WithMetrics(Composition),
+        });
+
+        Assert.Equal(
+            new TaskbarMetricSelection(
+                Session: true, Weekly: true, TimeToLimit: false, TimeToReset: false),
+            form.BuildSettings().TaskbarDisplay.CycleHome);
+    }
+
+    [Fact]
+    public void BuildSettings_ForgetsTheCycleHomeWhenTheTogglesAreEditedToASingleMetric()
+    {
+        // Nothing left to protect: the ring reaches a single-metric readout on its own, so a
+        // remembered home would only be a second stop showing the same thing.
+        var manager = ManagerHolding(new AppSettings
+        {
+            TaskbarDisplay = new TaskbarDisplaySettings { CycleHome = Composition },
+        });
+        using var form = new SettingsForm(manager);
+
+        // The dialog is holding the default session-only readout; make the saved toggles disagree.
+        manager.Update(manager.Settings with
+        {
+            TaskbarDisplay = manager.Settings.TaskbarDisplay.WithMetrics(Composition),
+        });
+
+        Assert.Null(form.BuildSettings().TaskbarDisplay.CycleHome);
     }
 }

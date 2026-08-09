@@ -22,6 +22,12 @@ public sealed class FlyoutPanel : Form
     private UsageColorMode _colorMode = UsageColorMode.Pace;
     // Composed once per data update; null = no local cost data, line not drawn.
     private string? _localCostLine;
+    // The Anthropic service-status line: null = healthy or unknown, so nothing is drawn.
+    private string? _serviceStatusLine;
+    private ServiceStatusLevel _serviceStatusLevel = ServiceStatusLevel.Operational;
+    // Where that line was last painted, so a click on it can open the status page. Empty
+    // whenever the line isn't drawn.
+    private Rectangle _serviceStatusBounds = Rectangle.Empty;
 
     /// <summary>Raised when the flyout's settings button is clicked.</summary>
     public event EventHandler? SettingsRequested;
@@ -32,6 +38,12 @@ public sealed class FlyoutPanel : Form
     private static readonly Color DimTextColor = Color.FromArgb(140, 140, 140);
     private static readonly Color BarBackgroundColor = Color.FromArgb(50, 50, 50);
     private static readonly Color SparklineColor = Color.FromArgb(120, 170, 255);
+    // Service-status line colours, by severity — informational blue for maintenance, then the
+    // same amber → red progression the usage bars use.
+    private static readonly Color MaintenanceColor = Color.FromArgb(130, 170, 230);
+    private static readonly Color MinorColor = Color.FromArgb(235, 180, 80);
+    private static readonly Color MajorColor = Color.FromArgb(240, 140, 70);
+    private static readonly Color CriticalColor = Color.FromArgb(235, 90, 85);
     // The time-position marker drawn on each usage bar (where "now" is in the reset window).
     private static readonly Color TimeMarkerColor = Color.FromArgb(235, 235, 235);
 
@@ -82,6 +94,11 @@ public sealed class FlyoutPanel : Form
         _settingsButton.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
         _contentPanel.Controls.Add(_settingsButton);
 
+        // The service-status line is hand-drawn, so its "link" behaviour is hit-testing rather
+        // than a control: a hand cursor over it, and a click that opens the status page.
+        _contentPanel.MouseClick += OnPanelMouseClick;
+        _contentPanel.MouseMove += OnPanelMouseMove;
+
         Relayout();
     }
 
@@ -92,7 +109,8 @@ public sealed class FlyoutPanel : Form
         IReadOnlyList<double>? history = null,
         TimeSpan? timeToLimit = null,
         UsageColorMode colorMode = UsageColorMode.Pace,
-        LocalUsageSnapshot? localUsage = null)
+        LocalUsageSnapshot? localUsage = null,
+        ServiceStatus? serviceStatus = null)
     {
         _usage = usage;
         _rows = usage is null ? Array.Empty<LimitRow>() : LimitDisplay.BuildRows(usage);
@@ -102,6 +120,8 @@ public sealed class FlyoutPanel : Form
         _timeToLimit = timeToLimit;
         _colorMode = colorMode;
         _localCostLine = LocalCostText.Compose(localUsage);
+        _serviceStatusLine = ServiceStatusText.Compose(serviceStatus);
+        _serviceStatusLevel = serviceStatus?.Level ?? ServiceStatusLevel.Operational;
         Relayout();
     }
 
@@ -118,7 +138,8 @@ public sealed class FlyoutPanel : Form
             _rows.Count,
             hasForecast: _usage?.FiveHour is not null,
             hasHistory: HasHistory,
-            hasLocalCost: _localCostLine is not null);
+            hasLocalCost: _localCostLine is not null,
+            hasServiceStatus: _serviceStatusLine is not null);
 
         // Gear in the right corner, vertically centred on the status line (the bottom-left text)
         // so it reads as part of that row. The point-size glyph scales with DPI on its own; only
@@ -318,10 +339,60 @@ public sealed class FlyoutPanel : Form
             }
         }
 
+        // Anthropic service status — drawn in both the normal and auth-expired states (an
+        // outage is the other explanation for whatever brought the user here), and only when
+        // something is actually wrong. Healthy adds nothing at all.
+        if (_serviceStatusLine is not null)
+        {
+            y += m.ServiceStatusGap;
+            var lineRect = new Rectangle(left, y, contentWidth, m.ServiceStatusHeight);
+            using var serviceBrush = new SolidBrush(ServiceStatusColor(_serviceStatusLevel));
+            using var serviceFormat = new StringFormat(StringFormatFlags.NoWrap)
+            {
+                Trimming = StringTrimming.EllipsisCharacter,
+            };
+            g.DrawString(_serviceStatusLine, labelFont, serviceBrush, lineRect, serviceFormat);
+            // The clickable region is the text itself, not the whole row — the empty space to
+            // its right shouldn't show a hand cursor or open a browser.
+            var textWidth = (int)Math.Ceiling(g.MeasureString(_serviceStatusLine, labelFont).Width);
+            _serviceStatusBounds = new Rectangle(
+                left, y, Math.Min(textWidth, contentWidth), m.ServiceStatusHeight);
+            y += m.ServiceStatusHeight;
+        }
+        else
+        {
+            _serviceStatusBounds = Rectangle.Empty;
+        }
+
         // Status & last updated
         y += m.StatusGap;
         var statusText = FormatStatus();
         g.DrawString(statusText, labelFont, dimBrush, left, y);
+    }
+
+    private static Color ServiceStatusColor(ServiceStatusLevel level) => level switch
+    {
+        ServiceStatusLevel.Maintenance => MaintenanceColor,
+        ServiceStatusLevel.Minor => MinorColor,
+        ServiceStatusLevel.Major => MajorColor,
+        _ => CriticalColor,
+    };
+
+    // Opens the status page — the only URL this ever passes on, and BrowserLauncher gates it to
+    // http(s) regardless.
+    private void OnPanelMouseClick(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left || !_serviceStatusBounds.Contains(e.Location))
+            return;
+
+        BrowserLauncher.TryOpenHttp(ServiceStatusClient.StatusPageUrl);
+    }
+
+    private void OnPanelMouseMove(object? sender, MouseEventArgs e)
+    {
+        var cursor = _serviceStatusBounds.Contains(e.Location) ? Cursors.Hand : Cursors.Default;
+        if (_contentPanel.Cursor != cursor)
+            _contentPanel.Cursor = cursor;
     }
 
     /// <summary>

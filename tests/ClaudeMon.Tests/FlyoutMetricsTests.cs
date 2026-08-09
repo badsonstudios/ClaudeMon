@@ -216,6 +216,41 @@ public class FlyoutMetricsTests
     }
 
     [Fact]
+    public void ContentSize_WithServiceStatus_AddsServiceStatusBand()
+    {
+        var m = FlyoutMetrics.ForDpi(96);
+
+        var without = m.ContentSize(false, usageRows: 2, hasForecast: true).Height;
+        var with = m.ContentSize(false, usageRows: 2, hasForecast: true, hasServiceStatus: true).Height;
+
+        Assert.Equal(m.ServiceStatusGap + m.ServiceStatusHeight, with - without);
+    }
+
+    [Fact]
+    public void ContentSize_AuthError_StillMakesRoomForServiceStatus()
+    {
+        // Unlike the other optional bands, the service line is drawn in the sign-in-expired
+        // state too — an outage is the other explanation for what the user is seeing.
+        var m = FlyoutMetrics.ForDpi(96);
+
+        var without = m.ContentSize(isAuthError: true, 0).Height;
+        var with = m.ContentSize(isAuthError: true, 0, hasServiceStatus: true).Height;
+
+        Assert.Equal(m.ServiceStatusGap + m.ServiceStatusHeight, with - without);
+    }
+
+    [Fact]
+    public void ContentSize_HealthyService_AddsNothing()
+    {
+        // The default is "no line": a healthy service must not change the flyout at all.
+        var m = FlyoutMetrics.ForDpi(96);
+
+        Assert.Equal(
+            m.ContentSize(false, usageRows: 2, hasForecast: true).Height,
+            m.ContentSize(false, usageRows: 2, hasForecast: true, hasServiceStatus: false).Height);
+    }
+
+    [Fact]
     public void ForDpi_NonPositiveDpi_FallsBackTo96()
     {
         var fallback = FlyoutMetrics.ForDpi(0);

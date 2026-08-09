@@ -5,19 +5,40 @@ GitHub release; the release notes are taken from these entries.
 
 ## [0.26.0] - Unreleased
 
-### Fixed
-- **Saving settings can no longer crash ClaudeMon when its settings folder can't be created.**
-  The rest of the save path was already best-effort — if the file is locked or unwritable the
-  in-memory settings still serve the session and the next save retries — but creating the
-  `%LOCALAPPDATA%\ClaudeMon` folder sat outside that guard, so an ACL denial, a
-  controlled-folder-access block, or a full disk threw straight out into whichever settings
-  dialog or background poll happened to trigger the save. It is now handled the same quiet,
-  best-effort way as the write itself. (#145)
-- **Settings that fail to load or save now say so in the log.** Those paths are deliberately
-  best-effort — a corrupt config quietly becomes defaults, an unwritable one is retried on the
-  next save — but they left no trace at all, so "my settings didn't stick" was undiagnosable.
-  Both now record the reason and the file involved in the daily log (**View logs** in the tray
-  menu). The behaviour itself is unchanged, and a successful save still logs nothing. (#148)
+### Added
+- **Middle-click the taskbar readout to cycle what it shows** — deciding mid-session that you'd
+  rather be watching the weekly number than the session one meant opening Settings for a change
+  you'd reverse ten minutes later. Now a **middle-click** on the readout (or **Ctrl+left-click**,
+  for mice without a usable middle button) switches it to the next metric — session % → weekly %
+  → time to limit → reset countdown → back around — and the readout flashes the name of the one
+  you landed on so the gesture explains itself. Plain left-click still opens the flyout, and
+  cycling on any monitor's readout moves them all. The gesture is a shortcut over the same
+  Settings toggles rather than a setting of its own, so Settings always shows what you're looking
+  at and the choice survives a restart; where the toggles show several metrics at once, the first
+  click collapses onto the leftmost one and the next advances. The Bar style cycles the two
+  metrics it can draw as a bar — the bar itself stays put, and the two time toggles it has no way
+  to display are left exactly as you set them. While the Settings dialog is open it owns the
+  readouts as its live preview, so the gesture stands down until you close it. (#71)
+- **Estimated time to limit on the taskbar readout** — the burn-rate projection the flyout has
+  always shown ("~1h 23m to limit") is now available as a readout element of its own (`~1h 23m`),
+  tilde-marked to tell an estimate from the reset countdown's known clock time, and showing a
+  neutral `—` rather than a fabricated number when your usage is flat or the window resets first.
+  Off by default; it is the third stop on the click-to-cycle ring above, and has its own toggle
+  on the Taskbar settings tab. (#71)
+- **Anthropic service status in the flyout** — when Claude starts misbehaving, the first
+  question is "is it me, or is it down?". ClaudeMon now reads Anthropic's public status page on
+  the same schedule it already polls usage, and shows a single coloured line in the flyout —
+  `⚠ Anthropic: Partial System Outage` — whenever the page reports anything other than
+  operational, using the status page's own wording. Click the line to open the status page.
+  While everything is healthy nothing is shown at all: the flyout looks exactly as it did. The
+  line also appears in the sign-in-expired state, where "is it me or is it down?" is precisely
+  the question a failing sign-in raises. An optional **Notify on Anthropic service incidents**
+  setting (Alerts tab, **off** by default) raises one balloon when an incident starts, and
+  another only if it gets worse — never one per poll — and respects Snooze like every other
+  alert. There is no new timer and no extra polling: the status ride-alongs the usage poll, so
+  it also pauses while the workstation is locked. A status page that can't be reached is
+  silently ignored — the status of the status page is not itself an alert — and the last known
+  state stays on screen. (#132)
 
 ### Changed
 - **Usage API requests now identify ClaudeMon.** Every poll of the Anthropic usage endpoint
@@ -27,6 +48,36 @@ GitHub release; the release notes are taken from these entries.
   than impersonating the Claude Code CLI — live testing found the endpoint's rate limit is keyed
   on your token, not on who claims to be asking, so there is nothing to gain by pretending.
   Nothing about polling, alerts, or the 401/429 paths changed. (#136)
+
+### Fixed
+- **Service-incident notifications no longer repeat after a restart** — the "already told you
+  about this incident" state now persists with your settings, so restarting ClaudeMon during a
+  long Anthropic incident stays quiet instead of raising the same balloon again. An incident that
+  gets worse still notifies, and recovery re-arms it for the next one. (#138)
+- **The Settings window can no longer run off the bottom of your screen** — it sized itself
+  purely from the tab you were on and grew downwards, so on a short display (or at a large scale
+  factor) switching from a short tab to a long one could push OK and Cancel below the desktop
+  with no way to reach them. The window now slides up to stay inside the working area of the
+  monitor it is on, caps its height there, and scrolls whatever still doesn't fit — and while it
+  is scrolling, the mouse wheel scrolls the dialog instead of quietly changing whichever
+  dropdown or spinner you last clicked. On a screen where it already fitted, nothing
+  changes. (#139)
+- **Saving settings can no longer crash ClaudeMon when its settings folder can't be created.**
+  The rest of the save path was already best-effort — if the file is locked or unwritable the
+  in-memory settings still serve the session and the next save retries — but creating the
+  `%LOCALAPPDATA%\ClaudeMon` folder sat outside that guard, so an ACL denial, a
+  controlled-folder-access block, or a full disk threw straight out into whichever settings
+  dialog or background poll happened to trigger the save. It is now handled the same quiet,
+  best-effort way as the write itself. (#145)
+- **Saving Settings no longer resets taskbar options the dialog doesn't show** — OK rebuilt the
+  taskbar display settings from the controls alone, so anything stored there without a control of
+  its own was quietly dropped on every save. It is now layered onto your saved settings, the way
+  the notification settings already were. (#143)
+- **Settings that fail to load or save now say so in the log.** Those paths are deliberately
+  best-effort — a corrupt config quietly becomes defaults, an unwritable one is retried on the
+  next save — but they left no trace at all, so "my settings didn't stick" was undiagnosable.
+  Both now record the reason and the file involved in the daily log (**View logs** in the tray
+  menu). The behaviour itself is unchanged, and a successful save still logs nothing. (#148)
 
 ## [0.25.0] - 2026-08-09
 

@@ -221,6 +221,14 @@ public record TaskbarDisplaySettings
     public bool ShowTimeToReset { get; init; }
 
     /// <summary>
+    /// Show the projected time until the 5-hour window hits 100% at the current burn rate
+    /// (<c>~1h 23m</c>) in the readout — the same estimate the flyout shows. Numbers style
+    /// only (the bar draws no text). Off by default.
+    /// </summary>
+    [JsonPropertyName("showTimeToLimit")]
+    public bool ShowTimeToLimit { get; init; }
+
+    /// <summary>
     /// Render the percentage elements with a trailing <c>%</c> (<c>42% · 17%</c> instead of
     /// <c>42 · 17</c>). Off by default so the compact original look is unchanged.
     /// </summary>
@@ -262,6 +270,25 @@ public record TaskbarDisplaySettings
     /// </summary>
     [JsonPropertyName("primaryHorizontalOffset")]
     public int PrimaryHorizontalOffset { get; init; }
+
+    /// <summary>
+    /// The four display toggles as one value, for the code that treats them as a set — the
+    /// overlay's element composition and the click-to-cycle gesture
+    /// (<c>UI.TaskbarMetricCycle</c>). Derived, not persisted: the toggles above remain the
+    /// stored form, so cycling and Settings can never disagree.
+    /// </summary>
+    [JsonIgnore]
+    public TaskbarMetricSelection Metrics =>
+        new(ShowSessionUsage, ShowWeeklyUsage, ShowTimeToLimit, ShowTimeToReset);
+
+    /// <summary>Copy with the display toggles replaced by <paramref name="metrics"/>.</summary>
+    public TaskbarDisplaySettings WithMetrics(TaskbarMetricSelection metrics) => this with
+    {
+        ShowSessionUsage = metrics.Session,
+        ShowWeeklyUsage = metrics.Weekly,
+        ShowTimeToLimit = metrics.TimeToLimit,
+        ShowTimeToReset = metrics.TimeToReset,
+    };
 }
 
 public record AlertThresholds

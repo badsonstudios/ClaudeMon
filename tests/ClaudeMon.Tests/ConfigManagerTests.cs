@@ -183,8 +183,62 @@ public class ConfigManagerTests : IDisposable
         var settings = new AppSettings();
         Assert.True(settings.TaskbarDisplay.ShowSessionUsage);
         Assert.False(settings.TaskbarDisplay.ShowWeeklyUsage);
+        Assert.False(settings.TaskbarDisplay.ShowTimeToLimit);
         Assert.False(settings.TaskbarDisplay.ShowTimeToReset);
         Assert.False(settings.TaskbarDisplay.ShowPercentSign);
+        Assert.Equal(TaskbarMetricSelection.SessionOnly, settings.TaskbarDisplay.Metrics);
+    }
+
+    [Fact]
+    public void TaskbarDisplay_Metrics_MirrorTheToggles_BothWays()
+    {
+        // The click-to-cycle gesture (#71) writes the same toggles Settings edits, via these
+        // two projections — if they ever drift, cycling and Settings would disagree.
+        var display = new TaskbarDisplaySettings
+        {
+            ShowSessionUsage = false,
+            ShowWeeklyUsage = true,
+            ShowTimeToLimit = true,
+            ShowTimeToReset = false,
+        };
+        Assert.Equal(new TaskbarMetricSelection(false, true, true, false), display.Metrics);
+
+        var cycled = display.WithMetrics(TaskbarMetricSelection.For(TaskbarMetric.TimeToReset));
+        Assert.False(cycled.ShowSessionUsage);
+        Assert.False(cycled.ShowWeeklyUsage);
+        Assert.False(cycled.ShowTimeToLimit);
+        Assert.True(cycled.ShowTimeToReset);
+
+        // Everything else on the record survives the cycle — it edits the metrics only.
+        Assert.Equal(display with
+        {
+            ShowSessionUsage = false,
+            ShowWeeklyUsage = false,
+            ShowTimeToLimit = false,
+            ShowTimeToReset = true,
+        }, cycled);
+    }
+
+    [Fact]
+    public void TaskbarDisplay_CycledMetric_SurvivesARestart()
+    {
+        // The acceptance criterion behind "the cycled choice persists": cycling writes
+        // settings through the same ConfigManager save Settings uses.
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        var cycled = new AppSettings().TaskbarDisplay
+            .WithMetrics(TaskbarMetricSelection.For(TaskbarMetric.TimeToLimit));
+        manager.Update(new AppSettings { TaskbarDisplay = cycled });
+
+        var manager2 = new ConfigManager(path);
+        manager2.Load();
+
+        Assert.Equal(TaskbarMetricSelection.For(TaskbarMetric.TimeToLimit),
+            manager2.Settings.TaskbarDisplay.Metrics);
+
+        // Metrics is a derived view of the toggles, so it must not be serialized: a stored
+        // copy would be get-only dead weight that silently disagrees after a hand edit.
+        Assert.DoesNotContain("metrics", File.ReadAllText(path), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -200,6 +254,7 @@ public class ConfigManagerTests : IDisposable
             {
                 ShowSessionUsage = false,
                 ShowWeeklyUsage = true,
+                ShowTimeToLimit = true,
                 ShowTimeToReset = true,
                 ShowPercentSign = true,
             },
@@ -210,6 +265,7 @@ public class ConfigManagerTests : IDisposable
 
         Assert.False(manager2.Settings.TaskbarDisplay.ShowSessionUsage);
         Assert.True(manager2.Settings.TaskbarDisplay.ShowWeeklyUsage);
+        Assert.True(manager2.Settings.TaskbarDisplay.ShowTimeToLimit);
         Assert.True(manager2.Settings.TaskbarDisplay.ShowTimeToReset);
         Assert.True(manager2.Settings.TaskbarDisplay.ShowPercentSign);
     }

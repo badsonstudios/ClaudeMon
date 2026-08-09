@@ -6,6 +6,25 @@ GitHub release; the release notes are taken from these entries.
 ## [0.26.0] - Unreleased
 
 ### Added
+- **Middle-click the taskbar readout to cycle what it shows** — deciding mid-session that you'd
+  rather be watching the weekly number than the session one meant opening Settings for a change
+  you'd reverse ten minutes later. Now a **middle-click** on the readout (or **Ctrl+left-click**,
+  for mice without a usable middle button) switches it to the next metric — session % → weekly %
+  → time to limit → reset countdown → back around — and the readout flashes the name of the one
+  you landed on so the gesture explains itself. Plain left-click still opens the flyout, and
+  cycling on any monitor's readout moves them all. The gesture is a shortcut over the same
+  Settings toggles rather than a setting of its own, so Settings always shows what you're looking
+  at and the choice survives a restart; where the toggles show several metrics at once, the first
+  click collapses onto the leftmost one and the next advances. The Bar style cycles the two
+  metrics it can draw as a bar — the bar itself stays put, and the two time toggles it has no way
+  to display are left exactly as you set them. While the Settings dialog is open it owns the
+  readouts as its live preview, so the gesture stands down until you close it. (#71)
+- **Estimated time to limit on the taskbar readout** — the burn-rate projection the flyout has
+  always shown ("~1h 23m to limit") is now available as a readout element of its own (`~1h 23m`),
+  tilde-marked to tell an estimate from the reset countdown's known clock time, and showing a
+  neutral `—` rather than a fabricated number when your usage is flat or the window resets first.
+  Off by default; it is the third stop on the click-to-cycle ring above, and has its own toggle
+  on the Taskbar settings tab. (#71)
 - **Anthropic service status in the flyout** — when Claude starts misbehaving, the first
   question is "is it me, or is it down?". ClaudeMon now reads Anthropic's public status page on
   the same schedule it already polls usage, and shows a single coloured line in the flyout —

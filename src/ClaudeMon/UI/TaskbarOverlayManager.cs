@@ -30,6 +30,13 @@ public sealed class TaskbarOverlayManager : IDisposable
     /// <summary>Raised when any overlay is clicked, carrying that readout's screen bounds.</summary>
     public event EventHandler<System.Drawing.Rectangle>? OverlayClicked;
 
+    /// <summary>
+    /// Raised when any overlay is middle-clicked (or Ctrl+left-clicked): the request to cycle
+    /// the readout's metric. Not per-monitor — the metric is one setting, so cycling on any
+    /// taskbar moves every readout together.
+    /// </summary>
+    public event EventHandler? CycleRequested;
+
     // Keyed by monitor device name (e.g. \\.\DISPLAY1) — one overlay per taskbar.
     private readonly Dictionary<string, TaskbarOverlayWindow> _overlays = new();
     private readonly Logger _logger;
@@ -60,9 +67,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     private TaskbarBarWidth _barWidth = TaskbarBarWidth.Standard;
     private int _sizePercent = 100;
     private UsageColorMode _colorMode = UsageColorMode.Pace;
-    private bool _showSession = true;
-    private bool _showWeekly;
-    private bool _showTimeToReset;
+    private TaskbarMetricSelection _metrics = TaskbarMetricSelection.SessionOnly;
     private bool _showPercentSign;
     private bool _allMonitors;
     private int _primaryHorizontalOffset;
@@ -127,17 +132,26 @@ public sealed class TaskbarOverlayManager : IDisposable
     }
 
     /// <summary>
-    /// Choose the readout elements (session/weekly/countdown) and whether percentages carry
-    /// a trailing % sign, on every overlay.
+    /// Choose the readout elements (session/weekly/time-to-limit/countdown) and whether
+    /// percentages carry a trailing % sign, on every overlay.
     /// </summary>
-    public void SetDisplay(bool session, bool weekly, bool timeToReset, bool percentSign)
+    public void SetDisplay(TaskbarMetricSelection metrics, bool percentSign)
     {
-        _showSession = session;
-        _showWeekly = weekly;
-        _showTimeToReset = timeToReset;
+        _metrics = metrics;
         _showPercentSign = percentSign;
         foreach (var overlay in _overlays.Values)
-            overlay.SetDisplay(session, weekly, timeToReset, percentSign);
+            overlay.SetDisplay(metrics, percentSign);
+    }
+
+    /// <summary>
+    /// Flash a metric name on every readout after a click-to-cycle (see
+    /// <see cref="TaskbarOverlayWindow.ShowMetricHint"/>). All of them, not just the one
+    /// clicked: they all just changed, so they should all say so.
+    /// </summary>
+    public void ShowMetricHint(string text)
+    {
+        foreach (var overlay in _overlays.Values)
+            overlay.ShowMetricHint(text);
     }
 
     /// <summary>
@@ -227,6 +241,8 @@ public sealed class TaskbarOverlayManager : IDisposable
 
     private void OnOverlayClicked(object? sender, System.Drawing.Rectangle bounds) => OverlayClicked?.Invoke(this, bounds);
 
+    private void OnOverlayCycleRequested(object? sender, EventArgs e) => CycleRequested?.Invoke(this, e);
+
     private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
         TryReconcile("Taskbar overlay reconcile failed");
 
@@ -298,6 +314,7 @@ public sealed class TaskbarOverlayManager : IDisposable
                 {
                     overlay = new TaskbarOverlayWindow(taskbar.MonitorDevice, _logger);
                     overlay.Clicked += OnOverlayClicked;
+                    overlay.CycleRequested += OnOverlayCycleRequested;
                     Seed(overlay);
                     overlay.SetEnabled(true);
                 }
@@ -347,7 +364,7 @@ public sealed class TaskbarOverlayManager : IDisposable
         overlay.SetBarWidth(_barWidth);
         overlay.SetSize(_sizePercent);
         overlay.SetColorMode(_colorMode);
-        overlay.SetDisplay(_showSession, _showWeekly, _showTimeToReset, _showPercentSign);
+        overlay.SetDisplay(_metrics, _showPercentSign);
         overlay.SetHorizontalOffsets(_primaryHorizontalOffset, _secondaryHorizontalOffset);
 
         switch (_reading.Marker)

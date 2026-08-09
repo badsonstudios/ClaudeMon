@@ -126,9 +126,7 @@ public sealed class TrayApplication : IDisposable
         _taskbarOverlay.SetSize(_configManager.Settings.TaskbarDisplay.SizePercent);
         _taskbarOverlay.SetColorMode(_configManager.Settings.ColorMode);
         _taskbarOverlay.SetDisplay(
-            _configManager.Settings.TaskbarDisplay.ShowSessionUsage,
-            _configManager.Settings.TaskbarDisplay.ShowWeeklyUsage,
-            _configManager.Settings.TaskbarDisplay.ShowTimeToReset,
+            _configManager.Settings.TaskbarDisplay.Metrics,
             _configManager.Settings.TaskbarDisplay.ShowPercentSign);
         _taskbarOverlay.SetHorizontalOffsets(
             _configManager.Settings.TaskbarDisplay.PrimaryHorizontalOffset,
@@ -140,6 +138,8 @@ public sealed class TrayApplication : IDisposable
         // so Screen.FromPoint resolves to it and the flyout stays there.
         _taskbarOverlay.OverlayClicked += (_, bounds) =>
             ToggleFlyout(new Point(bounds.Left + bounds.Width / 2, bounds.Top));
+        // Middle-click (or Ctrl+left-click) cycles which metric the readout leads with (#71).
+        _taskbarOverlay.CycleRequested += (_, _) => CycleTaskbarMetric();
 
         _contextMenu = CreateContextMenu();
         _notifyIcon = new NotifyIcon
@@ -249,7 +249,10 @@ public sealed class TrayApplication : IDisposable
                         fiveHour.ElapsedFraction(UsageWindows.FiveHour),
                         sevenDay?.UtilizationPct,
                         sevenDay?.ElapsedFraction(UsageWindows.SevenDay),
-                        fiveHour.ResetAt));
+                        fiveHour.ResetAt,
+                        // The optional time-to-limit element re-derives per poll — unlike the
+                        // countdown, an estimate can't be run down by a clock between polls.
+                        EstimateTimeToLimit(fiveHour)));
                 }
 
                 _notifyIcon.Text = TrayTooltip.Compose(e.Usage, e.Status);
@@ -324,27 +327,57 @@ public sealed class TrayApplication : IDisposable
             .Select(s => s.FiveHourPct)
             .ToList();
 
-        // Project time-to-limit from the recent burn rate (last 30 min of samples).
-        // The latest history sample is recorded from the same poll that set
-        // LastUsage, so this current pct and the slope's newest point agree.
-        // Pass a null reset when ResetAt is unknown (TimeUntilReset returns Zero
-        // for both "unknown" and "expired/idle" — only the latter should
-        // suppress the estimate).
-        TimeSpan? timeToLimit = null;
-        var fiveHour = _monitor.LastUsage?.FiveHour;
-        if (fiveHour is not null)
-        {
-            TimeSpan? timeUntilReset = fiveHour.ResetAt is null ? null : fiveHour.TimeUntilReset;
-            timeToLimit = BurnRate.EstimateTimeToLimit(
-                _history.Recent(BurnRateWindow),
-                fiveHour.UtilizationPct,
-                timeUntilReset);
-        }
+        var timeToLimit = EstimateTimeToLimit(_monitor.LastUsage?.FiveHour);
 
         _flyout.UpdateData(
             _monitor.LastUsage, _monitor.Status, _monitor.LastUpdated, fiveHourTrend, timeToLimit,
             _configManager.Settings.ColorMode, _localUsage.Snapshot(), _monitor.LastServiceStatus);
         _flyout.ShowNear(anchor);
+    }
+
+    /// <summary>
+    /// Projects time-to-limit for a 5-hour bucket from the recent burn rate (last 30 min of
+    /// samples). The latest history sample is recorded from the same poll that produced the
+    /// bucket, so the current pct and the slope's newest point agree. A null reset is passed
+    /// when <c>ResetAt</c> is unknown (<c>TimeUntilReset</c> returns Zero for both "unknown"
+    /// and "expired/idle" — only the latter should suppress the estimate). Shared by the
+    /// flyout's "to limit" line and the taskbar readout's optional element so they can't
+    /// disagree about the same projection.
+    /// </summary>
+    private TimeSpan? EstimateTimeToLimit(UsageBucket? fiveHour)
+    {
+        if (fiveHour is null)
+            return null;
+
+        TimeSpan? timeUntilReset = fiveHour.ResetAt is null ? null : fiveHour.TimeUntilReset;
+        return BurnRate.EstimateTimeToLimit(
+            _history.Recent(BurnRateWindow), fiveHour.UtilizationPct, timeUntilReset);
+    }
+
+    /// <summary>
+    /// Advances the taskbar readout to the next metric in the cycle (issue #71), persists the
+    /// choice, and flashes its name on every readout. The gesture writes the same display
+    /// toggles Settings edits — <see cref="TaskbarMetricCycle"/> owns the ordering — so the two
+    /// can never drift apart, and a restart comes back on the metric you left it on.
+    /// </summary>
+    private void CycleTaskbarMetric()
+    {
+        // While Settings is open the readouts are that dialog's live preview and it owns them:
+        // a cycle behind its back would be silently reverted (Cancel restores the saved
+        // appearance) or overwritten (OK rebuilds the display settings from its own toggles),
+        // leaving what's on screen disagreeing with what's on disk.
+        if (_settingsOpen)
+            return;
+
+        var taskbar = _configManager.Settings.TaskbarDisplay;
+        var next = TaskbarMetricCycle.NextMetric(taskbar.Metrics, taskbar.Style);
+        var updated = taskbar.WithMetrics(TaskbarMetricCycle.Select(taskbar.Metrics, next, taskbar.Style));
+
+        _configManager.Update(_configManager.Settings with { TaskbarDisplay = updated });
+        // Hint first: it outranks the readout either way, so raising it before the new metric
+        // lands makes the intermediate frame structurally impossible rather than merely unlikely.
+        _taskbarOverlay.ShowMetricHint(TaskbarMetricCycle.Label(next));
+        _taskbarOverlay.SetDisplay(updated.Metrics, updated.ShowPercentSign);
     }
 
     private static string Truncate(string text, int maxLength) =>
@@ -780,9 +813,7 @@ public sealed class TrayApplication : IDisposable
                 _taskbarOverlay.SetSize(_configManager.Settings.TaskbarDisplay.SizePercent);
                 _taskbarOverlay.SetColorMode(_configManager.Settings.ColorMode);
                 _taskbarOverlay.SetDisplay(
-                    _configManager.Settings.TaskbarDisplay.ShowSessionUsage,
-                    _configManager.Settings.TaskbarDisplay.ShowWeeklyUsage,
-                    _configManager.Settings.TaskbarDisplay.ShowTimeToReset,
+                    _configManager.Settings.TaskbarDisplay.Metrics,
                     _configManager.Settings.TaskbarDisplay.ShowPercentSign);
                 _taskbarOverlay.SetHorizontalOffsets(
                     _configManager.Settings.TaskbarDisplay.PrimaryHorizontalOffset,

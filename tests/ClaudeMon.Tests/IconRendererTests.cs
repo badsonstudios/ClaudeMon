@@ -3,6 +3,7 @@ namespace ClaudeMon.Tests;
 using System.Drawing;
 using System.Drawing.Imaging;
 using ClaudeMon.Models;
+using ClaudeMon.Monitoring;
 using ClaudeMon.UI;
 
 public class IconRendererTests
@@ -248,6 +249,16 @@ public class IconRendererTests
     public void FormatTaskbarCountdown_UnknownReset_ShowsNeutralMarker()
     {
         Assert.Equal("—", IconRenderer.FormatTaskbarCountdown(null));
+    }
+
+    [Fact]
+    public void FormatTaskbarCountdown_IsDistinguishableFromTheTimeToLimitEstimate()
+    {
+        // Both elements can be on at once, showing two different spans of the same shape;
+        // the estimate's leading "~" is the only thing telling it from the known clock time.
+        var span = TimeSpan.FromMinutes(83);
+        Assert.NotEqual(
+            IconRenderer.FormatTaskbarCountdown(span), BurnRate.FormatTimeToLimitCompact(span));
     }
 
     [Theory]

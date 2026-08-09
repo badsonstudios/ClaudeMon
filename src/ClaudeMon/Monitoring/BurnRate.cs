@@ -78,6 +78,22 @@ public static class BurnRate
     /// <summary>Formats an estimate for display in the flyout.</summary>
     public static string FormatTimeToLimit(TimeSpan? eta)
     {
+        var compact = FormatTimeToLimitCompact(eta);
+
+        // "—" and "at limit" already say what they mean; only the spans take the suffix.
+        return IsSpan(eta) ? $"{compact} to limit" : compact;
+    }
+
+    /// <summary>
+    /// The same estimate without the "to limit" suffix, for the taskbar readout's optional
+    /// element — where the space is a fraction of the flyout's and the "Claude" label above it
+    /// supplies the context. Shares every rounding and wording decision with
+    /// <see cref="FormatTimeToLimit"/>, so the flyout and the readout can never show two
+    /// different numbers for the same projection. The leading <c>~</c> is what distinguishes an
+    /// estimate from the reset countdown beside it, which is a known clock time.
+    /// </summary>
+    public static string FormatTimeToLimitCompact(TimeSpan? eta)
+    {
         if (eta is null)
             return "—";
 
@@ -87,17 +103,18 @@ public static class BurnRate
 
         var totalMinutes = (int)Math.Round(value.TotalMinutes);
         if (totalMinutes < 1)
-            return "<1m to limit";
+            return "<1m";
 
         if (totalMinutes < 60)
-            return $"~{totalMinutes}m to limit";
+            return $"~{totalMinutes}m";
 
         var hours = totalMinutes / 60;
         var minutes = totalMinutes % 60;
-        return minutes == 0
-            ? $"~{hours}h to limit"
-            : $"~{hours}h {minutes}m to limit";
+        return minutes == 0 ? $"~{hours}h" : $"~{hours}h {minutes}m";
     }
+
+    // Whether the estimate is an actual remaining span rather than one of the two fixed states.
+    private static bool IsSpan(TimeSpan? eta) => eta is { } value && value > TimeSpan.Zero;
 
     // Least-squares slope of utilization (percent) over time (minutes). Returns
     // null when the samples share a single instant (no time span to divide by).

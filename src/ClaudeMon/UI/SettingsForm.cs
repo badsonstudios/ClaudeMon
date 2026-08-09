@@ -47,6 +47,7 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _sizeNumeric;
     private readonly ToggleSwitch _showSessionToggle;
     private readonly ToggleSwitch _showWeeklyToggle;
+    private readonly ToggleSwitch _showTimeToLimitToggle;
     private readonly ToggleSwitch _showTimeToResetToggle;
     private readonly ToggleSwitch _percentSignToggle;
     private readonly ComboBox _labelColorCombo;
@@ -223,8 +224,10 @@ public sealed class SettingsForm : Form
         _primaryOffsetNumeric.Increment = 2;
         _showSessionToggle = AddToggleRow("Show session (5-hour) usage", indent: true, visible: TaskbarOn);
         _showWeeklyToggle = AddToggleRow("Show weekly (7-day) usage", indent: true, visible: TaskbarOn);
-        // The countdown is a Numbers-style element; the bar has its own time tick, so the row
-        // hides in Bar mode rather than offering a toggle that does nothing there.
+        // The two time elements are Numbers-style; the bar draws no text (and has its own time
+        // tick), so these rows hide in Bar mode rather than offering toggles that do nothing there.
+        _showTimeToLimitToggle = AddToggleRow("Show time to limit (estimated)", indent: true,
+            visible: () => TaskbarOn() && !IsBar());
         _showTimeToResetToggle = AddToggleRow("Show time left to reset", indent: true,
             visible: () => TaskbarOn() && !IsBar());
         // Percentages are a Numbers-style element (the bar draws no numbers), so the row
@@ -479,6 +482,7 @@ public sealed class SettingsForm : Form
             Preview(() => _overlayPreview!.SetSize((int)_sizeNumeric.Value));
         _showSessionToggle.CheckedChanged += (_, _) => PreviewDisplay();
         _showWeeklyToggle.CheckedChanged += (_, _) => PreviewDisplay();
+        _showTimeToLimitToggle.CheckedChanged += (_, _) => PreviewDisplay();
         _showTimeToResetToggle.CheckedChanged += (_, _) => PreviewDisplay();
         _percentSignToggle.CheckedChanged += (_, _) => PreviewDisplay();
         _labelColorCombo.SelectedIndexChanged += (_, _) => PreviewColors();
@@ -506,8 +510,12 @@ public sealed class SettingsForm : Form
         SelectedOption(_numberColorCombo, NumberColorOptions)));
 
     private void PreviewDisplay() => Preview(() => _overlayPreview!.SetDisplay(
-        _showSessionToggle.Checked, _showWeeklyToggle.Checked, _showTimeToResetToggle.Checked,
-        _percentSignToggle.Checked));
+        SelectedMetrics(), _percentSignToggle.Checked));
+
+    /// <summary>The display toggles as the selection the overlay and the cycle logic speak in.</summary>
+    private TaskbarMetricSelection SelectedMetrics() => new(
+        _showSessionToggle.Checked, _showWeeklyToggle.Checked,
+        _showTimeToLimitToggle.Checked, _showTimeToResetToggle.Checked);
 
     private void PreviewOffsets() => Preview(() => _overlayPreview!.SetHorizontalOffsets(
         (int)_primaryOffsetNumeric.Value, (int)_secondaryOffsetNumeric.Value));
@@ -521,8 +529,7 @@ public sealed class SettingsForm : Form
             _overlayPreview.SetStyle(t.Style);
             _overlayPreview.SetBarWidth(t.BarWidth);
             _overlayPreview.SetSize(t.SizePercent);
-            _overlayPreview.SetDisplay(
-                t.ShowSessionUsage, t.ShowWeeklyUsage, t.ShowTimeToReset, t.ShowPercentSign);
+            _overlayPreview.SetDisplay(t.Metrics, t.ShowPercentSign);
             _overlayPreview.SetColors(t.LabelColor, t.NumberColor);
             _overlayPreview.SetAllMonitors(t.AllMonitors);
             _overlayPreview.SetHorizontalOffsets(t.PrimaryHorizontalOffset, t.HorizontalOffset);
@@ -594,6 +601,7 @@ public sealed class SettingsForm : Form
         _sizeNumeric.Value = ClampToRange(_sizeNumeric, settings.TaskbarDisplay.SizePercent);
         _showSessionToggle.Checked = settings.TaskbarDisplay.ShowSessionUsage;
         _showWeeklyToggle.Checked = settings.TaskbarDisplay.ShowWeeklyUsage;
+        _showTimeToLimitToggle.Checked = settings.TaskbarDisplay.ShowTimeToLimit;
         _showTimeToResetToggle.Checked = settings.TaskbarDisplay.ShowTimeToReset;
         _percentSignToggle.Checked = settings.TaskbarDisplay.ShowPercentSign;
         SelectOption(_labelColorCombo, LabelColorOptions, settings.TaskbarDisplay.LabelColor);
@@ -657,6 +665,7 @@ public sealed class SettingsForm : Form
                 SizePercent = (int)_sizeNumeric.Value,
                 ShowSessionUsage = _showSessionToggle.Checked,
                 ShowWeeklyUsage = _showWeeklyToggle.Checked,
+                ShowTimeToLimit = _showTimeToLimitToggle.Checked,
                 ShowTimeToReset = _showTimeToResetToggle.Checked,
                 ShowPercentSign = _percentSignToggle.Checked,
                 LabelColor = SelectedOption(_labelColorCombo, LabelColorOptions),

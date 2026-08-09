@@ -5,6 +5,7 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using ClaudeMon.Models;
+using ClaudeMon.Monitoring;
 using ClaudeMon.Services;
 
 /// <summary>
@@ -25,7 +26,9 @@ internal enum TaskbarOverlayMarker
 /// directly over the right end of one Windows taskbar, just left of that taskbar's system
 /// tray / clock. One instance is created per taskbar (the primary and each
 /// secondary-monitor taskbar) by <see cref="TaskbarOverlayManager"/>. A left-click raises
-/// <see cref="Clicked"/> (wired to open the detail flyout) without ever taking focus.
+/// <see cref="Clicked"/> (wired to open the detail flyout) and a middle-click (or
+/// Ctrl+left-click) raises <see cref="CycleRequested"/> (wired to cycle the displayed metric),
+/// neither of them ever taking focus.
 /// </summary>
 /// <remarks>
 /// This is the lightweight alternative to a deskband COM shell extension: it needs no
@@ -42,6 +45,14 @@ internal enum TaskbarOverlayMarker
 /// </remarks>
 public sealed class TaskbarOverlayWindow : Form
 {
+    /// <summary>
+    /// How long the metric name flashed by <see cref="ShowMetricHint"/> stays on screen, in
+    /// milliseconds. Long enough to read, short enough that the numbers you cycled to are the
+    /// point. Expiry is noticed by the 500 ms keep-alive rather than a second timer, so the
+    /// hint can outstay this by up to one tick.
+    /// </summary>
+    private const long HintDurationMs = 1500;
+
     private readonly System.Windows.Forms.Timer _keepAliveTimer;
 
     // The monitor whose taskbar this overlay paints on; re-resolved to a live taskbar
@@ -67,13 +78,20 @@ public sealed class TaskbarOverlayWindow : Form
     private double? _sevenDayPercentage;
     private double? _sevenDayFraction;
     private DateTimeOffset? _fiveHourResetAt;
+    private TimeSpan? _timeToLimit;
 
-    // Which elements the readout shows (session %, weekly %, reset countdown). All-off is
-    // normalized to session-only at composition time so the readout never renders empty.
-    private bool _showSession = true;
-    private bool _showWeekly;
-    private bool _showTimeToReset;
+    // Which elements the readout shows (session %, weekly %, time-to-limit, reset countdown).
+    // All-off is normalized to session-only at composition time so the readout never renders empty.
+    private TaskbarMetricSelection _metrics = TaskbarMetricSelection.SessionOnly;
     private bool _showPercentSign;
+
+    // The metric name flashed after a click-to-cycle, and the tick count it expires at. Non-null
+    // takes over the readout in every state (see Redraw) — the gesture's only feedback, so it
+    // must be visible even where the bar draws no text or a placeholder marker is up. The
+    // deadline is a monotonic tick count, not a wall clock: an NTP correction or a manual clock
+    // change backwards must not paste the hint over the readout until the clock catches up.
+    private string? _hintText;
+    private long? _hintUntilTicks;
 
     private TaskbarOverlayMarker _marker;
     private TaskbarTextColor _labelColor = TaskbarTextColor.White;
@@ -169,6 +187,13 @@ public sealed class TaskbarOverlayWindow : Form
     /// </summary>
     public event EventHandler<Rectangle>? Clicked;
 
+    /// <summary>
+    /// Raised on a middle-click (or Ctrl+left-click) of the readout: the request to cycle to
+    /// the next metric. The overlay only reports the gesture — which metric comes next, and
+    /// persisting it, belong to the owner (see <see cref="TaskbarMetricCycle"/>).
+    /// </summary>
+    public event EventHandler? CycleRequested;
+
     // Don't steal focus from the taskbar / foreground app when shown.
     protected override bool ShowWithoutActivation => true;
 
@@ -201,10 +226,26 @@ public sealed class TaskbarOverlayWindow : Form
                 // flyout — leaving the flyout visibly active but mouse-dead (its gear never sees a
                 // click, and the readout's hand cursor sticks across the whole flyout).
                 ReleaseCapture();
-                // Raise asynchronously so the flyout is shown/activated on a clean message-loop
-                // turn, after this WS_EX_NOACTIVATE window finishes its own input processing.
-                if (IsHandleCreated)
+                if (!IsHandleCreated)
+                    return;
+                // Ctrl+left is the alternate cycle gesture, for mice and trackpads without a
+                // usable middle button. Plain left-click keeps opening the flyout. The modifier
+                // comes from the message's own wParam rather than the thread key-state table:
+                // this window is deliberately never focused, so the state travelling with the
+                // click is the authoritative answer.
+                if (((long)m.WParam & MK_CONTROL) != 0)
+                    BeginInvoke(() => CycleRequested?.Invoke(this, EventArgs.Empty));
+                else
+                    // Raise asynchronously so the flyout is shown/activated on a clean message-loop
+                    // turn, after this WS_EX_NOACTIVATE window finishes its own input processing.
                     BeginInvoke(() => Clicked?.Invoke(this, new Rectangle(_x, _y, _width, _height)));
+                return;
+            case WM_MBUTTONUP:
+                // Cycle the readout's metric (issue #71). Same capture release as the left
+                // button above — the implicit capture is taken per button press either way.
+                ReleaseCapture();
+                if (IsHandleCreated)
+                    BeginInvoke(() => CycleRequested?.Invoke(this, EventArgs.Empty));
                 return;
         }
 
@@ -244,6 +285,7 @@ public sealed class TaskbarOverlayWindow : Form
         _sevenDayPercentage = reading.SevenDayPct;
         _sevenDayFraction = reading.SevenDayFraction;
         _fiveHourResetAt = reading.FiveHourResetAt;
+        _timeToLimit = reading.TimeToLimit;
         _contentDirty = true;
         if (Visible) Reposition();
     }
@@ -331,15 +373,30 @@ public sealed class TaskbarOverlayWindow : Form
 
     /// <summary>
     /// Choose which elements the readout shows — session (5-hour) usage, weekly (7-day) usage,
-    /// and the reset countdown (Numbers style only; the bar keeps its time tick). Re-measures
-    /// the overlay width and repaints live (no restart). All-off falls back to session-only.
+    /// the burn-rate time-to-limit, and the reset countdown (the last two are Numbers-style
+    /// elements; the bar keeps its time tick). Re-measures the overlay width and repaints live
+    /// (no restart). All-off falls back to session-only.
     /// </summary>
-    public void SetDisplay(bool session, bool weekly, bool timeToReset, bool percentSign)
+    public void SetDisplay(TaskbarMetricSelection metrics, bool percentSign)
     {
-        _showSession = session;
-        _showWeekly = weekly;
-        _showTimeToReset = timeToReset;
+        _metrics = metrics;
         _showPercentSign = percentSign;
+        _contentDirty = true;
+        if (Visible) Reposition();
+    }
+
+    /// <summary>
+    /// Briefly replace the readout with <paramref name="text"/> — the name of the metric a
+    /// click-to-cycle just selected, so the gesture and its effect are discoverable. Outranks
+    /// everything else the readout can show: both styles (the bar has no text of its own to
+    /// speak with) and the placeholder markers (waiting for the first poll is exactly when a
+    /// new user is poking at the readout, and a gesture with no feedback reads as broken).
+    /// Clears itself after <see cref="HintDurationMs"/>, on the keep-alive tick.
+    /// </summary>
+    public void ShowMetricHint(string text)
+    {
+        _hintText = text;
+        _hintUntilTicks = Environment.TickCount64 + HintDurationMs;
         _contentDirty = true;
         if (Visible) Reposition();
     }
@@ -358,7 +415,7 @@ public sealed class TaskbarOverlayWindow : Form
     }
 
     /// <summary>The weekly value to display, or null when the toggle is off or the API didn't return one.</summary>
-    private double? WeeklyForDisplay => _showWeekly ? _sevenDayPercentage : null;
+    private double? WeeklyForDisplay => _metrics.Weekly ? _sevenDayPercentage : null;
 
     /// <summary>
     /// The countdown element's current text: minute-granular time until the 5-hour reset,
@@ -370,25 +427,38 @@ public sealed class TaskbarOverlayWindow : Form
             _fiveHourResetAt is { } resetAt ? resetAt - DateTimeOffset.UtcNow : null);
 
     /// <summary>
-    /// Composes the Numbers-style number row from the enabled elements: session % and weekly %
-    /// (each coloured for its own usage level under the Auto preset), the reset countdown in the
-    /// neutral label colour, dot-separated. Falls back to session-only rather than an empty row
-    /// when nothing is enabled (or the only enabled element has no data).
+    /// Composes the readout's text row. A live cycle hint is the whole row on its own, in every
+    /// state — so this also composes for the Bar style and over a placeholder marker while one
+    /// is up. Otherwise it is the Numbers row, from the enabled elements in cycle order: session
+    /// % and weekly % (each coloured for its own usage level under the Auto preset), then the
+    /// time-to-limit projection and the reset countdown in the neutral label colour,
+    /// dot-separated. Falls back to session-only rather than an empty row when nothing is
+    /// enabled (or the only enabled element has no data).
     /// <paramref name="light"/> is the taskbar theme feeding the MatchTaskbar preset — passed in
     /// (read once per paint) so one frame never mixes themes across the label and segments.
     /// </summary>
     private IconRenderer.TaskbarSegment[] BuildNumberSegments(bool light)
     {
         var pct = _percentage ?? 0;
-        var elements = new List<IconRenderer.TaskbarSegment>(3);
 
-        if (_showSession)
+        // Resolved at 0% so the neutral hint isn't usage-coloured under the Auto preset —
+        // the same treatment the placeholder markers get.
+        if (_hintText is { } hint)
+            return new[] { new IconRenderer.TaskbarSegment(hint, IconRenderer.GetTextColor(_labelColor, 0, light)) };
+
+        var elements = new List<IconRenderer.TaskbarSegment>(4);
+
+        if (_metrics.Session)
             elements.Add(IconRenderer.TaskbarSegment.Percent(pct, IconRenderer.GetTextColor(_numberColor, pct, light), _showPercentSign));
 
         if (WeeklyForDisplay is { } weekly)
             elements.Add(IconRenderer.TaskbarSegment.Percent(weekly, IconRenderer.GetTextColor(_numberColor, weekly, light), _showPercentSign));
 
-        if (_showTimeToReset)
+        if (_metrics.TimeToLimit)
+            elements.Add(new IconRenderer.TaskbarSegment(
+                BurnRate.FormatTimeToLimitCompact(_timeToLimit), IconRenderer.GetTextColor(_labelColor, pct, light)));
+
+        if (_metrics.TimeToReset)
             elements.Add(new IconRenderer.TaskbarSegment(CountdownText(), IconRenderer.GetTextColor(_labelColor, pct, light)));
 
         if (elements.Count == 0)
@@ -404,16 +474,18 @@ public sealed class TaskbarOverlayWindow : Form
     /// <summary>
     /// Recomputes <see cref="_width"/> from the current readout, but only when the composed
     /// number row, style, or taskbar height changed — measuring allocates fonts and a bitmap,
-    /// and this runs on the 500 ms keep-alive tick. The segments are null exactly when the
-    /// Numbers row isn't being rendered (bar style, or a placeholder marker).
+    /// and this runs on the 500 ms keep-alive tick. The segments are null exactly when no text
+    /// row is being rendered (bar style with no cycle hint up, or a placeholder marker), which
+    /// is also what selects the bar's fixed width below.
     /// </summary>
     private void UpdateMeasuredWidth(IconRenderer.TaskbarSegment[]? segments, string? segmentsKey)
     {
         // Measure in logical units (IconRenderer works at 96 DPI), cache on the logical height, and
         // derive the physical window width from the current DPI scale. _width is always refreshed
         // from _logicalWidth because the scale can change (a move to another monitor) even when the
-        // logical measurement is unchanged.
-        if (_marker != TaskbarOverlayMarker.None)
+        // logical measurement is unchanged. A live hint outranks the marker, exactly as it does
+        // in Redraw — the two must agree or the readout is sized for what it isn't drawing.
+        if (_marker != TaskbarOverlayMarker.None && _hintText is null)
         {
             if (!(_widthMarker == _marker && _widthHeight == _logicalHeight))
             {
@@ -433,11 +505,11 @@ public sealed class TaskbarOverlayWindow : Form
             || _widthSegmentsKey != segmentsKey || _widthHeight != _logicalHeight)
         {
             // The bar's width is fixed by the height + width setting (the value doesn't widen it);
-            // the number's width grows with the segments shown (non-null whenever we get here
-            // in the Numbers style).
-            _logicalWidth = _style == TaskbarStyle.Bar
+            // a text row's width grows with the segments shown. Keyed off the segments rather
+            // than the style so a cycle hint over the bar style is sized to its text.
+            _logicalWidth = segments is null
                 ? IconRenderer.MeasureTaskbarBarWidth(_logicalHeight, _barWidth)
-                : IconRenderer.MeasureTaskbarSegmentsWidth(segments!, _logicalHeight);
+                : IconRenderer.MeasureTaskbarSegmentsWidth(segments, _logicalHeight);
             _widthSegmentsKey = segmentsKey;
             _widthHeight = _logicalHeight;
             _widthStyle = _style;
@@ -478,6 +550,17 @@ public sealed class TaskbarOverlayWindow : Form
     private void Reposition()
     {
         if (!IsHandleCreated) return;
+
+        // Expire a cycle hint here rather than on a timer of its own: this already runs every
+        // 500 ms while the overlay is enabled, which is the only time a hint can be on screen.
+        // Dirty explicitly — for the bar style the restored readout can measure the same width
+        // as the hint did, and geometry alone would then miss the change.
+        if (_hintUntilTicks is { } hintUntil && Environment.TickCount64 >= hintUntil)
+        {
+            _hintText = null;
+            _hintUntilTicks = null;
+            _contentDirty = true;
+        }
 
         var taskbar = TaskbarEnumerator.FindByDevice(_targetMonitorDevice);
         if (taskbar is null || !GetWindowRect(taskbar.Value.Handle, out var rect))
@@ -540,9 +623,10 @@ public sealed class TaskbarOverlayWindow : Form
         // Re-measure only when the inputs actually change. The composed number row doubles as
         // the countdown's change signal: when its text rolls over a minute the key differs from
         // the painted one, marking the content dirty even though the geometry usually doesn't.
-        // Only the Numbers style renders it, so the bar/marker paths skip composing it
-        // on every 500 ms tick.
-        var segments = _marker == TaskbarOverlayMarker.None && _style == TaskbarStyle.Numbers
+        // Only a text row needs it — the Numbers style, or any state while a cycle hint is up —
+        // so the bar/marker paths skip composing it on every 500 ms tick.
+        var segments = _hintText is not null
+                       || (_marker == TaskbarOverlayMarker.None && _style == TaskbarStyle.Numbers)
             ? BuildNumberSegments(SystemTheme.IsLightWindowsMode())
             : null;
         var segmentsKey = segments is null ? null : SegmentsKey(segments);
@@ -607,8 +691,11 @@ public sealed class TaskbarOverlayWindow : Form
     /// <summary>Renders the readout to a 32bpp ARGB bitmap and pushes it via UpdateLayeredWindow.</summary>
     private void Redraw()
     {
-        // The placeholder markers draw without a percentage; otherwise there's nothing to paint yet.
-        if (!IsHandleCreated || (_marker == TaskbarOverlayMarker.None && _percentage is null)) return;
+        // The placeholder markers and a cycle hint draw without a percentage; otherwise there's
+        // nothing to paint yet. This guard is what makes the bar branch's `_percentage!` safe.
+        if (!IsHandleCreated
+            || (_marker == TaskbarOverlayMarker.None && _hintText is null && _percentage is null))
+            return;
 
         // Read the taskbar theme once (cached in SystemTheme): it feeds the bar tick contrast and
         // the keep-alive's repaint dirty-check.
@@ -631,7 +718,10 @@ public sealed class TaskbarOverlayWindow : Form
             graphics.Clear(Color.FromArgb(1, 0, 0, 0));
             var bounds = new Rectangle(0, 0, _logicalWidth, _logicalHeight);
 
-            if (_marker != TaskbarOverlayMarker.None)
+            // A live cycle hint first: it outranks every other state, including the placeholder
+            // markers, and BuildNumberSegments below returns it as the whole row. Keep this
+            // order in step with UpdateMeasuredWidth, which sizes the window the same way.
+            if (_hintText is null && _marker != TaskbarOverlayMarker.None)
             {
                 // Resolve at 0% so the neutral marker isn't usage-coloured under the Auto preset.
                 var labelColor = IconRenderer.GetTextColor(_labelColor, 0, light);
@@ -640,14 +730,14 @@ public sealed class TaskbarOverlayWindow : Form
                 else
                     IconRenderer.DrawTaskbarWaiting(graphics, bounds, labelColor);
             }
-            else if (_style == TaskbarStyle.Bar)
+            else if (_hintText is null && _style == TaskbarStyle.Bar)
             {
-                // The session/weekly toggles pick the bars; the countdown doesn't apply (the bar
-                // has its own time tick). Nothing enabled (or weekly-only with no weekly data)
-                // falls back to the session bar rather than an empty readout.
+                // The session/weekly toggles pick the bars; the time elements don't apply (the
+                // bar has its own time tick). Nothing enabled (or weekly-only with no weekly
+                // data) falls back to the session bar rather than an empty readout.
                 var pct = _percentage!.Value;
                 var bars = new List<IconRenderer.TaskbarBarSpec>(2);
-                if (_showSession)
+                if (_metrics.Session)
                     bars.Add(IconRenderer.TaskbarBarSpec.FiveHour(pct, _fiveHourFraction));
                 if (WeeklyForDisplay is { } weekly)
                     bars.Add(IconRenderer.TaskbarBarSpec.SevenDay(weekly, _sevenDayFraction));
@@ -661,7 +751,9 @@ public sealed class TaskbarOverlayWindow : Form
                 // Rebuilt (not reused from Reposition) so colour-preset changes that repaint
                 // without repositioning (SetColors/SetColorMode) resolve fresh colours.
                 var segments = BuildNumberSegments(light);
-                var labelColor = IconRenderer.GetTextColor(_labelColor, _percentage!.Value, light);
+                // 0 when a hint is up before the first reading landed — the "Claude" label is
+                // neutral there, exactly as it is for the placeholder markers.
+                var labelColor = IconRenderer.GetTextColor(_labelColor, _percentage ?? 0, light);
                 IconRenderer.DrawTaskbarSegments(graphics, bounds, labelColor, segments);
                 _paintedSegmentsKey = SegmentsKey(segments);
             }
@@ -730,6 +822,10 @@ public sealed class TaskbarOverlayWindow : Form
     private const int WM_MOUSEACTIVATE = 0x0021;
     private const int MA_NOACTIVATE = 0x0003;
     private const int WM_LBUTTONUP = 0x0202;
+    private const int WM_MBUTTONUP = 0x0208;
+
+    // Ctrl flag carried in a mouse message's wParam.
+    private const long MK_CONTROL = 0x0008;
 
     private static readonly IntPtr HWND_TOPMOST = new(-1);
     private const uint SWP_NOACTIVATE = 0x0010;

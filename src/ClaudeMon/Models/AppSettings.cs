@@ -115,6 +115,22 @@ public record AppSettings
     [JsonPropertyName("alertLatchState")]
     public AlertLatchState? AlertLatchState { get; init; }
 
+    /// <summary>
+    /// The service-incident latch: the severity of the Anthropic incident ClaudeMon has already
+    /// accounted for (see <see cref="Monitoring.ServiceStatusAlerts"/>), or null while the status
+    /// page is healthy or nothing has been read yet. Persisted so restarting during a long
+    /// incident doesn't raise the same balloon again — in-memory only, an eight-hour maintenance
+    /// window cost one notification per restart (#138). Internal state, not a user setting —
+    /// kept top-level like <see cref="BudgetAlertState"/>, for the same reason: the Settings
+    /// dialog's <c>with</c>-expression save must not silently drop it. Stored by name; the
+    /// converter sits on the property rather than on <see cref="ServiceStatusLevel"/> because
+    /// the enum is the status page's vocabulary, not a settings type — this file is the only
+    /// place it is persisted.
+    /// </summary>
+    [JsonPropertyName("serviceIncidentLevel")]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public ServiceStatusLevel? ServiceIncidentLevel { get; init; }
+
     [JsonPropertyName("taskbarDisplay")]
     public TaskbarDisplaySettings TaskbarDisplay { get; init; } = new();
 
@@ -221,6 +237,14 @@ public record TaskbarDisplaySettings
     public bool ShowTimeToReset { get; init; }
 
     /// <summary>
+    /// Show the projected time until the 5-hour window hits 100% at the current burn rate
+    /// (<c>~1h 23m</c>) in the readout — the same estimate the flyout shows. Numbers style
+    /// only (the bar draws no text). Off by default.
+    /// </summary>
+    [JsonPropertyName("showTimeToLimit")]
+    public bool ShowTimeToLimit { get; init; }
+
+    /// <summary>
     /// Render the percentage elements with a trailing <c>%</c> (<c>42% · 17%</c> instead of
     /// <c>42 · 17</c>). Off by default so the compact original look is unchanged.
     /// </summary>
@@ -262,6 +286,25 @@ public record TaskbarDisplaySettings
     /// </summary>
     [JsonPropertyName("primaryHorizontalOffset")]
     public int PrimaryHorizontalOffset { get; init; }
+
+    /// <summary>
+    /// The four display toggles as one value, for the code that treats them as a set — the
+    /// overlay's element composition and the click-to-cycle gesture
+    /// (<c>UI.TaskbarMetricCycle</c>). Derived, not persisted: the toggles above remain the
+    /// stored form, so cycling and Settings can never disagree.
+    /// </summary>
+    [JsonIgnore]
+    public TaskbarMetricSelection Metrics =>
+        new(ShowSessionUsage, ShowWeeklyUsage, ShowTimeToLimit, ShowTimeToReset);
+
+    /// <summary>Copy with the display toggles replaced by <paramref name="metrics"/>.</summary>
+    public TaskbarDisplaySettings WithMetrics(TaskbarMetricSelection metrics) => this with
+    {
+        ShowSessionUsage = metrics.Session,
+        ShowWeeklyUsage = metrics.Weekly,
+        ShowTimeToLimit = metrics.TimeToLimit,
+        ShowTimeToReset = metrics.TimeToReset,
+    };
 }
 
 public record AlertThresholds
@@ -356,6 +399,14 @@ public record NotificationSettings
 
     [JsonPropertyName("notifyOnReset")]
     public bool NotifyOnReset { get; init; }
+
+    /// <summary>
+    /// Notify when Anthropic's status page starts reporting an incident (and again if it gets
+    /// worse). Off by default: the flyout already shows the state passively, and an outage
+    /// balloon is only useful to people who want to be interrupted by one.
+    /// </summary>
+    [JsonPropertyName("notifyOnServiceIncident")]
+    public bool NotifyOnServiceIncident { get; init; }
 
     /// <summary>
     /// Alerts are suppressed until this instant (issue #14). Null or in the past means not

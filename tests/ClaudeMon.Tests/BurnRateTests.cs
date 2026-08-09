@@ -252,4 +252,42 @@ public class BurnRateTests
     {
         Assert.Equal("at limit", BurnRate.FormatTimeToLimit(TimeSpan.Zero));
     }
+
+    [Theory]
+    [InlineData(35, "~35m")]
+    [InlineData(90, "~1h 30m")]
+    [InlineData(120, "~2h")]        // exact hours drop the minutes, as the flyout does
+    [InlineData(130, "~2h 10m")]
+    public void FormatCompact_DropsOnlyTheSuffix(int minutes, string expected)
+    {
+        Assert.Equal(expected, BurnRate.FormatTimeToLimitCompact(TimeSpan.FromMinutes(minutes)));
+    }
+
+    [Fact]
+    public void FormatCompact_NullAndZero_MatchTheFlyoutExactly()
+    {
+        // Neither state takes the "to limit" suffix, so the two forms are identical here.
+        Assert.Equal("—", BurnRate.FormatTimeToLimitCompact(null));
+        Assert.Equal("at limit", BurnRate.FormatTimeToLimitCompact(TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void FormatCompact_SubMinute_MatchesTheFlyoutsWording()
+    {
+        Assert.Equal("<1m", BurnRate.FormatTimeToLimitCompact(TimeSpan.FromSeconds(20)));
+    }
+
+    [Theory]
+    [InlineData(82.4)]   // rounds down — the case where Ceiling and Round would disagree
+    [InlineData(82.6)]   // rounds up
+    [InlineData(0.2)]    // sub-minute
+    [InlineData(120)]    // exact hours
+    public void FormatCompact_IsExactlyTheFlyoutLineMinusItsSuffix(double minutes)
+    {
+        // The taskbar element and the flyout line are the same projection shown twice; if the
+        // two formatters ever round differently they would contradict each other on screen.
+        var eta = TimeSpan.FromMinutes(minutes);
+        Assert.Equal(
+            $"{BurnRate.FormatTimeToLimitCompact(eta)} to limit", BurnRate.FormatTimeToLimit(eta));
+    }
 }

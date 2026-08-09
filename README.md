@@ -15,8 +15,9 @@ The usage percentage can also be shown directly on the taskbar:
 - **Real-time usage tracking** - Monitors both 5-hour and 7-day usage windows
 - **All quota buckets, including per-model weekly caps** - The usage flyout shows one bar for **every** limit the API reports, not just the classic two: Max plans carry a separate weekly cap per model (e.g. "Weekly (Fable)") that can run out **before** the overall weekly, and ClaudeMon now surfaces it with its own percentage, reset countdown, and bar. New bucket types Anthropic adds in the future render automatically with a sensible generic label. The API's own severity judgment tints the bars — a limit flagged *critical* shows red, *warning* at least orange — and also escalates that bucket's alert (severity only ever raises urgency; the tray icon is unchanged). The tray tooltip adds a compact line for the tightest per-model weekly (e.g. `Fable wk: 84% (2d 3h)`)
 - **Color-coded tray icon** - Green, yellow, orange, or red based on current utilization
-- **Taskbar usage display** - Optional always-visible readout on the taskbar, color-coded to match the tray icon (on by default; toggle in Settings). Choose between two **styles**: the stacked **Numbers** or a compact **Bar + time tick** that shows usage against where "now" sits in the reset window (so you can see at a glance whether you're burning faster than the clock), with a selectable bar width. Compose what it shows with three toggles — **session (5-hour) usage**, **weekly (7-day) usage**, and a live **time-left-to-reset countdown** (e.g. `1h 23m`, Numbers style; shows `idle` when the 5-hour window has ended and no new one has started). An optional **% sign** setting renders the percentages as `42% · 17%` instead of the compact default `42 · 17`. Optionally shows on **every** monitor's taskbar (opt-in, when Windows is set to show the taskbar on all displays), and follows monitors as they're connected or disconnected. A position setting lets you fine-tune the spacing from the clock on secondary monitors. While no usage reading is available yet (just launched, or the API is rate limited before anything was fetched) the readout shows a waiting "…" under the "Claude" label instead of nothing, and switches to real numbers on the next successful poll.
+- **Taskbar usage display** - Optional always-visible readout on the taskbar, color-coded to match the tray icon (on by default; toggle in Settings). Choose between two **styles**: the stacked **Numbers** or a compact **Bar + time tick** that shows usage against where "now" sits in the reset window (so you can see at a glance whether you're burning faster than the clock), with a selectable bar width. Compose what it shows with four toggles — **session (5-hour) usage**, **weekly (7-day) usage**, an estimated **time to limit** (e.g. `~1h 23m` at your current burn rate), and a live **time-left-to-reset countdown** (e.g. `1h 23m`, Numbers style; shows `idle` when the 5-hour window has ended and no new one has started). **Middle-click** (or **Ctrl+left-click**) the readout to cycle which of those four it shows without opening Settings — the readout flashes the metric's name, and the choice sticks. An optional **% sign** setting renders the percentages as `42% · 17%` instead of the compact default `42 · 17`. Optionally shows on **every** monitor's taskbar (opt-in, when Windows is set to show the taskbar on all displays), and follows monitors as they're connected or disconnected. A position setting lets you fine-tune the spacing from the clock on secondary monitors. While no usage reading is available yet (just launched, or the API is rate limited before anything was fetched) the readout shows a waiting "…" under the "Claude" label instead of nothing, and switches to real numbers on the next successful poll.
 - **Pace-aware alerts** - Rather than a fixed percentage, the main warning fires when your usage relative to how far through the reset window you are means you're **on track to run out before it resets** — early enough to slow down. A separate **near-the-limit backstop** still fires a critical "almost out" alert near the cap regardless of pace. The **weekly warning** covers *every* weekly bucket — the overall 7-day cap and each per-model cap (e.g. `Fable weekly usage at 84% — resets 2d 3h`), which can run out first — each tracked independently so one alert never masks another, escalating to critical near the cap or when Anthropic itself flags that bucket critical. The pace sensitivity (Early / Balanced / Late) is configurable. When you're deliberately burning quota, **Snooze notifications** in the tray menu quiets the alerts for 30 minutes / 1 hour / 3 hours / until the next 5-hour reset — the tray and taskbar readouts keep updating, the menu shows the remaining snooze time with a **Resume alerts** item, the snooze survives a restart, and an alert whose condition still holds when the snooze ends fires then instead of being lost.
+- **Anthropic service status** - Answers "is it me, or is it down?" where you already look. When Anthropic's [status page](https://status.claude.com) reports anything other than operational, the flyout shows a single coloured line in the page's own wording — `⚠ Anthropic: Partial System Outage` — and clicking it opens the status page. A healthy service shows **nothing at all**, so the flyout is unchanged when everything is fine. An optional notification (off by default) announces an incident when it starts, and again only if it gets worse. The check rides along on the usage poll — no extra timer, and it pauses with everything else while the workstation is locked
 - **Reset countdown** - Shows time remaining until rate limits reset
 - **Smart polling while locked** - Pauses API polling (and the daily update check) while the workstation is locked, then refreshes immediately on unlock so the readout is fresh within seconds of returning — no wasted API calls overnight, no stale numbers when you sit back down
 - **Usage trend sparkline** - The flyout draws a compact sparkline of recent 5-hour usage so you can see whether you're climbing fast or leveling off; history is recorded locally and survives restarts
@@ -53,6 +54,12 @@ ClaudeMon writes diagnostics to a per-day file, `%LocalAppData%\ClaudeMon\logs\c
 ### Usage history
 
 Recent usage samples are recorded to `%LocalAppData%\ClaudeMon\history.json` to power the flyout's trend sparkline. The file is a rolling window (pruned by age and count, so it never grows without bound) and survives restarts. It contains only utilization percentages and timestamps — no account or token data.
+
+### Anthropic service status
+
+Alongside each usage poll, ClaudeMon reads Anthropic's public status summary at `https://status.claude.com/api/v2/status.json` (the address `status.anthropic.com` redirects to) — the same JSON the status page itself is built from. The request is unauthenticated and sends nothing about you or your account; only the overall indicator and its description are read.
+
+The flyout draws a line only when that indicator is *not* operational, and the optional **Notify on Anthropic service incidents** alert is off until you turn it on. If the status page can't be reached, ClaudeMon stays quiet and keeps showing the last state it saw — a status page you can't load is not worth an alert of its own.
 
 ### Local cost estimates (from Claude Code logs)
 
@@ -93,6 +100,7 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | **Critical alert near the limit at** | The near-cap backstop — a critical "almost out" alert once 5-hour usage reaches this percentage, regardless of pace (default 90%) |
 | **Weekly (7-day) warning at** | Notification when a weekly bucket crosses this percentage — the overall 7-day cap *and* each per-model weekly cap ("Weekly (Fable)"), each alerting once per window. Escalates to a critical alert past the near-cap percentage above, or when Anthropic flags that bucket critical |
 | **Notify when the rate limit resets** | Notify when your 5-hour limit resets to full capacity |
+| **Notify on Anthropic service incidents** | Balloon when Anthropic's [status page](https://status.claude.com) starts reporting an incident, and again only if it escalates (minor → major) — never one per poll, and nothing on recovery. Off by default: the flyout already shows the state passively. See [Anthropic service status](#anthropic-service-status) |
 | **Push notification topic (ntfy.sh)** | Optional [ntfy](https://ntfy.sh) topic — when set, every alert that shows a desktop balloon (pace warning, near-cap, weekly, reset) also pushes to this topic, so it reaches your phone via the free ntfy Android/iOS app. Blank disables it (the default). Pick a random, unguessable topic name rather than something obvious — unauthenticated ntfy topics are readable by anyone who knows the name. Points at the public `ntfy.sh` server unless a self-hosted server URL is set in the config file (`pushServerUrl`) |
 
 ### Taskbar
@@ -108,11 +116,37 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | **Position** | Nudge the primary monitor's readout left (−) or right (+) in pixels — e.g. to open more gap from the clock or clear something near the tray; previews live as you change it. 0 (the default) keeps the exact tray anchoring, so nothing moves until you adjust it |
 | **Show session (5-hour) usage** | Show the session percentage in the readout (on by default) |
 | **Show weekly (7-day) usage** | Also show the weekly percentage, dot-separated (off by default; replaces the old "Also show 7-day usage" toggle — an existing opt-in migrates automatically) |
+| **Show time to limit (estimated)** | Add the projected time until the session hits 100% at your current burn rate (e.g. `~1h 23m`) — the same estimate the flyout shows, tilde-marked to distinguish it from the countdown below. Shows `—` when the trend is flat or the window resets first. Numbers style only (off by default) |
 | **Show time left to reset** | Add a compact countdown to the 5-hour reset (e.g. `1h 23m`) that ticks down live. Numbers style only — the Bar style already marks time with its tick (off by default) |
 | **Show % sign after percentages** | Render the readout's percentages with an explicit percent sign (`42% · 17%` instead of `42 · 17`). Numbers style only (off by default, keeping the compact original look) |
 | **Taskbar text colors** | Color of the "Claude" label and the percentage number. Fixed presets, plus **Auto (match taskbar)** — light text on a dark taskbar, dark on a light one, following theme changes live; the number can also stay **Auto (usage level)** (green/yellow/orange/red) |
 | **Show on secondary monitors** | Also show the readout on secondary monitors' taskbars, not just the primary (off by default; needs Windows set to show the taskbar on all displays) |
 | **Position** (under *Show on secondary monitors*) | Nudge the readout left (−) or right (+) on secondary monitors to fine-tune the gap from the clock; previews live as you change it (0 by default). Independent of the primary **Position** nudge |
+
+#### Click-to-cycle the readout
+
+**Middle-click** the readout — or **Ctrl+left-click**, for mice without a usable middle button —
+to switch which metric it shows, without opening Settings. Plain left-click still opens the
+detail flyout. The readout briefly flashes the name of the metric you landed on (`session`,
+`weekly`, `to limit`, `resets`) so you can tell at a glance what changed.
+
+The gesture is a shortcut over the four display toggles above, not a separate setting — cycling
+writes those toggles, so Settings always shows what you're looking at, and the choice survives a
+restart. That means:
+
+| Behaviour | What happens |
+|---|---|
+| **Cycle order** | session → weekly → to limit → resets → back to session |
+| **From a multi-element readout** | The toggles can show several metrics at once, which has no single position in the ring. The first click collapses the readout onto its *leftmost* element rather than skipping past it; every click after that advances by one |
+| **Cycling replaces the composition** | Landing on a metric turns the others off. To get a multi-element readout back, tick the toggles in Settings again |
+| **Bar style** | The bar draws no text, so it cycles only the two metrics it can draw as a bar (session ↔ weekly) — the time metrics would cycle to an identical-looking readout. The bar style always shows a bar (apart from the brief name flash), and the two time toggles it can't display are left exactly as you set them, so switching back to Numbers restores your composition |
+| **Multiple monitors** | The metric is one setting, so cycling on any taskbar moves every readout together |
+| **While Settings is open** | The gesture does nothing — the readouts are that dialog's live preview, so Settings alone drives them until you close it |
+| **What it doesn't touch** | The **% sign**, style, size, colours, and position settings are untouched by cycling |
+
+A cycled-to metric shows what it has: land on **to limit** before ClaudeMon has enough samples to
+project a burn rate (or while your usage is flat) and the readout shows `—` until an estimate
+becomes possible, rather than quietly showing you a different number than the one you picked.
 
 ### Updates
 

@@ -45,6 +45,15 @@ GitHub release; the release notes are taken from these entries.
   state stays on screen. (#132)
 
 ### Changed
+- **The time-to-limit readout now says `safe` when you'll make it to the reset** — the estimate
+  showed the same "—" for three very different situations: you're burning too slowly to hit 100%
+  before the window resets (good news), there isn't enough recent history for a projection yet,
+  and the trend is flat or declining. Enabling the element mid-session and seeing only a dash
+  read as "broken" when it actually meant "you're fine". The reset-beats-projection case now
+  shows `safe` on the taskbar readout (and `safe (resets first)` in the flyout's 5-hour line
+  where the pace forecast — which already carries the same news for a live window — has no
+  window data to draw on), while "—" is reserved for the states with genuinely nothing to
+  show. The projection math itself is unchanged. (#158)
 - **Usage API requests now identify ClaudeMon.** Every poll of the Anthropic usage endpoint
   previously went out with no `User-Agent` at all; it now sends `ClaudeMon/<version>`, along
   with `Accept: application/json` and the `anthropic-beta: oauth-2025-04-20` header that Claude

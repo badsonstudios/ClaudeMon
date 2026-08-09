@@ -78,7 +78,7 @@ public sealed class TaskbarOverlayWindow : Form
     private double? _sevenDayPercentage;
     private double? _sevenDayFraction;
     private DateTimeOffset? _fiveHourResetAt;
-    private TimeSpan? _timeToLimit;
+    private TimeToLimitEstimate _timeToLimit;
 
     // Which elements the readout shows (session %, weekly %, time-to-limit, reset countdown).
     // All-off is normalized to session-only at composition time so the readout never renders empty.

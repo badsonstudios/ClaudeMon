@@ -348,14 +348,14 @@ public sealed class TrayApplication : IDisposable
     /// samples). The latest history sample is recorded from the same poll that produced the
     /// bucket, so the current pct and the slope's newest point agree. A null reset is passed
     /// when <c>ResetAt</c> is unknown (<c>TimeUntilReset</c> returns Zero for both "unknown"
-    /// and "expired/idle" — only the latter should suppress the estimate). Shared by the
-    /// flyout's "to limit" line and the taskbar readout's optional element so they can't
+    /// and "expired/idle" — only the latter should read as reset-beats-projection). Shared by
+    /// the flyout's "to limit" line and the taskbar readout's optional element so they can't
     /// disagree about the same projection.
     /// </summary>
-    private TimeSpan? EstimateTimeToLimit(UsageBucket? fiveHour)
+    private TimeToLimitEstimate EstimateTimeToLimit(UsageBucket? fiveHour)
     {
         if (fiveHour is null)
-            return null;
+            return TimeToLimitEstimate.NoEstimate;
 
         TimeSpan? timeUntilReset = fiveHour.ResetAt is null ? null : fiveHour.TimeUntilReset;
         return BurnRate.EstimateTimeToLimit(

@@ -69,6 +69,10 @@ GitHub release; the release notes are taken from these entries.
   controlled-folder-access block, or a full disk threw straight out into whichever settings
   dialog or background poll happened to trigger the save. It is now handled the same quiet,
   best-effort way as the write itself. (#145)
+- **Saving Settings no longer resets taskbar options the dialog doesn't show** — OK rebuilt the
+  taskbar display settings from the controls alone, so anything stored there without a control of
+  its own was quietly dropped on every save. It is now layered onto your saved settings, the way
+  the notification settings already were. (#143)
 
 ## [0.25.0] - 2026-08-09
 

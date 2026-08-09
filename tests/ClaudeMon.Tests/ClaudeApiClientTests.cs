@@ -108,6 +108,60 @@ public class ClaudeApiClientTests : IDisposable
         Assert.Equal("my-secret-token", _handler.LastRequest.Headers.Authorization?.Parameter);
     }
 
+    // The usage endpoint is polled every few minutes for the life of the session; identify
+    // ourselves honestly so Anthropic can attribute (and if need be, contact) the traffic.
+    // Deliberately NOT "claude-code/…" — see the header audit in issue #136.
+    [Fact]
+    public async Task GetUsage_SendsClaudeMonUserAgent()
+    {
+        _handler.SetResponse(HttpStatusCode.OK, """{"five_hour":{"utilization":0,"resets_at":"2026-01-01T00:00:00Z"}}""");
+
+        await _client.GetUsageAsync("test-token");
+
+        var assemblyVersion = typeof(ClaudeApiClient).Assembly.GetName().Version;
+        Assert.NotNull(assemblyVersion);
+
+        var product = Assert.Single(_handler.LastRequest!.Headers.UserAgent);
+        Assert.Equal("ClaudeMon", product.Product?.Name);
+        // Pinned to the real assembly version, so a broken version lookup can't pass as "0.0.0".
+        Assert.Equal(ClaudeApiClient.FormatVersion(assemblyVersion), product.Product?.Version);
+        Assert.NotEqual("0.0.0", product.Product?.Version);
+    }
+
+    // OAuth bearer calls to the first-party API carry this beta header in Claude Code; the
+    // usage endpoint tolerates its absence today, so sending it is forward-insurance.
+    [Fact]
+    public async Task GetUsage_SendsOAuthBetaAndAcceptHeaders()
+    {
+        _handler.SetResponse(HttpStatusCode.OK, """{"five_hour":{"utilization":0,"resets_at":"2026-01-01T00:00:00Z"}}""");
+
+        await _client.GetUsageAsync("test-token");
+
+        Assert.True(_handler.LastRequest!.Headers.TryGetValues("anthropic-beta", out var beta));
+        Assert.Equal("oauth-2025-04-20", Assert.Single(beta));
+        Assert.Contains(
+            _handler.LastRequest.Headers.Accept,
+            h => h.MediaType == "application/json");
+    }
+
+    [Theory]
+    [InlineData(0, 26, 0, 0, "0.26.0")]
+    [InlineData(1, 2, 3, 4, "1.2.3")]
+    public void FormatVersion_DropsTheFourthComponent(
+        int major, int minor, int build, int revision, string expected)
+    {
+        Assert.Equal(expected, ClaudeApiClient.FormatVersion(new Version(major, minor, build, revision)));
+    }
+
+    // A missing or 2-part version must still yield a valid product token, never "ClaudeMon/-1"
+    // (Version.Build is -1 when unspecified), which would throw when added to the header.
+    [Fact]
+    public void FormatVersion_MissingOrPartialVersion_StillWellFormed()
+    {
+        Assert.Equal("0.0.0", ClaudeApiClient.FormatVersion(null));
+        Assert.Equal("1.2.0", ClaudeApiClient.FormatVersion(new Version(1, 2)));
+    }
+
     [Fact]
     public void UsageBucket_FormatResetCountdown_Hours()
     {

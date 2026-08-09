@@ -40,6 +40,12 @@ GitHub release; the release notes are taken from these entries.
   silently ignored — the status of the status page is not itself an alert — and the last known
   state stays on screen. (#132)
 
+### Fixed
+- **Service-incident notifications no longer repeat after a restart** — the "already told you
+  about this incident" state now persists with your settings, so restarting ClaudeMon during a
+  long Anthropic incident stays quiet instead of raising the same balloon again. An incident that
+  gets worse still notifies, and recovery re-arms it for the next one. (#138)
+
 ## [0.25.0] - 2026-08-09
 
 ### Fixed

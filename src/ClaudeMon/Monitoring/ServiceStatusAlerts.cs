@@ -7,13 +7,18 @@ using ClaudeMon.Services;
 public record ServiceStatusAlertMessage(string Title, string Text, ToolTipIcon Icon);
 
 /// <summary>
-/// Decides whether a status transition is worth notifying about. Pure: it takes the previous
-/// and current status and returns the alert to raise, or null.
+/// Decides whether a status transition is worth notifying about. Pure: it takes the latched
+/// severity of the incident already accounted for and the current status, and returns the new
+/// latch plus the alert to raise, or null.
 ///
 /// The rule is "incident <em>start</em>, then escalation": going from healthy (or unknown) to
 /// any non-operational state notifies once, and a further notification only follows if the
 /// severity rises (minor → major). A long incident therefore produces one balloon, not one per
 /// poll, and recovery is silent — the flyout line simply disappears.
+///
+/// The latch is returned rather than remembered so the caller can persist it
+/// (<see cref="AppSettings.ServiceIncidentLevel"/>): held in memory only, it reset on every
+/// restart and a long incident re-announced itself each time the app started (#138).
 ///
 /// The settings gate lives here too — opt-in toggle, the master notifications switch, and the
 /// snooze — so "respects snooze" is testable rather than buried in the tray class.
@@ -21,25 +26,37 @@ public record ServiceStatusAlertMessage(string Title, string Text, ToolTipIcon I
 internal static class ServiceStatusAlerts
 {
     /// <summary>
-    /// The alert to raise for this transition, or null for none. A snoozed alert is dropped
-    /// rather than deferred: unlike a budget threshold, the incident is already visible on the
-    /// flyout line the whole time, so re-announcing it after the snooze would be the noisier
-    /// choice.
+    /// The latch to persist and the alert to raise for this reading (either may be null).
+    ///
+    /// The latch follows what was <em>observed</em>, not what was shown, so a suppressed alert
+    /// is dropped rather than deferred: unlike a budget threshold, the incident is already
+    /// visible on the flyout line the whole time, so re-announcing it once the snooze expires
+    /// (or once the toggle is turned on) would be the noisier choice. It also means the latch
+    /// tracks the incident faithfully whatever the settings say, so it can't go stale and
+    /// silence a later incident.
     /// </summary>
-    public static ServiceStatusAlertMessage? Evaluate(
-        ServiceStatus? previous, ServiceStatus? current, NotificationSettings settings, DateTimeOffset now)
+    public static (ServiceStatusLevel? Latch, ServiceStatusAlertMessage? Alert) Evaluate(
+        ServiceStatusLevel? latch, ServiceStatus? current, NotificationSettings settings, DateTimeOffset now)
     {
-        if (!settings.NotifyOnServiceIncident || !settings.Enabled || settings.IsSnoozed(now))
-            return null;
+        // No reading this time (the status page couldn't be reached): nothing was observed, so
+        // whatever was latched still stands.
+        if (current is null)
+            return (latch, null);
 
-        if (current is null || current.IsOperational)
-            return null;
+        // Recovery clears the latch — unconditionally, so the next incident always alerts. Only
+        // an observed recovery clears it, so an app that was closed across the whole of a
+        // recovery can carry a latch into a *different*, no-worse incident and stay quiet about
+        // it. Accepted: that needs the app to be shut for one incident's entire tail and the
+        // next one's start, and any healthy reading in between re-arms it.
+        if (current.IsOperational)
+            return (null, null);
 
         // Already in an incident at this severity or worse — nothing new to say.
-        if (previous is not null && !previous.IsOperational && current.Level <= previous.Level)
-            return null;
+        if (latch is { } seen && current.Level <= seen)
+            return (latch, null);
 
-        return Compose(current);
+        var suppressed = !settings.NotifyOnServiceIncident || !settings.Enabled || settings.IsSnoozed(now);
+        return (current.Level, suppressed ? null : Compose(current));
     }
 
     private static ServiceStatusAlertMessage Compose(ServiceStatus status)

@@ -60,6 +60,21 @@ public class TokenRefresherTests
         Assert.Equal("9d1c250a-e61b-44d9-88ed-5944d1962f5e", doc.RootElement.GetProperty("client_id").GetString());
     }
 
+    // The token endpoint used to be the one call that identified itself as nobody at all (#141).
+    [Fact]
+    public async Task Refresh_SendsSharedUserAgentHeader()
+    {
+        var handler = new MockHttpHandler(HttpStatusCode.OK, """
+        {"access_token":"a","refresh_token":"b","expires_in":100}
+        """);
+        using var refresher = new TokenRefresher(new HttpClient(handler));
+
+        await refresher.RefreshAsync(ExpiredCredential());
+
+        Assert.NotNull(handler.LastRequest);
+        Assert.Equal(AppUserAgent.Header, Assert.Single(handler.LastRequest.Headers.UserAgent));
+    }
+
     [Fact]
     public async Task Refresh_MissingRefreshTokenInResponse_KeepsExistingOne()
     {

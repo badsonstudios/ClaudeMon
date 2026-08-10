@@ -59,6 +59,8 @@ public sealed class TokenRefresher : IDisposable
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json"),
             };
+            // Set per-request, not on DefaultRequestHeaders: the HttpClient may be the caller's.
+            request.Headers.UserAgent.Add(AppUserAgent.Header);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             using var response = await _httpClient.SendAsync(request, cancellationToken);

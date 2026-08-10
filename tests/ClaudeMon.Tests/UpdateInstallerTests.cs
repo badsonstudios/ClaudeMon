@@ -56,6 +56,23 @@ public class UpdateInstallerTests : IDisposable
         Assert.Equal(InstallerBytes, await File.ReadAllBytesAsync(_downloadPath));
     }
 
+    // Both downloads carry the shared app-wide agent — it used to be "ClaudeMon/updater" (#141).
+    [Fact]
+    public async Task Download_BothRequests_SendSharedUserAgentHeader()
+    {
+        _handler.Map(InstallerUrl, HttpStatusCode.OK, InstallerBytes);
+        _handler.Map(ChecksumUrl, HttpStatusCode.OK,
+            Encoding.ASCII.GetBytes($"{InstallerSha256}  ClaudeMon-Setup-0.0.0-test.exe\n"));
+
+        await _installer.DownloadAndVerifyAsync(
+            InstallerUrl, ChecksumUrl, progress: null, CancellationToken.None);
+
+        Assert.Equal(2, _handler.Requests.Count);
+        Assert.All(
+            _handler.Requests,
+            r => Assert.Equal(AppUserAgent.Header, Assert.Single(r.Headers.UserAgent)));
+    }
+
     [Fact]
     public async Task Download_ChecksumMismatch_FailsAndDeletesTheDownload()
     {
@@ -270,12 +287,16 @@ public class UpdateInstallerTests : IDisposable
     {
         private readonly Dictionary<string, (HttpStatusCode Status, byte[] Body)> _responses = [];
 
+        /// <summary>Every request seen, so header assertions can cover both downloads.</summary>
+        public List<HttpRequestMessage> Requests { get; } = [];
+
         public void Map(string url, HttpStatusCode status, byte[] body) =>
             _responses[url] = (status, body);
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
 
             var url = request.RequestUri!.AbsoluteUri;

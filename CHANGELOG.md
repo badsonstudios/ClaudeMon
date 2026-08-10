@@ -3,6 +3,15 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.27.0] - Unreleased
+
+### Changed
+- **ClaudeMon now identifies itself the same way on every request it makes.** The usage API, the
+  GitHub update check, and the installer download each sent a different `User-Agent`, and the
+  OAuth token refresh sent none at all. All four now send one `ClaudeMon/<version>` built in a
+  single place, so an install's traffic reads as one app at one version rather than three. Headers
+  only — nothing about polling, updating, or signing in changed. (#141)
+
 ## [0.26.0] - 2026-08-09
 
 ### Added

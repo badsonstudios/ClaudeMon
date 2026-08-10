@@ -348,9 +348,11 @@ public sealed class TrayApplication : IDisposable
     /// samples). The latest history sample is recorded from the same poll that produced the
     /// bucket, so the current pct and the slope's newest point agree. A null reset is passed
     /// when <c>ResetAt</c> is unknown (<c>TimeUntilReset</c> returns Zero for both "unknown"
-    /// and "expired/idle" — only the latter should read as reset-beats-projection). Shared by
-    /// the flyout's "to limit" line and the taskbar readout's optional element so they can't
-    /// disagree about the same projection.
+    /// and "expired/idle" — only the latter should read as reset-beats-projection). The window
+    /// start goes with it so samples from before the last reset can't drag the slope down (#160);
+    /// it is null for the same unknown-reset case, where the whole lookback is used as before.
+    /// Shared by the flyout's "to limit" line and the taskbar readout's optional element so they
+    /// can't disagree about the same projection.
     /// </summary>
     private TimeToLimitEstimate EstimateTimeToLimit(UsageBucket? fiveHour)
     {
@@ -359,7 +361,8 @@ public sealed class TrayApplication : IDisposable
 
         TimeSpan? timeUntilReset = fiveHour.ResetAt is null ? null : fiveHour.TimeUntilReset;
         return BurnRate.EstimateTimeToLimit(
-            _history.Recent(BurnRateWindow), fiveHour.UtilizationPct, timeUntilReset);
+            _history.Recent(BurnRateWindow), fiveHour.UtilizationPct, timeUntilReset,
+            fiveHour.WindowStart(UsageWindows.FiveHour));
     }
 
     /// <summary>

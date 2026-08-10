@@ -3,6 +3,20 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.27.0] - Unreleased
+
+### Fixed
+- **The time-to-limit estimate now recovers within a couple of polls after a 5-hour reset**
+  instead of showing a dash for half an hour. The estimate reads the trend from the last 30
+  minutes of samples, and after a reset that half hour still contained the pre-reset numbers —
+  so a window that dropped from 49% to 2% looked like usage *falling* fast, and both the flyout
+  line and the taskbar readout's element showed `—` until the old samples aged out, even though
+  usage was climbing again the whole time. Samples from before the current window began are now
+  left out of the trend, so once the new window has three readings of its own the estimate comes
+  back as a real projection (or `safe` when the next reset beats it). With fewer than three it
+  still honestly shows `—`, and when Anthropic doesn't tell us when the window resets nothing
+  changes. (#160)
+
 ## [0.26.0] - 2026-08-09
 
 ### Added

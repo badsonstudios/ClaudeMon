@@ -223,6 +223,32 @@ public class ClaudeApiClientTests : IDisposable
         Assert.InRange(fraction.Value, 0.49, 0.51);
     }
 
+    [Fact]
+    public void UsageBucket_WindowStart_IsTheResetMinusTheWindowLength()
+    {
+        var resetAt = new DateTimeOffset(2026, 6, 27, 17, 0, 0, TimeSpan.Zero);
+        var bucket = new UsageBucket(50.0, resetAt);
+
+        Assert.Equal(resetAt.AddHours(-5), bucket.WindowStart(UsageWindows.FiveHour));
+    }
+
+    [Fact]
+    public void UsageBucket_WindowStart_UnknownReset_IsNull()
+    {
+        Assert.Null(new UsageBucket(50.0, null).WindowStart(UsageWindows.FiveHour));
+    }
+
+    // Unlike ElapsedFraction, an expired window still reports where it began — the burn-rate
+    // filter (#160) wants the boundary, and one 5 hours in the past excludes nothing recent.
+    [Fact]
+    public void UsageBucket_WindowStart_ExpiredWindow_StillKnown()
+    {
+        var resetAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var bucket = new UsageBucket(50.0, resetAt);
+
+        Assert.Equal(resetAt.AddHours(-5), bucket.WindowStart(UsageWindows.FiveHour));
+    }
+
     // --- Error paths: everything below the happy path must come back as a result record, never
     // as an exception thrown into the poll loop (issue #103).
 

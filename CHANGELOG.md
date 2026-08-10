@@ -3,6 +3,18 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.27.0] - Unreleased
+
+### Internal
+- **Second coverage pass over the logic layer, and a higher bar to keep it there.** The classes
+  the previous pass left out are now tested — the taskbar reading and DPI scaling helpers, the
+  local-usage snapshot and breakdown records, the credentials file model, and the push
+  notifier's fire-and-forget path — along with the `UsageMonitor` branches that only happen when
+  things go wrong: a token the server rejects after the refresh also fails, a poll cancelled by
+  shutdown, and a refreshed token that can't be written back because another Claude client
+  rotated it first. The CI coverage gate moves from 85%/84% to 90%/87% (measured 96.0% line /
+  91.4% branch). No behaviour changes.
+
 ## [0.26.0] - 2026-08-09
 
 ### Added

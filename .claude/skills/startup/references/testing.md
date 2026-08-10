@@ -20,8 +20,9 @@ Run long suites in the background and check results when notified.
 CI collects coverage on every push and PR, publishes a per-class summary to the Actions job
 summary, uploads the HTML/Cobertura report as the `coverage-report` artifact, and fails the
 build if the **logic layer** drops below the gate in `.github/workflows/ci.yml`
-(`COVERAGE_MIN_LINE` / `COVERAGE_MIN_BRANCH`, currently 85% line / 84% branch against a
-measured 87.0% / 86.2%).
+(`COVERAGE_MIN_LINE` / `COVERAGE_MIN_BRANCH`, currently 90% line / 87% branch against a
+measured 96.0% / 91.4% — re-measure and re-state both numbers together, or the comment in
+`ci.yml` and this line drift apart again).
 
 Reproduce it locally — same settings file, same pinned ReportGenerator version as CI:
 
@@ -52,6 +53,12 @@ were deliberately extracted out of the forms (`*Layout`, `*Metrics`, `*Placement
 
 Only add a class to the exclusion list if it genuinely needs a live desktop or a message loop.
 "It has no tests yet" is not a reason — that is precisely what the gate exists to notice.
+
+One class sits permanently low and is *not* excluded: `ListViewSortIndicator` (~15%). Its guard
+clause is unit-tested, but the rest is a conversation with a live comctl32 header control
+(`LVM_GETHEADER`, then `HDM_GET/SETITEMW` against the HWND) and needs a realized `ListView`, so
+it is verified by using the Usage & costs window. It stays in the measurement deliberately — it
+is small, and excluding it would hide any *new* untested code someone adds to it.
 
 **Never declare a `const` whose type comes from WinForms** (`TextFormatFlags`, `AnchorStyles`,
 `Keys`, …) — use `static readonly` instead. A `const`'s type is baked into metadata as a constant,

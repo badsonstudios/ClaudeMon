@@ -1,5 +1,7 @@
 namespace ClaudeMon.Tests;
 
+using System.Text.Json;
+using ClaudeMon.Models;
 using ClaudeMon.Services;
 
 public class CredentialReaderTests : IDisposable
@@ -50,6 +52,23 @@ public class CredentialReaderTests : IDisposable
         Assert.Equal("sk-ant-oat01-test-token", result.Credential.AccessToken);
         Assert.Equal("max", result.Credential.SubscriptionType);
         Assert.Equal("default_claude_max_5x", result.Credential.RateLimitTier);
+    }
+
+    [Fact]
+    public void CredentialFile_MapsEveryTopLevelFieldOfTheOnDiskShape()
+    {
+        // Read() hands back only the OAuth section, but the model mirrors the whole file: it
+        // is what documents the on-disk shape WriteBack has to preserve field-for-field.
+        var file = JsonSerializer.Deserialize<CredentialFile>("""
+        {
+            "claudeAiOauth": { "accessToken": "sk-ant-oat01-test", "expiresAt": 9999999999999 },
+            "organizationUuid": "11111111-2222-3333-4444-555555555555"
+        }
+        """);
+
+        Assert.NotNull(file);
+        Assert.Equal("sk-ant-oat01-test", file.ClaudeAiOauth?.AccessToken);
+        Assert.Equal("11111111-2222-3333-4444-555555555555", file.OrganizationUuid);
     }
 
     [Fact]

@@ -99,11 +99,49 @@ public class PricingTableTests
 
         // The bundled table must cover the current model families.
         Assert.NotNull(table.Resolve("claude-fable-5"));
+        Assert.NotNull(table.Resolve("claude-opus-5"));
         Assert.NotNull(table.Resolve("claude-opus-4-8"));
         Assert.NotNull(table.Resolve("claude-sonnet-5"));
         Assert.NotNull(table.Resolve("claude-haiku-4-5"));
         // Dated variants land on their base rows.
         Assert.NotNull(table.Resolve("claude-sonnet-5-20251101"));
+    }
+
+    [Theory]
+    // Anthropic list prices per MTok: input, output, 5m cache write, 1h cache
+    // write, cache read. Source: platform.claude.com/docs/en/about-claude/pricing
+    // (retrieved 2026-08-10).
+    [InlineData("claude-fable-5", 10.0, 50.0, 12.5, 20.0, 1.0)]
+    [InlineData("claude-mythos-5", 10.0, 50.0, 12.5, 20.0, 1.0)]
+    [InlineData("claude-opus-5", 5.0, 25.0, 6.25, 10.0, 0.5)]
+    [InlineData("claude-opus-4-8", 5.0, 25.0, 6.25, 10.0, 0.5)]
+    [InlineData("claude-sonnet-5", 3.0, 15.0, 3.75, 6.0, 0.3)]
+    [InlineData("claude-haiku-4-5", 1.0, 5.0, 1.25, 2.0, 0.1)]
+    public void LoadEmbedded_CurrentModels_MatchPublishedRates(
+        string id, double input, double output, double write5m, double write1h, double read)
+    {
+        var pricing = PricingTable.LoadEmbedded().Resolve(id);
+
+        Assert.NotNull(pricing);
+        Assert.Equal(input, pricing.InputPerMTok);
+        Assert.Equal(output, pricing.OutputPerMTok);
+        Assert.Equal(write5m, pricing.CacheWrite5mPerMTok);
+        Assert.Equal(write1h, pricing.CacheWrite1hPerMTok);
+        Assert.Equal(read, pricing.CacheReadPerMTok);
+    }
+
+    [Fact]
+    public void Resolve_Opus5Variants_LandOnOpus5AndNotOnOpus4()
+    {
+        var table = PricingTable.LoadEmbedded();
+
+        // The ids a transcript can carry for this model must all price at the
+        // opus-5 row rather than falling through to an opus-4-x row.
+        Assert.Equal(table.Resolve("claude-opus-5"), table.Resolve("claude-opus-5-20260101"));
+        Assert.Equal(table.Resolve("claude-opus-5"), table.Resolve("anthropic.claude-opus-5"));
+        Assert.Equal(table.Resolve("claude-opus-5"), table.Resolve("claude-opus-5-fast"));
+        // A future numeric version is a different model and must stay unpriced.
+        Assert.Null(table.Resolve("claude-opus-5-1"));
     }
 
     [Fact]

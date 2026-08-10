@@ -3,6 +3,17 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.27.0] - Unreleased
+
+### Fixed
+- **Windows no longer run off the bottom of a short screen** — the fit-to-monitor clamp added to
+  the Settings window now covers every window in the app. About, the update prompt, the update
+  download progress window and the Usage & costs window all size themselves from their content,
+  so on a short display or at a large scale factor any of them could put its buttons somewhere
+  below the taskbar. They now cap themselves to the monitor's working area (scrolling, or in the
+  resizable window's case simply opening smaller) and slide back on screen if a relayout grows
+  them past the bottom edge. No change on a screen where they already fit. (#153)
+
 ## [0.26.0] - 2026-08-09
 
 ### Added

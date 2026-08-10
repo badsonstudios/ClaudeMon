@@ -538,14 +538,13 @@ public class UsageMonitorTests : IDisposable
         Assert.Equal(ServiceStatusLevel.Major, monitor.LastServiceStatus?.Level);
         Assert.Equal("Partial System Outage", monitor.LastServiceStatus?.Description);
         var evt = Assert.Single(events);
-        Assert.Null(evt.Previous);
         Assert.Equal(ServiceStatusLevel.Major, evt.Current.Level);
         // No second timer: the status came along on the usage poll's own cadence.
         Assert.Equal(2, handler.StatusCallCount);
     }
 
     [Fact]
-    public async Task RefreshNow_ServiceStatusChanges_CarriesThePreviousStatus()
+    public async Task RefreshNow_ServiceStatusChanges_RaisesTheEventWithTheNewStatus()
     {
         var credPath = WriteCredentialFile();
         var handler = new StatusRoutingHttpHandler(UsageBody, StatusBody("none", "All Systems Operational"));
@@ -562,7 +561,8 @@ public class UsageMonitorTests : IDisposable
         handler.SetStatusBody(StatusBody("critical", "Major Service Outage"));
         await monitor.RefreshNowAsync();
 
-        Assert.Equal(ServiceStatusLevel.Operational, last?.Previous?.Level);
+        // The event carries only the new status (#150) — whether to notify is decided against
+        // the persisted latch, not against the reading before this one.
         Assert.Equal(ServiceStatusLevel.Critical, last?.Current.Level);
     }
 

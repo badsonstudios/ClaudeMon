@@ -3,6 +3,20 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.27.0] - Unreleased
+
+### Changed
+- **Service-incident notifications: tidied up and the design decision written down** — no change
+  to what you see. The service-status event no longer carries the previous status, which nothing
+  had used since the "already told you about this incident" memory started surviving restarts,
+  and the reason that memory is keyed on how *severe* an incident is rather than on which
+  incident it is now lives next to the code: Anthropic's status page doesn't publish an incident
+  identifier on the endpoint ClaudeMon reads, and its overall severity is a roll-up across every
+  open incident, so there is no single incident for the notification to be tied to. The one
+  accepted consequence — if the service recovers and breaks again entirely while ClaudeMon isn't
+  looking, the second incident's balloon can be swallowed, though the flyout still shows it — is
+  documented and pinned by tests. (#150)
+
 ## [0.26.0] - 2026-08-09
 
 ### Added

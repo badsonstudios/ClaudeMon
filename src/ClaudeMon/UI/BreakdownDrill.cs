@@ -9,7 +9,7 @@ using ClaudeMon.Models;
 ///
 /// A pure computation over the breakdown the window already holds — not a second query — so the
 /// drill-down can never disagree with the tables it came from, however long the window has been
-/// open. Pure (no WinForms) and unit-testable, mirroring <see cref="BreakdownSort"/> and
+/// open. Pure (no WinForms) and unit-testable, mirroring <c>BreakdownSort</c> and
 /// <see cref="UsageBreakdownLayout"/>.
 /// </summary>
 internal static class BreakdownDrill

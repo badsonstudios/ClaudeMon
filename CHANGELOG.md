@@ -3,6 +3,15 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.27.0] - Unreleased
+
+### Fixed
+- **CSV export follows the sort you're looking at** — clicking a column header re-sorted the
+  Usage & costs tables on screen, but the exported file still came out in the default
+  cost-descending order, so the spreadsheet didn't match the window it came from. Export now
+  writes each table in that table's own current order (the two sort independently, and so does
+  the file's model and project section), with the Total row still last. (#119)
+
 ## [0.26.0] - 2026-08-09
 
 ### Added

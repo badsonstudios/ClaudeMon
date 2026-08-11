@@ -13,6 +13,16 @@ public class PricingTableTests
         ["claude-sonnet-4-6"] = new(3.0, 15.0, 3.75, 6.0, 0.3),
     });
 
+    /// <summary>One entry of pure input tokens, stamped at a given UTC instant.</summary>
+    private static LocalUsageEntry InputEntryOn(int year, int month, int day, int hour = 12) => new(
+        new DateTimeOffset(year, month, day, hour, 0, 0, TimeSpan.Zero),
+        "claude-sonnet-5", null,
+        InputTokens: 1_000_000,
+        OutputTokens: 0,
+        CacheWrite5mTokens: 0,
+        CacheWrite1hTokens: 0,
+        CacheReadTokens: 0);
+
     [Fact]
     public void Resolve_ExactId_ReturnsPricing()
     {
@@ -34,6 +44,20 @@ public class PricingTableTests
         var table = Table();
         Assert.NotNull(table.Resolve("anthropic.claude-opus-4-8"));
         Assert.NotNull(table.Resolve("claude-opus-4-8@20260115"));
+    }
+
+    [Fact]
+    public void Resolve_BracketedRequestTier_Stripped()
+    {
+        var table = Table();
+
+        // Claude Code reports the long-context tier as "claude-opus-4-8[1m]".
+        // That window costs standard rates, so the tag must resolve to the
+        // family row rather than falling through to the unpriced path.
+        Assert.NotNull(table.Resolve("claude-opus-4-8[1m]"));
+        Assert.Equal(table.Resolve("claude-opus-4-8"), table.Resolve("claude-opus-4-8[1m]"));
+        Assert.Equal(table.Resolve("claude-opus-4-8"), table.Resolve("claude-opus-4-8[1m]-20260115"));
+        Assert.Equal(table.Resolve("claude-fable-5"), table.Resolve("anthropic.claude-fable-5[1m]@vertex"));
     }
 
     [Fact]
@@ -93,6 +117,81 @@ public class PricingTableTests
     }
 
     [Fact]
+    public void CostUsd_DatedPriorRate_AppliesInsideItsWindowOnly()
+    {
+        // Standing rate $3/$15 with a $2/$10 introductory window through Aug 31.
+        var pricing = new ModelPricing(3.0, 15.0, 3.75, 6.0, 0.3, new[]
+        {
+            new DatedRate(new DateOnly(2026, 8, 31), 2.0, 10.0, 2.5, 4.0, 0.2),
+        });
+
+        Assert.Equal(2.0, pricing.CostUsd(InputEntryOn(2026, 8, 11)), precision: 10);
+        // The last hour inside the window is still introductory...
+        Assert.Equal(2.0, pricing.CostUsd(InputEntryOn(2026, 8, 31, hour: 23)), precision: 10);
+        // ...and the first of the next day is not.
+        Assert.Equal(3.0, pricing.CostUsd(InputEntryOn(2026, 9, 1, hour: 0)), precision: 10);
+    }
+
+    [Fact]
+    public void CostUsd_DatedPriorRates_NarrowestCoveringWindowWins()
+    {
+        // Two superseded rate sets, listed newest-first so the tie-break can't
+        // be an artifact of ordering: a day inside both must price at the one
+        // that ended first.
+        var pricing = new ModelPricing(3.0, 15.0, 3.75, 6.0, 0.3, new[]
+        {
+            new DatedRate(new DateOnly(2026, 8, 31), 2.0, 10.0, 2.5, 4.0, 0.2),
+            new DatedRate(new DateOnly(2026, 6, 30), 1.0, 5.0, 1.25, 2.0, 0.1),
+        });
+
+        Assert.Equal(1.0, pricing.CostUsd(InputEntryOn(2026, 6, 1)), precision: 10);
+        Assert.Equal(2.0, pricing.CostUsd(InputEntryOn(2026, 7, 1)), precision: 10);
+        Assert.Equal(3.0, pricing.CostUsd(InputEntryOn(2026, 9, 1)), precision: 10);
+    }
+
+    [Fact]
+    public void CostUsd_AllRateCategories_UsePriorWindowTogether()
+    {
+        var pricing = new ModelPricing(3.0, 15.0, 3.75, 6.0, 0.3, new[]
+        {
+            new DatedRate(new DateOnly(2026, 8, 31), 2.0, 10.0, 2.5, 4.0, 0.2),
+        });
+        var entry = new LocalUsageEntry(
+            new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero), "claude-sonnet-5", null,
+            InputTokens: 1_000_000,
+            OutputTokens: 1_000_000,
+            CacheWrite5mTokens: 1_000_000,
+            CacheWrite1hTokens: 1_000_000,
+            CacheReadTokens: 1_000_000);
+
+        // 2 + 10 + 2.5 + 4 + 0.2 = 18.7 — every category comes from the window.
+        Assert.Equal(18.7, pricing.CostUsd(entry), precision: 10);
+    }
+
+    [Fact]
+    public void LoadEmbedded_Sonnet5_UsesIntroRateThroughAugust2026()
+    {
+        var pricing = PricingTable.LoadEmbedded().Resolve("claude-sonnet-5");
+
+        Assert.NotNull(pricing);
+        // Introductory $2/MTok input through 2026-08-31, standard $3 from
+        // 2026-09-01 — the changeover needs no release of its own.
+        Assert.Equal(2.0, pricing.CostUsd(InputEntryOn(2026, 8, 31)), precision: 10);
+        Assert.Equal(3.0, pricing.CostUsd(InputEntryOn(2026, 9, 1)), precision: 10);
+    }
+
+    [Fact]
+    public void LoadEmbedded_LongContextTierIds_PriceAtTheFamilyRate()
+    {
+        var table = PricingTable.LoadEmbedded();
+
+        Assert.NotNull(table.Resolve("claude-opus-5[1m]"));
+        Assert.NotNull(table.Resolve("claude-sonnet-5[1m]"));
+        Assert.Equal(table.Resolve("claude-opus-5"), table.Resolve("claude-opus-5[1m]"));
+        Assert.Equal(table.Resolve("claude-sonnet-5"), table.Resolve("claude-sonnet-5[1m]"));
+    }
+
+    [Fact]
     public void LoadEmbedded_ParsesBundledTable()
     {
         var table = PricingTable.LoadEmbedded();
@@ -108,9 +207,11 @@ public class PricingTableTests
     }
 
     [Theory]
-    // Anthropic list prices per MTok: input, output, 5m cache write, 1h cache
-    // write, cache read. Source: platform.claude.com/docs/en/about-claude/pricing
-    // (retrieved 2026-08-10).
+    // Anthropic standing list prices per MTok: input, output, 5m cache write,
+    // 1h cache write, cache read. Source:
+    // platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-08-11).
+    // Sonnet 5's introductory window is a superseded rate and is pinned
+    // separately by LoadEmbedded_Sonnet5_UsesIntroRateThroughAugust2026.
     [InlineData("claude-fable-5", 10.0, 50.0, 12.5, 20.0, 1.0)]
     [InlineData("claude-mythos-5", 10.0, 50.0, 12.5, 20.0, 1.0)]
     [InlineData("claude-opus-5", 5.0, 25.0, 6.25, 10.0, 0.5)]

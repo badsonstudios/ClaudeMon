@@ -15,7 +15,7 @@ internal readonly record struct BreakdownTabVisibility(
 
 /// <summary>
 /// The visibility rule behind the window's tab strip, as one pure function so the invariant is
-/// unit-tested rather than traced by hand through the form. Mirrors <see cref="BreakdownDrill"/>
+/// unit-tested rather than traced by hand through the form. Mirrors <c>BreakdownDrill</c>
 /// and <see cref="UsageBreakdownLayout"/> in keeping the decision out of the WinForms code.
 /// </summary>
 internal static class BreakdownTabView

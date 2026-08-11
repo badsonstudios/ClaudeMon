@@ -1,7 +1,7 @@
 namespace ClaudeMon.Tests;
 
 using ClaudeMon.Models;
-using ClaudeMon.UI;
+using ClaudeMon.Services;
 
 /// <summary>
 /// Drilling one "Usage &amp; costs" row into its counterparts (#112). The window needs a desktop
@@ -129,6 +129,32 @@ public class BreakdownDrillTests
         Assert.Null(BreakdownDrill.Filtering(drill, BreakdownAxis.Model));
         Assert.Same(drill, BreakdownDrill.Filtering(drill, BreakdownAxis.Project));
         Assert.Null(BreakdownDrill.Filtering(null, BreakdownAxis.Project));
+    }
+
+    [Fact]
+    public void DisplayName_IsTheDrilledRowsOwnName()
+    {
+        var breakdown = Sample();
+
+        // A project's real path rather than the directory key that was clicked (matched
+        // case-insensitively, as everywhere else); a model has no path, so it is its own name.
+        Assert.Equal(
+            @"C:\proj-a",
+            BreakdownDrill.DisplayName(breakdown, BreakdownDrill.For(breakdown, BreakdownAxis.Project, "PROJ-A")!));
+        Assert.Equal(
+            "claude-fable-5",
+            BreakdownDrill.DisplayName(breakdown, BreakdownDrill.For(breakdown, BreakdownAxis.Model, "claude-fable-5")!));
+    }
+
+    [Fact]
+    public void DisplayName_RowNotInTheBreakdown_FallsBackToTheKey()
+    {
+        // proj-b is in the pairs but not in this breakdown's project rows — the shape a drill-down
+        // outliving its row (a narrowed timeframe) leaves behind.
+        var drill = BreakdownDrill.For(Sample(), BreakdownAxis.Project, "proj-b")!;
+
+        Assert.Equal("proj-b", BreakdownDrill.DisplayName(Sample(), drill));
+        Assert.Equal("proj-b", BreakdownDrill.DisplayName(null, drill));
     }
 
     [Fact]

@@ -3,13 +3,21 @@ namespace ClaudeMon.UI;
 using System.Drawing;
 
 /// <summary>
-/// Deterministic dialog placement. WinForms' <c>FormStartPosition.CenterScreen</c> centers an
-/// ownerless form on whichever monitor holds the mouse cursor — so a dialog popped by a
-/// background timer (the update prompt) lands on whatever side monitor the cursor was idling
-/// on (issue #88). The app's dialogs use <c>Manual</c> and pick their monitor deliberately
-/// instead: most center on the primary monitor, where the tray lives, while the update dialogs
-/// follow the foreground window so they open where the user is actually working (issue #108).
-/// Nothing here ever reads the cursor position.
+/// Deterministic dialog placement, and the fit-to-monitor math that goes with it. WinForms'
+/// <c>FormStartPosition.CenterScreen</c> centers an ownerless form on whichever monitor holds the
+/// mouse cursor — so a dialog popped by a background timer (the update prompt) lands on whatever
+/// side monitor the cursor was idling on (issue #88). The app's dialogs use <c>Manual</c> and pick
+/// their monitor deliberately instead: most center on the primary monitor, where the tray lives,
+/// while the update dialogs follow the foreground window so they open where the user is actually
+/// working (issue #108). Nothing here ever reads the cursor position.
+///
+/// The size half of the same question lives here too (<see cref="ClampClientHeight"/> /
+/// <see cref="ClampTop"/>, moved out of a <c>SettingsFormLayout</c> helper in #153): every dialog
+/// in the app sizes itself from its content, so on a short display or at a large scale factor any
+/// of them can want more height than the monitor has. Deciding how big a window may be and
+/// deciding where it lands are one question — <see cref="CenterIn"/> already carries the same
+/// "keep the title bar reachable" clamp — so one type owns both rather than each form growing its
+/// own copy.
 /// </summary>
 internal static class DialogPlacement
 {
@@ -30,6 +38,124 @@ internal static class DialogPlacement
         var x = area.Left + (area.Width - size.Width) / 2;
         var y = area.Top + (area.Height - size.Height) / 2;
         return new Point(Math.Max(area.Left, x), Math.Max(area.Top, y));
+    }
+
+    /// <summary>
+    /// The client height a self-sizing window should take, and whether its content must scroll to
+    /// stay reachable. Returns <paramref name="contentHeight"/> unchanged whenever the whole window
+    /// fits the monitor — the common case, where nothing about the dialog changes.
+    /// Pure, for unit tests. Every value is physical pixels.
+    /// </summary>
+    /// <param name="contentHeight">The client height the laid-out content wants.</param>
+    /// <param name="workingAreaHeight">
+    /// The height of the working area of the monitor the window is on — the desktop minus the
+    /// taskbar, so a maximal window still leaves the taskbar clickable.
+    /// </param>
+    /// <param name="nonClientHeight">
+    /// The window's chrome: title bar plus borders. Subtracted because the working area limits the
+    /// <em>outer</em> window, while the size the form controls is the client area.
+    /// </param>
+    /// <param name="minClientHeight">
+    /// A floor on what is left for the client area. It bites whenever the working area is smaller
+    /// than the chrome plus this floor — i.e. a bogus or unavailable monitor, where the honest
+    /// answer would be a zero-height window — and there it deliberately returns a window
+    /// <em>taller</em> than the working area, on the grounds that a usable window hanging off a
+    /// nonsense monitor beats a correct one nobody can read. It is not a floor on the returned
+    /// height: a two-row tab (or a short dialog) legitimately produces a short window, and forcing
+    /// those up to a minimum would be a visible change on every screen.
+    /// </param>
+    public static (int ClientHeight, bool Scroll) ClampClientHeight(
+        int contentHeight, int workingAreaHeight, int nonClientHeight, int minClientHeight)
+    {
+        contentHeight = Math.Max(0, contentHeight);
+        var available = Math.Max(
+            Math.Max(0, minClientHeight),
+            workingAreaHeight - Math.Max(0, nonClientHeight));
+
+        var clientHeight = Math.Min(contentHeight, available);
+        return (clientHeight, contentHeight > clientHeight);
+    }
+
+    /// <summary>
+    /// The top edge that keeps a window of <paramref name="outerHeight"/> inside the working area
+    /// vertically: unchanged when it already fits, slid up when it would hang off the bottom, and
+    /// pinned to the top of the area when it is taller than the area (so the title bar — and the
+    /// close box — stay reachable, matching <see cref="CenterIn"/>'s guarantee).
+    ///
+    /// This is the other half of the fit, and on most screens the half that actually fires:
+    /// <see cref="ClampClientHeight"/> alone would still let a window grow past the bottom of the
+    /// screen after it was placed, because <c>ClientSize</c> grows downwards from a fixed top —
+    /// Settings switching from a two-row tab to a twelve-row one, or any hand-scaled dialog being
+    /// dragged onto a higher-DPI monitor and re-laying out larger. Deliberately a shift, never a
+    /// re-centre: re-centring a dialog the user may be dragging or reading would yank it out from
+    /// under them (the same reason <see cref="CenterOnPrimary"/> never re-runs on a DPI change).
+    /// Pure, for unit tests.
+    /// </summary>
+    public static int ClampTop(int top, int outerHeight, int areaTop, int areaBottom) =>
+        Math.Max(areaTop, Math.Min(top, areaBottom - Math.Max(0, outerHeight)));
+
+    /// <summary>
+    /// The working area a form's clamps should measure against: the monitor the form is on once it
+    /// has a window, the primary monitor's before that. Those agree for the first layout — the
+    /// dialogs open centered on a monitor chosen in <c>OnLoad</c> and an as-yet-unplaced form sits
+    /// at the origin, which is on the primary by definition — so the layout pass that runs before
+    /// the window is shown already clamps against the monitor the user will see it on.
+    /// </summary>
+    internal static Rectangle WorkingAreaFor(Form form)
+    {
+        try
+        {
+            if (form.IsHandleCreated)
+                return Screen.FromControl(form).WorkingArea;
+        }
+        catch
+        {
+            // Monitor enumeration can fail in odd session states; fall through to the primary.
+        }
+
+        return PrimaryWorkingArea();
+    }
+
+    /// <summary>
+    /// Sizes <paramref name="form"/> to the content it just laid out, fitted to the monitor it is
+    /// on: the height is capped by <see cref="ClampClientHeight"/>, the overflow becomes a
+    /// vertical scrollbar rather than content falling off the bottom, and the window is slid back
+    /// under the bottom edge by <see cref="ClampTop"/>. Every one of the app's windows sizes itself
+    /// from its content, so all of them shared the same latent overflow on a short display or at a
+    /// large scale factor (#139 for Settings, #153 for the rest) — this is the one place that
+    /// answers it.
+    ///
+    /// Call it at the end of a form's relayout, having reset the scroll offset at the start of it
+    /// (writing control tops while scrolled offsets them all — see <c>SettingsForm.Relayout</c>).
+    /// Returns whether the content had to scroll, which callers that preserve a scroll position
+    /// across a relayout need.
+    /// </summary>
+    /// <param name="clientWidth">The client width the form wants; never clamped (only height is).</param>
+    /// <param name="contentHeight">The client height the laid-out content wants.</param>
+    /// <param name="minClientHeight">
+    /// The floor described on <see cref="ClampClientHeight"/> — a guard for a degenerate working
+    /// area, not a minimum window size.
+    /// </param>
+    internal static bool FitToMonitor(Form form, int clientWidth, int contentHeight, int minClientHeight)
+    {
+        var area = WorkingAreaFor(form);
+        var (clientHeight, scroll) = ClampClientHeight(
+            contentHeight, area.Height, form.Height - form.ClientSize.Height, minClientHeight);
+
+        // Setting a non-empty AutoScrollMinSize turns AutoScroll on by itself; the assignment after
+        // it is what turns it back off once the content fits again. A zero width asks for no
+        // horizontal scrolling, so the scrollbar comes out of the client width — which every caller
+        // has room for in its right-hand padding.
+        form.AutoScrollMinSize = scroll ? new Size(0, contentHeight) : Size.Empty;
+        form.AutoScroll = scroll;
+        form.ClientSize = new Size(clientWidth, clientHeight);
+
+        // Only once the window exists — before that, Top is meaningless and the caller's OnLoad
+        // placement does the opening position anyway.
+        if (form.IsHandleCreated)
+            form.Top = ClampTop(form.Top, form.Height, area.Top, area.Bottom);
+
+        return scroll;
     }
 
     /// <summary>

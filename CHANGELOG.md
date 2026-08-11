@@ -6,6 +6,14 @@ GitHub release; the release notes are taken from these entries.
 ## [0.27.0] - Unreleased
 
 ### Fixed
+- **Claude Opus 5 usage is priced, so today's cost stops being a floor** — the bundled price table
+  had no row for `claude-opus-5`, so every token from it was counted but costed at nothing. If
+  that was your main model the flyout read `Today: ≥$172` — a floor, not a figure — and the
+  Usage & costs chart hatched the day as incomplete. Opus 5 is now priced at its published list
+  rates (input, output, and the separate 5-minute / 1-hour cache-write and cache-read rates), so
+  a day whose models are all known reads as a real number again. The rest of the table was
+  audited against Anthropic's published pricing page at the same time; every other current model
+  was already there and correct. (#161)
 - **Saving Settings keeps alert and budget values it doesn't show** — the alert thresholds and
   budget caps were still rebuilt from the dialog's controls alone, the way the taskbar settings
   were before #143. Nothing is lost today (every one of those values has a control), but they are

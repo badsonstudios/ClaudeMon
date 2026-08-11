@@ -705,7 +705,11 @@ public sealed class SettingsForm : Form
         return _configManager.Settings with
         {
             PollIntervalMinutes = pollMinutes,
-            AlertThresholds = new AlertThresholds
+            // `with` on the existing record, not `new` — for the same reason as TaskbarDisplay
+            // and Notifications below: every AlertThresholds field has a control today, so a
+            // reconstruction loses nothing yet, but the first field added without one would be
+            // reset on every settings save.
+            AlertThresholds = _configManager.Settings.AlertThresholds with
             {
                 PaceAlertsEnabled = _paceAlertsToggle.Checked,
                 PaceSensitivity = SelectedOption(_paceSensitivityCombo, PaceSensitivityOptions),
@@ -721,7 +725,10 @@ public sealed class SettingsForm : Form
                 NotifyOnServiceIncident = _notifyOnServiceIncidentToggle.Checked,
                 PushTopic = string.IsNullOrWhiteSpace(_pushTopicText.Text) ? null : _pushTopicText.Text.Trim(),
             },
-            Budgets = new BudgetSettings
+            // `with`, not `new` — same hazard as AlertThresholds above: the dialog edits all four
+            // budget fields today, and a fifth one without a control would silently snap back to
+            // its default on every save.
+            Budgets = _configManager.Settings.Budgets with
             {
                 DailyEnabled = _dailyBudgetToggle.Checked,
                 DailyCapUsd = (double)_dailyCapNumeric.Value,

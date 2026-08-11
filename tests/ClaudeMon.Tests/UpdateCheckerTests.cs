@@ -111,15 +111,17 @@ public class UpdateCheckerTests : IDisposable
         Assert.NotNull(result.ErrorMessage);
     }
 
+    // GitHub's API rejects requests that send no User-Agent, and what it sends is the shared
+    // app-wide agent — not the version passed in for the comparison (#141).
     [Fact]
-    public async Task Check_SendsUserAgentHeader()
+    public async Task Check_SendsSharedUserAgentHeader()
     {
         _handler.SetResponse(HttpStatusCode.OK, Release("v0.5.0"));
 
-        await _checker.CheckAsync(new Version(0, 5, 0));
+        await _checker.CheckAsync(new Version(9, 9, 9));
 
         Assert.NotNull(_handler.LastRequest);
-        Assert.NotEmpty(_handler.LastRequest.Headers.UserAgent);
+        Assert.Equal(AppUserAgent.Header, Assert.Single(_handler.LastRequest.Headers.UserAgent));
     }
 
     [Fact]

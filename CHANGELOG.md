@@ -28,6 +28,17 @@ GitHub release; the release notes are taken from these entries.
   `HttpClient`, which it had no business modifying. Headers only; nothing else changed. (#171)
 
 ### Fixed
+- **Sonnet 5 costs are no longer overstated by half, and the long-context models are priced at
+  all.** Two gaps in the cost estimates: Sonnet 5 was billed at its post-September rate ($3/$15
+  per million tokens) even though Anthropic's introductory rate of $2/$10 runs through
+  31 August 2026, so anything Sonnet-heavy read about 1.5× too expensive; and a model id carrying
+  a request-tier tag — the form Claude Code uses for the 1M-token context window, e.g.
+  `claude-opus-5[1m]` — wasn't recognised at all, so those tokens counted toward the totals with
+  no cost attached and quietly turned the day into a "≥" floor with a hatched chart bar. Both are
+  fixed, and the pricing table now understands rates that change on a published date: usage is
+  priced at whatever was in force on the day it happened, so the 1 September changeover happens by
+  itself, spending from inside the introductory window keeps its real price afterwards, and a week
+  that straddles the two is added up correctly rather than at one flat rate. (#165)
 - **Windows no longer run off the bottom of a short screen** — the fit-to-monitor clamp added to
   the Settings window now covers every window in the app. About, the update prompt, the update
   download progress window and the Usage & costs window all size themselves from their content,

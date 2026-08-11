@@ -636,8 +636,14 @@ internal sealed class UsageBreakdownForm : Form
 
         try
         {
+            // Each table's own sort goes with it, so the file's row order is the one on screen
+            // (#119). The rows themselves are the whole timeframe either way: a drill-down narrows
+            // what a table displays, but the export stays the full breakdown it was drilled from.
             // UTF-8 with BOM so Excel detects the encoding.
-            File.WriteAllText(dialog.FileName, BreakdownCsv.Compose(_current), new UTF8Encoding(true));
+            File.WriteAllText(
+                dialog.FileName,
+                BreakdownCsv.Compose(_current, _modelSort, _projectSort),
+                new UTF8Encoding(true));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
@@ -718,17 +724,42 @@ internal sealed class UsageBreakdownForm : Form
         + Sc(ButtonHeight) + Sc(Pad);                              // the button row
 
     /// <summary>
-    /// The size the window opens at: the chrome plus two default-height tables. The tab strip's
-    /// row is subtracted back off, so adding the Chart tab left the default window exactly the
-    /// size it was before it (#113) — the strip comes out of the tables' share instead. There is
-    /// plenty of slack for that: the default tables are more than twice their floor height.
+    /// The smallest client height the window still renders sensibly at: the chrome plus two
+    /// floor-height tables, for a hint line of <paramref name="hintHeight"/>.
+    /// </summary>
+    private int MinContentHeight(int hintHeight) =>
+        ChromeHeight(hintHeight) + (2 * Sc(MinTableHeight));
+
+    /// <summary>
+    /// The size the window opens at: the chrome plus two default-height tables, capped at what the
+    /// monitor has room for. The tab strip's row is subtracted back off, so adding the Chart tab
+    /// left the default window exactly the size it was before it (#113) — the strip comes out of
+    /// the tables' share instead. There is plenty of slack for that: the default tables are more
+    /// than twice their floor height.
+    ///
+    /// The cap is #153's clamp: two 150-logical tables plus the chrome is ~560 logical, which wants
+    /// more than a 1080p working area at 200% scaling. Unlike the fixed dialogs this window is
+    /// resizable and its layout is elastic, so the overflow is absorbed by the tables taking a
+    /// smaller share — no scrollbar, hence the discarded flag. The floor is the same
+    /// two-floor-height-tables minimum <see cref="MinClientSize"/> uses, so the clamp lands on the
+    /// window's own minimum rather than somewhere below it. (Not exactly: the two measure the hint
+    /// line at different widths, so on a working area small enough for the floor to bite,
+    /// <c>OnLoad</c>'s <c>MinimumSize</c> may still nudge the window a line taller. That is the
+    /// pre-existing behaviour for a monitor that cannot hold the window at all, and harmless.)
     /// </summary>
     private Size DefaultClientSize()
     {
         var width = Sc(DefaultClientWidth);
         LayoutHeader(width - (2 * Sc(Pad)));
-        return new Size(width, UsageBreakdownLayout.DefaultHeight(
-            ChromeHeight(_hint.Height), Sc(DefaultTableHeight), TabStripRow));
+
+        var (height, _) = DialogPlacement.ClampClientHeight(
+            UsageBreakdownLayout.DefaultHeight(
+                ChromeHeight(_hint.Height), Sc(DefaultTableHeight), TabStripRow),
+            DialogPlacement.WorkingAreaFor(this).Height,
+            Height - ClientSize.Height,
+            MinContentHeight(_hint.Height));
+
+        return new Size(width, height);
     }
 
     /// <summary>
@@ -754,7 +785,7 @@ internal sealed class UsageBreakdownForm : Form
         // out of _hint.Height — a few pixels of disagreement at the wrap point costs a whole line.
         var hint = _hint.GetPreferredSize(new Size(width - (2 * Sc(Pad)), 0)).Height;
 
-        return new Size(width, ChromeHeight(hint) + (2 * Sc(MinTableHeight)));
+        return new Size(width, MinContentHeight(hint));
     }
 
     // MinimumSize is the outer window size, so the frame has to be added back on. Deliberately

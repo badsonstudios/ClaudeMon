@@ -287,6 +287,133 @@ public class BurnRateTests
     }
 
     // ================================================================
+    // Window boundary (issue #160)
+    // ================================================================
+
+    [Fact]
+    public void PreResetSamples_AreExcluded_SoThePostResetClimbProjects()
+    {
+        // The live case from #160: the 5-hour window reset mid-lookback (49% → 2%). The cliff
+        // dominates the least-squares fit, so the whole series reads as steeply *declining* —
+        // an honest "—" under the old logic, but the post-reset climb (0.3 pct/min over three
+        // polls) was already there to be read. Also pins that a sample landing exactly on the
+        // boundary counts as inside the window: exclude it and only two remain, below the floor.
+        var samples = Series(47, 48, 49, 2, 3, 5);
+        var windowStart = T0.AddMinutes(15); // the first post-reset sample
+
+        // Without the boundary, the cliff wins — this is the bug.
+        Assert.Equal(
+            TimeToLimitEstimate.NoEstimate,
+            BurnRate.EstimateTimeToLimit(samples, currentPct: 5, timeUntilReset: null));
+
+        // With it, the post-reset trend projects: 95 points of headroom at 0.3 pct/min.
+        var estimate = BurnRate.EstimateTimeToLimit(
+            samples, currentPct: 5, timeUntilReset: null, windowStart: windowStart);
+
+        Assert.Equal(TimeToLimitKind.Projection, estimate.Kind);
+        Assert.NotNull(estimate.Eta);
+        Assert.Equal(316.7, estimate.Eta.Value.TotalMinutes, 1);
+    }
+
+    [Fact]
+    public void IdleZerosAfterTheRoll_AreKept_TheyBelongToTheNewWindow()
+    {
+        // The shape a real reset leaves in history.json: the old window's level, then zeros
+        // while the new (empty) window sits idle, then the climb when work resumes. Only the
+        // pre-roll samples are foreign — the zeros are honest readings of the new window, so
+        // they stay in the fit and simply make the projection a little more conservative.
+        var samples = Series(25, 25, 25, 0, 0, 0, 4, 7);
+        var windowStart = T0.AddMinutes(15); // the roll
+
+        Assert.Equal(
+            TimeToLimitEstimate.NoEstimate,
+            BurnRate.EstimateTimeToLimit(samples, currentPct: 7, timeUntilReset: TimeSpan.FromHours(4.75)));
+
+        var estimate = BurnRate.EstimateTimeToLimit(
+            samples, currentPct: 7, timeUntilReset: TimeSpan.FromHours(4.75), windowStart: windowStart);
+
+        Assert.Equal(TimeToLimitKind.Projection, estimate.Kind);
+        Assert.NotNull(estimate.Eta);
+        Assert.Equal(258.3, estimate.Eta.Value.TotalMinutes, 1);
+    }
+
+    [Fact]
+    public void PostReset_WithAFullWindowLeft_ReadsSafeRatherThanDash()
+    {
+        // A reset restarts the countdown too, so most post-reset projections land past the next
+        // reset. The user-visible promise of #160 is that the element stops saying "—" within a
+        // few polls — as "safe" (#158) here, as a span when the burn is fast enough.
+        var samples = Series(47, 48, 49, 2, 3, 5);
+
+        Assert.Equal(
+            TimeToLimitEstimate.Safe,
+            BurnRate.EstimateTimeToLimit(
+                samples, currentPct: 5, timeUntilReset: TimeSpan.FromHours(4.5),
+                windowStart: T0.AddMinutes(15)));
+    }
+
+    [Fact]
+    public void FewerThanThreePostResetSamples_StillNoEstimate()
+    {
+        // The floor applies to what's left after filtering — two post-reset points fit any
+        // noise perfectly, so the dash is still the honest answer for the first poll or two.
+        var samples = Series(47, 48, 49, 2, 3);
+
+        Assert.Equal(
+            TimeToLimitEstimate.NoEstimate,
+            BurnRate.EstimateTimeToLimit(
+                samples, currentPct: 3, timeUntilReset: null, windowStart: T0.AddMinutes(15)));
+    }
+
+    [Fact]
+    public void WindowStartAfterEverySample_NoEstimate_AndDoesNotThrow()
+    {
+        // Filtering everything out must reach the sample-count guard, not the slope math —
+        // which indexes samples[0] for its origin.
+        var samples = Series(47, 48, 49);
+
+        var ex = Record.Exception(() => BurnRate.EstimateTimeToLimit(
+            samples, currentPct: 49, timeUntilReset: null, windowStart: T0.AddHours(1)));
+
+        Assert.Null(ex);
+        Assert.Equal(
+            TimeToLimitEstimate.NoEstimate,
+            BurnRate.EstimateTimeToLimit(
+                samples, currentPct: 49, timeUntilReset: null, windowStart: T0.AddHours(1)));
+    }
+
+    [Fact]
+    public void WindowStartBeforeEverySample_ChangesNothing()
+    {
+        // The overwhelmingly common case — mid-window, no reset in the lookback. The filter
+        // must be a no-op there, not a subtle change to the slope everyone else sees.
+        var samples = Series(50, 52, 54, 56, 58, 60);
+
+        var estimate = BurnRate.EstimateTimeToLimit(
+            samples, currentPct: 60, timeUntilReset: TimeSpan.FromHours(4),
+            windowStart: T0.AddHours(-1));
+
+        Assert.Equal(
+            BurnRate.EstimateTimeToLimit(samples, currentPct: 60, timeUntilReset: TimeSpan.FromHours(4)),
+            estimate);
+        Assert.Equal(TimeToLimitKind.Projection, estimate.Kind);
+        Assert.NotNull(estimate.Eta);
+        Assert.Equal(100, estimate.Eta.Value.TotalMinutes, 1);
+    }
+
+    [Fact]
+    public void AlreadyAtLimit_ShortCircuitsAheadOfTheWindowFilter()
+    {
+        // Pins the guard order: at 100% the answer is "at limit" regardless of how many
+        // samples the boundary leaves behind.
+        var estimate = BurnRate.EstimateTimeToLimit(
+            Series(98, 99, 100), currentPct: 100, timeUntilReset: TimeSpan.FromHours(1),
+            windowStart: T0.AddHours(1));
+
+        Assert.Equal(TimeToLimitKind.AtLimit, estimate.Kind);
+    }
+
+    // ================================================================
     // Formatting — the four kinds (#158)
     // ================================================================
 

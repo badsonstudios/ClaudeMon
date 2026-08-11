@@ -57,8 +57,9 @@ ClaudeMon/
   `%LocalAppData%\ClaudeMon\local-usage.json`) serving the flyout snapshot, the breakdown
   queries, and the budget totals; `PricingTable` resolves model ids against the embedded
   `Resources/model-pricing.json` (list prices; unknown models stay unpriced rather than
-  guessing); `BreakdownCsv`/`ProjectDisplay` are pure helpers for the Usage & costs
-  window; `Monitoring/BudgetAlerts` is the pure 50/80/95% once-per-period alert ladder
+  guessing); `BreakdownCsv`/`BreakdownSort`/`ProjectDisplay` are pure helpers for the
+  Usage & costs window — `BreakdownSort` orders the table rows and, since #119, the
+  export's rows too, so the CSV matches the on-screen sort; `Monitoring/BudgetAlerts` is the pure 50/80/95% once-per-period alert ladder
   (state persisted in `AppSettings.BudgetAlertState`).
 - **Configuration** (`Configuration/`) — `ConfigManager` persists `AppSettings` as JSON and
   manages the "Start with Windows" registry entry.

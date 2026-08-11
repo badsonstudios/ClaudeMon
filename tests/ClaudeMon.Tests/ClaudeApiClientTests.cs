@@ -118,14 +118,10 @@ public class ClaudeApiClientTests : IDisposable
 
         await _client.GetUsageAsync("test-token");
 
-        var assemblyVersion = typeof(ClaudeApiClient).Assembly.GetName().Version;
-        Assert.NotNull(assemblyVersion);
-
+        // The shared app-wide agent, not one this client builds for itself — its shape is
+        // asserted in AppUserAgentTests.
         var product = Assert.Single(_handler.LastRequest!.Headers.UserAgent);
-        Assert.Equal("ClaudeMon", product.Product?.Name);
-        // Pinned to the real assembly version, so a broken version lookup can't pass as "0.0.0".
-        Assert.Equal(ClaudeApiClient.FormatVersion(assemblyVersion), product.Product?.Version);
-        Assert.NotEqual("0.0.0", product.Product?.Version);
+        Assert.Equal(AppUserAgent.Header, product);
     }
 
     // OAuth bearer calls to the first-party API carry this beta header in Claude Code; the
@@ -142,24 +138,6 @@ public class ClaudeApiClientTests : IDisposable
         Assert.Contains(
             _handler.LastRequest.Headers.Accept,
             h => h.MediaType == "application/json");
-    }
-
-    [Theory]
-    [InlineData(0, 26, 0, 0, "0.26.0")]
-    [InlineData(1, 2, 3, 4, "1.2.3")]
-    public void FormatVersion_DropsTheFourthComponent(
-        int major, int minor, int build, int revision, string expected)
-    {
-        Assert.Equal(expected, ClaudeApiClient.FormatVersion(new Version(major, minor, build, revision)));
-    }
-
-    // A missing or 2-part version must still yield a valid product token, never "ClaudeMon/-1"
-    // (Version.Build is -1 when unspecified), which would throw when added to the header.
-    [Fact]
-    public void FormatVersion_MissingOrPartialVersion_StillWellFormed()
-    {
-        Assert.Equal("0.0.0", ClaudeApiClient.FormatVersion(null));
-        Assert.Equal("1.2.0", ClaudeApiClient.FormatVersion(new Version(1, 2)));
     }
 
     [Fact]
@@ -221,6 +199,32 @@ public class ClaudeApiClientTests : IDisposable
         var fraction = bucket.ElapsedFraction(TimeSpan.FromHours(5));
         Assert.NotNull(fraction);
         Assert.InRange(fraction.Value, 0.49, 0.51);
+    }
+
+    [Fact]
+    public void UsageBucket_WindowStart_IsTheResetMinusTheWindowLength()
+    {
+        var resetAt = new DateTimeOffset(2026, 6, 27, 17, 0, 0, TimeSpan.Zero);
+        var bucket = new UsageBucket(50.0, resetAt);
+
+        Assert.Equal(resetAt.AddHours(-5), bucket.WindowStart(UsageWindows.FiveHour));
+    }
+
+    [Fact]
+    public void UsageBucket_WindowStart_UnknownReset_IsNull()
+    {
+        Assert.Null(new UsageBucket(50.0, null).WindowStart(UsageWindows.FiveHour));
+    }
+
+    // Unlike ElapsedFraction, an expired window still reports where it began — the burn-rate
+    // filter (#160) wants the boundary, and one 5 hours in the past excludes nothing recent.
+    [Fact]
+    public void UsageBucket_WindowStart_ExpiredWindow_StillKnown()
+    {
+        var resetAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var bucket = new UsageBucket(50.0, resetAt);
+
+        Assert.Equal(resetAt.AddHours(-5), bucket.WindowStart(UsageWindows.FiveHour));
     }
 
     // --- Error paths: everything below the happy path must come back as a result record, never

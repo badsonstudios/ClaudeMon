@@ -1,10 +1,10 @@
-namespace ClaudeMon.UI;
+namespace ClaudeMon.Services;
 
 using ClaudeMon.Models;
 
 /// <summary>
 /// The seven columns of a breakdown table, in the order
-/// <see cref="UsageBreakdownForm"/> adds them — so a clicked column index casts
+/// <c>UsageBreakdownForm</c> adds them — so a clicked column index casts
 /// straight to this.
 /// </summary>
 internal enum BreakdownSortColumn
@@ -55,7 +55,11 @@ internal readonly record struct BreakdownSortState(BreakdownSortColumn Column, b
 /// <c>LocalCostText.FormatTokens</c> renders "1.2M" and "900K", which compare the wrong way
 /// round as strings — and always leaves the totals row at the bottom, where it belongs
 /// regardless of how the body is ordered. Pure (no WinForms) so the behaviour is unit-testable,
-/// mirroring <see cref="UsageBreakdownLayout"/> and <c>BreakdownCsv</c>.
+/// mirroring <c>UsageBreakdownLayout</c>.
+///
+/// Lives beside <see cref="BreakdownCsv"/> rather than in <c>UI</c> because the order is no
+/// longer only the table's: the CSV export writes its rows through this same helper, so a file
+/// exported after a header click matches what was on screen (#119).
 /// </summary>
 internal static class BreakdownSort
 {

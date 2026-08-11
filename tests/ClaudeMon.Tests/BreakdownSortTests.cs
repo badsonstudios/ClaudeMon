@@ -2,7 +2,7 @@ namespace ClaudeMon.Tests;
 
 using ClaudeMon.Models;
 using ClaudeMon.Monitoring;
-using ClaudeMon.UI;
+using ClaudeMon.Services;
 
 /// <summary>
 /// Click-to-sort for the "Usage &amp; costs" tables (#111). The window itself needs a desktop

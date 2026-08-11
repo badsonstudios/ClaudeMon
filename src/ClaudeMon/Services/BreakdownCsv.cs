@@ -10,20 +10,29 @@ using ClaudeMon.Models;
 /// spreadsheet. Numbers are invariant-culture and undecorated (no '~'/'$' —
 /// this is data; the CostIncomplete column carries the unpriced flag). The
 /// caller writes the text as UTF-8 with BOM so Excel detects the encoding.
+///
+/// Each section is written in its own table's on-screen order (#119): the caller hands over the
+/// two <see cref="BreakdownSortState"/>s the window is showing and the rows go through the same
+/// pure <see cref="BreakdownSort"/> the tables are filled from, so re-sorting a table and
+/// exporting produces the file you were just looking at rather than the store's default order.
+/// Sorting the rows (not the formatted text) is what keeps "1.2M" from landing under "900K".
 /// </summary>
-public static class BreakdownCsv
+internal static class BreakdownCsv
 {
     public const string Header =
         "Section,Name,InputTokens,OutputTokens,CacheWriteTokens,CacheReadTokens,TotalTokens,EstCostUsd,CostIncomplete";
 
-    public static string Compose(LocalUsageBreakdown breakdown)
+    public static string Compose(
+        LocalUsageBreakdown breakdown, BreakdownSortState modelSort, BreakdownSortState projectSort)
     {
         var sb = new StringBuilder();
         sb.AppendLine(Header);
 
-        foreach (var row in breakdown.ByModel)
+        // totals: null — the grand total is written once at the end of the file rather than after
+        // each section, so it stays the last row however the two tables are ordered.
+        foreach (var row in BreakdownSort.Order(breakdown.ByModel, totals: null, modelSort))
             AppendRow(sb, "model", row);
-        foreach (var row in breakdown.ByProject)
+        foreach (var row in BreakdownSort.Order(breakdown.ByProject, totals: null, projectSort))
             AppendRow(sb, "project", row);
         AppendRow(sb, "total", breakdown.Totals with { DisplayName = "" });
 

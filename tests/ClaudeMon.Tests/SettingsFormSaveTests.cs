@@ -178,4 +178,84 @@ public class SettingsFormSaveTests : IDisposable
 
         Assert.Null(form.BuildSettings().TaskbarDisplay.CycleHome);
     }
+
+    // #155: AlertThresholds and Budgets are saved the same layered way. Neither has a field
+    // without a control today — unlike TaskbarDisplay, which has LegacyShowSevenDay to test with —
+    // so the field the save has to protect is the *next* one somebody adds. These stand in for it:
+    // `with` copies the record it was given, extra state and runtime type included, where a
+    // reconstruction hands back a fresh default-valued instance of the base type.
+    private sealed record AlertThresholdsWithUnsurfacedField : AlertThresholds
+    {
+        public bool KeptState { get; init; }
+    }
+
+    private sealed record BudgetSettingsWithUnsurfacedField : BudgetSettings
+    {
+        public bool KeptState { get; init; }
+    }
+
+    [Fact]
+    public void BuildSettings_PreservesAnAlertThresholdFieldTheDialogDoesNotEdit()
+    {
+        var manager = ManagerHolding(new AppSettings
+        {
+            AlertThresholds = new AlertThresholdsWithUnsurfacedField { KeptState = true },
+        });
+        using var form = new SettingsForm(manager);
+
+        var saved = Assert.IsType<AlertThresholdsWithUnsurfacedField>(form.BuildSettings().AlertThresholds);
+        Assert.True(saved.KeptState);
+    }
+
+    [Fact]
+    public void BuildSettings_PreservesABudgetFieldTheDialogDoesNotEdit()
+    {
+        var manager = ManagerHolding(new AppSettings
+        {
+            Budgets = new BudgetSettingsWithUnsurfacedField { KeptState = true },
+        });
+        using var form = new SettingsForm(manager);
+
+        var saved = Assert.IsType<BudgetSettingsWithUnsurfacedField>(form.BuildSettings().Budgets);
+        Assert.True(saved.KeptState);
+    }
+
+    // Every alert/budget field the dialog does edit, all away from their defaults and inside the
+    // controls' ranges (50–100, 10–100, 1–10000), so a value that failed to round-trip can't
+    // coincide with the default.
+    private static readonly AlertThresholds EditedAlerts = new()
+    {
+        PaceAlertsEnabled = false,
+        PaceSensitivity = PaceSensitivity.Late,
+        NearCapWarning = 75,
+        SevenDayWarning = 42,
+    };
+
+    private static readonly BudgetSettings EditedBudgets = new()
+    {
+        DailyEnabled = true,
+        DailyCapUsd = 12.5,
+        WeeklyEnabled = true,
+        WeeklyCapUsd = 99.25,
+    };
+
+    [Fact]
+    public void BuildSettings_RoundTripsEveryAlertThresholdFieldTheDialogEdits()
+    {
+        var manager = ManagerHolding(new AppSettings { AlertThresholds = EditedAlerts });
+        using var form = new SettingsForm(manager);
+
+        // Untouched controls save exactly what they were loaded with — layering onto the saved
+        // record must not change a field the dialog owns.
+        Assert.Equal(EditedAlerts, form.BuildSettings().AlertThresholds);
+    }
+
+    [Fact]
+    public void BuildSettings_RoundTripsEveryBudgetFieldTheDialogEdits()
+    {
+        var manager = ManagerHolding(new AppSettings { Budgets = EditedBudgets });
+        using var form = new SettingsForm(manager);
+
+        Assert.Equal(EditedBudgets, form.BuildSettings().Budgets);
+    }
 }

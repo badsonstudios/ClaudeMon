@@ -73,6 +73,15 @@ GitHub release; the release notes are taken from these entries.
   shutdown, and a refreshed token that can't be written back because another Claude client
   rotated it first. The CI coverage gate moves from 85%/84% to 90%/87% (measured 96.0% line /
   91.4% branch). No behaviour changes. (#146)
+- **Why the credentials model maps a field nothing reads is now written down.**
+  `CredentialFile.OrganizationUuid` is deserialized and never used, which reads as dead code. It
+  stays: it is what shows at a glance that `claudeAiOauth` is not the whole of Claude Code's
+  credentials file, which is why a token write-back merges into what is already on disk instead
+  of serializing a fresh object over it. The comments also now head off the tempting misreading
+  that the model is *what* preserves those fields — write-back edits the parsed JSON tree, so
+  members ClaudeMon has never mapped survive too — and a new test pins that down, so nobody turns
+  write-back into a serializer round-trip and quietly drops data the CLI owns. No behaviour
+  changes. (#175)
 
 ## [0.26.0] - 2026-08-09
 

@@ -78,6 +78,12 @@ public sealed class CredentialReader
     /// token no longer matches it, so the next poll re-reads and uses the current
     /// token. Pass <c>null</c> to write unconditionally.
     /// </para>
+    /// <para>
+    /// Preservation comes from editing the parsed <see cref="JsonNode"/> tree, not from
+    /// <see cref="CredentialFile"/>: the file is Claude Code's, and it may hold members
+    /// ClaudeMon has never mapped. Never rewrite this to serialize a model over the file —
+    /// that would silently drop whatever the model doesn't know about.
+    /// </para>
     /// </summary>
     public WriteBackOutcome WriteBack(OAuthCredential refreshed, string? expectedPreviousRefreshToken = null)
     {

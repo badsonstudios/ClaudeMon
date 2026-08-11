@@ -142,6 +142,56 @@ public class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task NotifyAsync_CallerCancels_AbortsTheRequestWithoutThrowingOrLogging()
+    {
+        // Cancellation is deliberate, so it must neither escape (the fire-and-forget path would
+        // turn that into an unobserved task exception) nor be logged as a delivery failure.
+        var logger = new Logger(Path.Combine(_tempDir, "push-cancel"));
+        using var handler = new BlockingHttpHandler();
+        using var notifier = new PushNotifier(logger, new HttpClient(handler));
+        using var cts = new CancellationTokenSource();
+
+        var notify = notifier.NotifyAsync(Settings(topic: "my-topic"), "title", "text", cts.Token);
+        var observed = await handler.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await cts.CancelAsync();
+
+        await notify.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(observed.IsCancellationRequested);
+        Assert.DoesNotContain("Push notification error", ReadLog(logger));
+    }
+
+    [Fact]
+    public async Task Dispose_CancelsAPushStillInFlight()
+    {
+        // Notify has no caller token to borrow, so the notifier ties the request to its own
+        // lifetime: shutting it down abandons an in-flight POST to an unresponsive ntfy host.
+        using var handler = new BlockingHttpHandler();
+        var notifier = new PushNotifier(logger: null, httpClient: new HttpClient(handler));
+
+        notifier.Notify(Settings(topic: "my-topic"), "title", "text");
+        var observed = await handler.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        notifier.Dispose();
+
+        Assert.True(observed.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void Notify_AfterDispose_SendsNothing()
+    {
+        // Disposal cancels — and disposes — the token source Notify draws from, so the guard
+        // has to come first or reading the token would throw into the caller's alert path.
+        using var handler = new MockHttpHandler();
+        handler.SetResponse(HttpStatusCode.OK, "");
+        var notifier = new PushNotifier(logger: null, httpClient: new HttpClient(handler));
+        notifier.Dispose();
+
+        notifier.Notify(Settings(topic: "my-topic"), "title", "text");
+
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
     public void Dispose_OwnedHttpClient_IsIdempotent()
     {
         // The parameterless form creates — and therefore owns — its own HttpClient.
@@ -165,6 +215,9 @@ public class PushNotifierTests : IDisposable
         using var response = await client.GetAsync("https://ntfy.sh/");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
+
+    private static string ReadLog(Logger logger) =>
+        File.Exists(logger.FilePath) ? File.ReadAllText(logger.FilePath) : "";
 
     private sealed class MockHttpHandler : HttpMessageHandler
     {
@@ -194,6 +247,23 @@ public class PushNotifierTests : IDisposable
                 Content = new StringContent(_responseBody),
             };
             return Task.FromResult(response);
+        }
+    }
+
+    /// <summary>Stands in for an ntfy server that never answers: the request hangs until its
+    /// token is cancelled, and <see cref="Entered"/> hands the test the token the request was
+    /// actually issued with.</summary>
+    private sealed class BlockingHttpHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource<CancellationToken> Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Entered.TrySetResult(cancellationToken);
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 

@@ -636,8 +636,14 @@ internal sealed class UsageBreakdownForm : Form
 
         try
         {
+            // Each table's own sort goes with it, so the file's row order is the one on screen
+            // (#119). The rows themselves are the whole timeframe either way: a drill-down narrows
+            // what a table displays, but the export stays the full breakdown it was drilled from.
             // UTF-8 with BOM so Excel detects the encoding.
-            File.WriteAllText(dialog.FileName, BreakdownCsv.Compose(_current), new UTF8Encoding(true));
+            File.WriteAllText(
+                dialog.FileName,
+                BreakdownCsv.Compose(_current, _modelSort, _projectSort),
+                new UTF8Encoding(true));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {

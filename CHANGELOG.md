@@ -3,6 +3,8 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.27.0] - Unreleased
+
 ## [0.26.0] - 2026-08-09
 
 ### Added

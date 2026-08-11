@@ -57,8 +57,10 @@ public class CredentialReaderTests : IDisposable
     [Fact]
     public void CredentialFile_MapsEveryTopLevelFieldOfTheOnDiskShape()
     {
-        // Read() hands back only the OAuth section, but the model mirrors the whole file: it
-        // is what documents the on-disk shape WriteBack has to preserve field-for-field.
+        // Read() hands back only the OAuth section; the model still mirrors the whole file, to
+        // document that claudeAiOauth isn't all of it. That's a readability contract, not the
+        // mechanism — WriteBack preserves fields whether or not they're mapped here, which
+        // WriteBack_PreservesFieldsTheModelDoesNotKnowAbout pins down.
         var file = JsonSerializer.Deserialize<CredentialFile>("""
         {
             "claudeAiOauth": { "accessToken": "sk-ant-oat01-test", "expiresAt": 9999999999999 },
@@ -215,6 +217,45 @@ public class CredentialReaderTests : IDisposable
         // Untouched top-level field survives the rewrite.
         var raw = File.ReadAllText(path);
         Assert.Contains("keep-this-org", raw);
+    }
+
+    [Fact]
+    public void WriteBack_PreservesFieldsTheModelDoesNotKnowAbout()
+    {
+        // The credentials file is Claude Code's, and a future release can add members ClaudeMon
+        // has never mapped. WriteBack edits the parsed tree rather than serializing a model, so
+        // those survive too — the guarantee that would break the day someone "simplifies" it into
+        // a serializer round-trip, taking data the CLI owns with it.
+        var path = WriteTempFile("""
+        {
+            "claudeAiOauth": {
+                "accessToken": "old-access",
+                "refreshToken": "old-refresh",
+                "expiresAt": 1000000000000,
+                "unmappedOauthField": "inner-survivor"
+            },
+            "organizationUuid": "keep-this-org",
+            "unmappedTopLevelField": { "nested": ["outer-survivor"] }
+        }
+        """);
+        var reader = new CredentialReader(path);
+
+        var refreshed = new ClaudeMon.Models.OAuthCredential(
+            "new-access", "new-refresh", 9999999999999, null, null, null);
+
+        Assert.Equal(WriteBackOutcome.Written, reader.WriteBack(refreshed));
+
+        var rewritten = JsonSerializer.Deserialize<JsonElement>(File.ReadAllText(path));
+        Assert.Equal(
+            "inner-survivor",
+            rewritten.GetProperty("claudeAiOauth").GetProperty("unmappedOauthField").GetString());
+        Assert.Equal(
+            "outer-survivor",
+            rewritten.GetProperty("unmappedTopLevelField").GetProperty("nested")[0].GetString());
+        Assert.Equal("keep-this-org", rewritten.GetProperty("organizationUuid").GetString());
+        Assert.Equal(
+            "new-access",
+            rewritten.GetProperty("claudeAiOauth").GetProperty("accessToken").GetString());
     }
 
     [Fact]

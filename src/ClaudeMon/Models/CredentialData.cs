@@ -2,6 +2,30 @@ namespace ClaudeMon.Models;
 
 using System.Text.Json.Serialization;
 
+/// <summary>
+/// Claude Code's <c>~/.claude/.credentials.json</c>, as much of it as ClaudeMon knows about.
+/// The file belongs to the CLI, not to us; ClaudeMon only ever consumes
+/// <see cref="ClaudeAiOauth"/>, which is all
+/// <see cref="ClaudeMon.Services.CredentialReader.Read"/> hands back.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <see cref="OrganizationUuid"/> is mapped on purpose and read by nobody. Its job is to make
+/// the one fact that shapes <see cref="ClaudeMon.Services.CredentialReader.WriteBack"/> visible
+/// at a glance: <c>claudeAiOauth</c> is <em>not</em> the whole file, so a token write-back has to
+/// merge into what is already on disk rather than serialize a fresh object over it.
+/// </para>
+/// <para>
+/// It is not, however, what keeps that field alive across a write-back — this record is never
+/// serialized. <c>WriteBack</c> edits the parsed JSON tree in place, so every member survives
+/// whether or not it appears here, including ones a future Claude Code release adds that this
+/// type has never heard of. So deleting this property would lose no data. Serializing this
+/// record over the file would, and that is the mistake the property is here to forestall.
+/// The same holds for <see cref="OAuthCredential.Scopes"/>,
+/// <see cref="OAuthCredential.SubscriptionType"/> and <see cref="OAuthCredential.RateLimitTier"/>,
+/// which are likewise mapped for shape and unread today.
+/// </para>
+/// </remarks>
 public record CredentialFile(
     [property: JsonPropertyName("claudeAiOauth")] OAuthCredential? ClaudeAiOauth,
     [property: JsonPropertyName("organizationUuid")] string? OrganizationUuid

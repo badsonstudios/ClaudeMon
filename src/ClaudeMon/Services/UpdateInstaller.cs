@@ -23,10 +23,6 @@ public sealed class UpdateInstaller : IDisposable
         _ownsHttpClient = httpClient is null;
         // Generous timeout: this moves a ~10 MB installer, not a small JSON response.
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-        // GitHub's asset host doesn't strictly require a User-Agent, but api.github.com URLs
-        // do and sending one is never wrong; a default header covers both downloads (the
-        // checksum fetch goes through GetStringAsync, which takes no request message).
-        _httpClient.DefaultRequestHeaders.UserAgent.Add(AppUserAgent.Header);
     }
 
     /// <summary>
@@ -60,7 +56,7 @@ public sealed class UpdateInstaller : IDisposable
         var installerPath = Path.Combine(Path.GetTempPath(), fileName);
         try
         {
-            var checksumText = await _httpClient.GetStringAsync(checksumUrl, cancellationToken);
+            var checksumText = await DownloadChecksumAsync(checksumUrl, cancellationToken);
             if (!TryParseChecksum(checksumText, out var expectedSha256))
                 return UpdateDownloadResult.Failed("The release's checksum file could not be read.");
 
@@ -89,10 +85,37 @@ public sealed class UpdateInstaller : IDisposable
         }
     }
 
+    /// <summary>
+    /// Builds a GET carrying the shared <see cref="AppUserAgent"/>. GitHub's asset host doesn't
+    /// strictly require a User-Agent, but api.github.com URLs do and sending one is never wrong.
+    /// Set per request rather than on <c>DefaultRequestHeaders</c>: the <see cref="HttpClient"/>
+    /// may be the caller's, shared with the rest of the app, and its headers are not this class's
+    /// to mutate.
+    /// </summary>
+    private static HttpRequestMessage CreateGetRequest(string url)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.UserAgent.Add(AppUserAgent.Header);
+        return request;
+    }
+
+    /// <summary>
+    /// Fetches the checksum asset as text. Spelled out rather than <c>GetStringAsync</c> so the
+    /// request can carry the User-Agent; the explicit <c>EnsureSuccessStatusCode</c> keeps the
+    /// same throw-on-non-2xx behaviour the caller's catch block already handles.
+    /// </summary>
+    private async Task<string> DownloadChecksumAsync(string url, CancellationToken cancellationToken)
+    {
+        using var request = CreateGetRequest(url);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(cancellationToken);
+    }
+
     private async Task DownloadToFileAsync(
         string url, string destinationPath, IProgress<double>? progress, CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        using var request = CreateGetRequest(url);
         using var response = await _httpClient.SendAsync(
             request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();

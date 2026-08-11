@@ -74,6 +74,20 @@ public class UpdateInstallerTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_LeavesACallerSuppliedClientsDefaultHeadersAlone()
+    {
+        // It used to add the User-Agent to DefaultRequestHeaders, which mutates an HttpClient the
+        // caller owns and may share with the rest of the app (#171). The header goes on each
+        // request instead — asserted by Download_BothRequests_SendSharedUserAgentHeader.
+        using var handler = new MockHttpHandler();
+        using var client = new HttpClient(handler);
+
+        using var installer = new UpdateInstaller(client);
+
+        Assert.Empty(client.DefaultRequestHeaders.UserAgent);
+    }
+
+    [Fact]
     public async Task Download_ChecksumMismatch_FailsAndDeletesTheDownload()
     {
         _handler.Map(InstallerUrl, HttpStatusCode.OK, InstallerBytes);

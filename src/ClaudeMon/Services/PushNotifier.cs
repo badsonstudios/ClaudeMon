@@ -55,6 +55,8 @@ public sealed class PushNotifier : IDisposable
             };
             // ntfy reads the notification title from this header rather than the body.
             request.Headers.TryAddWithoutValidation("Title", title);
+            // Set per-request, not on DefaultRequestHeaders: the HttpClient may be the caller's.
+            request.Headers.UserAgent.Add(AppUserAgent.Header);
 
             using var response = await _httpClient.SendAsync(request).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)

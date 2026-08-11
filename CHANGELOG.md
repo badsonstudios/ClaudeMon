@@ -21,6 +21,11 @@ GitHub release; the release notes are taken from these entries.
   OAuth token refresh sent none at all. All four now send one `ClaudeMon/<version>` built in a
   single place, so an install's traffic reads as one app at one version rather than three. Headers
   only — nothing about polling, updating, or signing in changed. (#141)
+- **The last two requests that didn't identify themselves now do.** Finishing the job above: the
+  service-status poll and the ntfy push notification each sent no `User-Agent`, so they now send
+  the same `ClaudeMon/<version>` as everything else — a self-hosted ntfy's logs can name the
+  sender. The installer download sets that header on each request rather than on the shared
+  `HttpClient`, which it had no business modifying. Headers only; nothing else changed. (#171)
 
 ### Fixed
 - **Windows no longer run off the bottom of a short screen** — the fit-to-monitor clamp added to

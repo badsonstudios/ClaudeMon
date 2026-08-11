@@ -129,6 +129,19 @@ public class ServiceStatusClientTests : IDisposable
         Assert.Null(_handler.LastRequest?.Headers.Authorization);
     }
 
+    // The statuspage poll used to send no User-Agent at all; it now carries the same app-wide
+    // agent as every other request ClaudeMon makes (#171).
+    [Fact]
+    public async Task GetStatus_SendsSharedUserAgentHeader()
+    {
+        _handler.SetResponse(HttpStatusCode.OK, OperationalPayload);
+
+        await _client.GetStatusAsync();
+
+        Assert.NotNull(_handler.LastRequest);
+        Assert.Equal(AppUserAgent.Header, Assert.Single(_handler.LastRequest.Headers.UserAgent));
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.InternalServerError)]
     [InlineData(HttpStatusCode.NotFound)]

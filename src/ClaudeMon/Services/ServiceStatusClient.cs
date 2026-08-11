@@ -42,6 +42,9 @@ public sealed class ServiceStatusClient : IDisposable
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, StatusEndpoint);
+            // Set per-request, not on DefaultRequestHeaders: the HttpClient may be the caller's.
+            request.Headers.UserAgent.Add(AppUserAgent.Header);
+
             using var response = await _httpClient.SendAsync(request, cancellationToken);
 
             if (!response.IsSuccessStatusCode)

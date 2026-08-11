@@ -65,6 +65,19 @@ public class PushNotifierTests : IDisposable
         Assert.Equal("Almost Out", _handler.LastRequest.Headers.GetValues("Title").Single());
     }
 
+    // The push used to send no User-Agent at all; it now carries the same app-wide agent as
+    // every other request ClaudeMon makes, so a self-hosted ntfy's logs name the sender (#171).
+    [Fact]
+    public async Task NotifyAsync_SendsSharedUserAgentHeader()
+    {
+        _handler.SetResponse(HttpStatusCode.OK, "");
+
+        await _notifier.NotifyAsync(Settings(topic: "my-topic"), "title", "text");
+
+        Assert.NotNull(_handler.LastRequest);
+        Assert.Equal(AppUserAgent.Header, Assert.Single(_handler.LastRequest.Headers.UserAgent));
+    }
+
     [Fact]
     public async Task NotifyAsync_CustomServerUrl_PostsToConfiguredServer()
     {

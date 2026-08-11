@@ -5,6 +5,13 @@ GitHub release; the release notes are taken from these entries.
 
 ## [0.27.0] - Unreleased
 
+### Changed
+- **ClaudeMon now identifies itself the same way on every request it makes.** The usage API, the
+  GitHub update check, and the installer download each sent a different `User-Agent`, and the
+  OAuth token refresh sent none at all. All four now send one `ClaudeMon/<version>` built in a
+  single place, so an install's traffic reads as one app at one version rather than three. Headers
+  only — nothing about polling, updating, or signing in changed. (#141)
+
 ### Fixed
 - **CSV export follows the sort you're looking at** — clicking a column header re-sorted the
   Usage & costs tables on screen, but the exported file still came out in the default

@@ -35,7 +35,7 @@ public sealed class UpdateChecker : IDisposable
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseEndpoint);
             // GitHub rejects requests without a User-Agent; the Accept header pins the API version.
-            request.Headers.UserAgent.Add(new ProductInfoHeaderValue("ClaudeMon", currentVersion.ToString()));
+            request.Headers.UserAgent.Add(AppUserAgent.Header);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
             using var response = await _httpClient.SendAsync(request, cancellationToken);

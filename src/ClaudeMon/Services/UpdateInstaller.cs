@@ -1,7 +1,6 @@
 namespace ClaudeMon.Services;
 
 using System.Diagnostics;
-using System.Net.Http.Headers;
 using System.Security.Cryptography;
 
 /// <summary>
@@ -25,8 +24,9 @@ public sealed class UpdateInstaller : IDisposable
         // Generous timeout: this moves a ~10 MB installer, not a small JSON response.
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
         // GitHub's asset host doesn't strictly require a User-Agent, but api.github.com URLs
-        // do and sending one is never wrong; a default header covers both downloads.
-        _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ClaudeMon", "updater"));
+        // do and sending one is never wrong; a default header covers both downloads (the
+        // checksum fetch goes through GetStringAsync, which takes no request message).
+        _httpClient.DefaultRequestHeaders.UserAgent.Add(AppUserAgent.Header);
     }
 
     /// <summary>

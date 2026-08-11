@@ -4,7 +4,7 @@ namespace ClaudeMon.UI;
 /// The section headings above the two "Usage &amp; costs" tables (#112). Each table is either
 /// showing everything ("By model") or the counterpart of a row selected in the other one
 /// ("Projects using claude-fable-5"), and the heading is the only thing on screen that says
-/// which. Pure (no WinForms) so the wording is unit-testable, mirroring <see cref="BreakdownSort"/>
+/// which. Pure (no WinForms) so the wording is unit-testable, mirroring <c>BreakdownSort</c>
 /// and <see cref="UsageBreakdownLayout"/>.
 /// </summary>
 internal static class BreakdownDrillText

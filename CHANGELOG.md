@@ -6,6 +6,11 @@ GitHub release; the release notes are taken from these entries.
 ## [0.27.0] - Unreleased
 
 ### Fixed
+- **CSV export follows the sort you're looking at** — clicking a column header re-sorted the
+  Usage & costs tables on screen, but the exported file still came out in the default
+  cost-descending order, so the spreadsheet didn't match the window it came from. Export now
+  writes each table in that table's own current order (the two sort independently, and so does
+  the file's model and project section), with the Total row still last. (#119)
 - **The time-to-limit estimate now recovers within a couple of polls after a 5-hour reset**
   instead of showing a dash for half an hour. The estimate reads the trend from the last 30
   minutes of samples, and after a reset that half hour still contained the pre-reset numbers —

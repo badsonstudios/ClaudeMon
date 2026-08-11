@@ -143,6 +143,12 @@ public class ServiceStatusAlertsTests
     {
         // The whole point of #138: a restart re-reads the status from scratch, and the latch
         // loaded from settings — not an in-memory "previous" — is what keeps it quiet.
+        //
+        // These inputs are also the accepted gap of #150 in its entirety: a *second* incident at
+        // the same level, after a recovery ClaudeMon never saw, arrives here looking exactly like
+        // this and is silenced too. There is deliberately no test asserting the opposite, because
+        // severity-keyed as it is (see ServiceStatusAlerts' class doc) the two cases are
+        // indistinguishable — telling them apart is what an incident id would have bought.
         var (latch, alert) = Evaluate(ServiceStatusLevel.Major, Status(ServiceStatusLevel.Major));
 
         Assert.Equal(ServiceStatusLevel.Major, latch);
@@ -203,6 +209,19 @@ public class ServiceStatusAlertsTests
         // An unreachable status page says nothing about the incident — don't clear the latch.
         var (latch, _) = Evaluate(ServiceStatusLevel.Major, null);
 
+        Assert.Equal(ServiceStatusLevel.Major, latch);
+    }
+
+    [Fact]
+    public void Evaluate_ObservedRecovery_ReArmsForTheNextIncident()
+    {
+        // The other side of the accepted gap (#150), and why it stays narrow: one healthy
+        // reading is enough to clear the latch, so a separate incident that ClaudeMon actually
+        // watched end is announced normally even at the same level.
+        var (cleared, _) = Evaluate(ServiceStatusLevel.Major, Status(ServiceStatusLevel.Operational));
+        var (latch, alert) = Evaluate(cleared, Status(ServiceStatusLevel.Major));
+
+        Assert.NotNull(alert);
         Assert.Equal(ServiceStatusLevel.Major, latch);
     }
 }

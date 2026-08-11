@@ -291,11 +291,15 @@ public sealed class UsageMonitor : IDisposable
             var previous = LastServiceStatus;
             LastServiceStatus = status;
 
+            // Raise only on an actual change, so the log and the subscribers see one event per
+            // transition rather than one per poll. This is a chattiness filter, not the notify
+            // decision — that is the latch's job, and it is deliberately not told what the last
+            // reading was.
             if (previous == status)
                 return;
 
             LogServiceStatus(status);
-            ServiceStatusUpdated?.Invoke(this, new ServiceStatusUpdatedEventArgs(previous, status));
+            ServiceStatusUpdated?.Invoke(this, new ServiceStatusUpdatedEventArgs(status));
         }
         catch (OperationCanceledException)
         {
@@ -460,11 +464,13 @@ public record UsageUpdatedEventArgs(
 );
 
 /// <summary>
-/// A change in the Anthropic service status. <paramref name="Previous"/> is null the first time
-/// a status is read (nothing was known before), which counts as an incident start if the new
-/// status isn't operational.
+/// A change in the Anthropic service status. Only the new status is carried: whether to notify
+/// is decided against the <em>persisted</em> latch (<see cref="AppSettings.ServiceIncidentLevel"/>,
+/// see <see cref="ServiceStatusAlerts"/>), not against the previous reading, so a "previous"
+/// here would be a second, restart-amnesiac answer to a question already answered elsewhere —
+/// exactly the bug #138 fixed. The raiser still compares against the last reading to decide
+/// whether anything changed at all, but that is its own business (#150).
 /// </summary>
 public record ServiceStatusUpdatedEventArgs(
-    ServiceStatus? Previous,
     ServiceStatus Current
 );

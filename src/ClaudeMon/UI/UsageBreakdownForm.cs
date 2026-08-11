@@ -30,7 +30,9 @@ using ClaudeMon.Services;
 /// store is what keeps a drill-down from totalling more than the row it drills into on a window
 /// that has been open across a scan. The selection lives in one table at a time; the other table's
 /// heading says what it is showing and grows a "Show all" button to get back. Deliberately no
-/// third table: the window is already two tables tall.
+/// third table: the window is already two tables tall. Exporting while drilled writes the drilled
+/// tables rather than the breakdown behind them, scope named in the file and in the suggested file
+/// name (#168) — the window's rule is that the file is what you are looking at.
 ///
 /// A <see cref="TabStrip"/> (#113) puts a cost-per-day <see cref="CostChart"/> behind a second tab
 /// rather than stacking it under the tables, which would push them off a compact window. Tables is
@@ -602,15 +604,9 @@ internal sealed class UsageBreakdownForm : Form
     }
 
     // The drilled-into row's own display name for the heading — a project's real path rather than
-    // its directory key. Falls back to the key if the row has since vanished from the breakdown.
-    private string? DrilledDisplayName()
-    {
-        if (_drill is null)
-            return null;
-
-        var rows = _drill.Axis == BreakdownAxis.Model ? _current?.ByModel : _current?.ByProject;
-        return rows?.FirstOrDefault(r => SameKey(r.Key, _drill.Key))?.DisplayName ?? _drill.Key;
-    }
+    // its directory key. The CSV export names the scope with the same helper.
+    private string? DrilledDisplayName() =>
+        _drill is null ? null : BreakdownDrill.DisplayName(_current, _drill);
 
     private void ExportCsv()
     {
@@ -628,7 +624,9 @@ internal sealed class UsageBreakdownForm : Form
         using var dialog = new SaveFileDialog
         {
             Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-            FileName = $"claudemon-usage-{range}-{stamp}.csv",
+            // The drill scope rides in the name as well as in the file, so a drilled export doesn't
+            // sit in a folder looking exactly like the full one saved a minute earlier (#168).
+            FileName = $"claudemon-usage-{range}-{stamp}{BreakdownCsv.FileNameScope(_drill)}.csv",
             DefaultExt = "csv",
         };
         if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -636,13 +634,12 @@ internal sealed class UsageBreakdownForm : Form
 
         try
         {
-            // Each table's own sort goes with it, so the file's row order is the one on screen
-            // (#119). The rows themselves are the whole timeframe either way: a drill-down narrows
-            // what a table displays, but the export stays the full breakdown it was drilled from.
-            // UTF-8 with BOM so Excel detects the encoding.
+            // Each table's own sort and the drill-down go with it, so the file is the two tables as
+            // they are on screen — same rows, same order (#119, #168). UTF-8 with BOM so Excel
+            // detects the encoding.
             File.WriteAllText(
                 dialog.FileName,
-                BreakdownCsv.Compose(_current, _modelSort, _projectSort),
+                BreakdownCsv.Compose(_current, _drill, _modelSort, _projectSort),
                 new UTF8Encoding(true));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)

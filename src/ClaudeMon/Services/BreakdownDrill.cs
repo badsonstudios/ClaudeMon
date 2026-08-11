@@ -1,4 +1,4 @@
-namespace ClaudeMon.UI;
+namespace ClaudeMon.Services;
 
 using ClaudeMon.Models;
 
@@ -9,8 +9,12 @@ using ClaudeMon.Models;
 ///
 /// A pure computation over the breakdown the window already holds — not a second query — so the
 /// drill-down can never disagree with the tables it came from, however long the window has been
-/// open. Pure (no WinForms) and unit-testable, mirroring <c>BreakdownSort</c> and
-/// <see cref="UsageBreakdownLayout"/>.
+/// open. Pure (no WinForms) and unit-testable, mirroring <see cref="BreakdownSort"/>.
+///
+/// Lives beside <see cref="BreakdownCsv"/> rather than in <c>UI</c> for the same reason
+/// <see cref="BreakdownSort"/> does: the scope is no longer only the tables' — the CSV export
+/// applies the same drill-down, so a file exported while drilled holds the rows that were on
+/// screen rather than the breakdown they were drilled from (#168).
 /// </summary>
 internal static class BreakdownDrill
 {
@@ -70,6 +74,20 @@ internal static class BreakdownDrill
     /// </summary>
     public static LocalUsageDrillDown? Filtering(LocalUsageDrillDown? drill, BreakdownAxis axis) =>
         drill is not null && drill.Axis != axis ? drill : null;
+
+    /// <summary>
+    /// The drilled-into row's own display name — a project's real path rather than its directory
+    /// key. Falls back to the key when the row is no longer in <paramref name="breakdown"/>, which
+    /// is what a row dropping out of a narrowed timeframe looks like. Shared by the window's
+    /// headings and the CSV export, so both name the scope the same way.
+    /// </summary>
+    public static string DisplayName(LocalUsageBreakdown? breakdown, LocalUsageDrillDown drill)
+    {
+        var rows = drill.Axis == BreakdownAxis.Model ? breakdown?.ByModel : breakdown?.ByProject;
+        return rows?.FirstOrDefault(
+            r => string.Equals(r.Key, drill.Key, StringComparison.OrdinalIgnoreCase))?.DisplayName
+            ?? drill.Key;
+    }
 
     /// <summary>Whether two drill-downs point at the same row — or both at nothing.</summary>
     public static bool Same(LocalUsageDrillDown? a, LocalUsageDrillDown? b) =>

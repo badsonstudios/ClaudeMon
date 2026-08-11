@@ -35,6 +35,14 @@ GitHub release; the release notes are taken from these entries.
   cost-descending order, so the spreadsheet didn't match the window it came from. Export now
   writes each table in that table's own current order (the two sort independently, and so does
   the file's model and project section), with the Total row still last. (#119)
+- **CSV export follows the drill-down too** — selecting a model (or a project) narrows the other
+  table to that row's counterparts on screen, but Export CSV still wrote the whole breakdown, so a
+  file saved while looking at "Projects using claude-fable-5" quietly contained every project. The
+  export now writes both tables exactly as shown, drill-down and sort included. A drilled file
+  leads with a `drill-model` / `drill-project` row naming the selected row and carrying its totals
+  — which is what the drilled table sums to — and the suggested file name gains the same scope
+  (`claudemon-usage-7d-20260810-model-claude-fable-5.csv`), so a drilled export can't be mistaken
+  for the full picture later. Exports with nothing selected are unchanged. (#168)
 - **The time-to-limit estimate now recovers within a couple of polls after a 5-hour reset**
   instead of showing a dash for half an hour. The estimate reads the trend from the last 30
   minutes of samples, and after a reset that half hour still contained the pre-reset numbers —

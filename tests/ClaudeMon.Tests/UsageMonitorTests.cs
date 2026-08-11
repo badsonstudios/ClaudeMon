@@ -729,16 +729,23 @@ public class UsageMonitorTests : IDisposable
         // bearer token — used to drive the reactive refresh-on-401 path.
         private readonly string? _usageRequiresToken;
 
+        // Runs while the refresh is in flight, i.e. after the monitor read the credentials
+        // file and before it writes the refreshed tokens back — the window in which another
+        // client (the CLI, the extension) can rotate the on-disk token underneath us.
+        private readonly Action? _duringRefresh;
+
         public RoutingHttpHandler(
             string tokenResponse,
             string usageResponse,
             HttpStatusCode tokenStatus = HttpStatusCode.OK,
-            string? usageRequiresToken = null)
+            string? usageRequiresToken = null,
+            Action? duringRefresh = null)
         {
             _tokenResponse = tokenResponse;
             _usageResponse = usageResponse;
             _tokenStatus = tokenStatus;
             _usageRequiresToken = usageRequiresToken;
+            _duringRefresh = duringRefresh;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -747,6 +754,7 @@ public class UsageMonitorTests : IDisposable
             var host = request.RequestUri!.Host;
             if (host.Contains("console.anthropic.com"))
             {
+                _duringRefresh?.Invoke();
                 return Task.FromResult(new HttpResponseMessage(_tokenStatus)
                 {
                     Content = new StringContent(_tokenResponse),
@@ -970,6 +978,336 @@ public class UsageMonitorTests : IDisposable
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_responseBody),
+            };
+        }
+    }
+
+    // --- Reactive refresh, write-back outcomes and cancellation (issue #146) ---
+
+    /// <summary>
+    /// A token the file says is good for hours, paired with a usable refresh token — the
+    /// starting point for every "the server rejected it anyway" case below.
+    /// </summary>
+    private string WriteRefreshableCredentialFile()
+    {
+        var path = Path.Combine(_tempDir, ".credentials.json");
+        File.WriteAllText(path, """
+        {
+            "claudeAiOauth": {
+                "accessToken": "stale-access",
+                "refreshToken": "valid-refresh",
+                "expiresAt": 9999999999999
+            }
+        }
+        """);
+        return path;
+    }
+
+    [Fact]
+    public async Task RefreshNow_Rejected401_ReactiveRefreshRejected_SetsAuthError()
+    {
+        // The token looked valid by its timestamp, the server disagreed, and the refresh token
+        // is dead too: that is genuinely signed out, so say so rather than blaming the network.
+        var credPath = WriteRefreshableCredentialFile();
+        var handler = new RoutingHttpHandler(
+            tokenResponse: """{"error":"invalid_grant"}""",
+            usageResponse: UsageBody,
+            tokenStatus: HttpStatusCode.BadRequest,
+            usageRequiresToken: "fresh-access");
+
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher);
+
+        UsageUpdatedEventArgs? received = null;
+        monitor.UsageUpdated += (_, args) => received = args;
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.AuthError, monitor.Status);
+        Assert.Contains("Sign-in expired", monitor.LastError);
+        Assert.Equal(MonitorStatus.AuthError, received?.Status);
+    }
+
+    [Fact]
+    public async Task RefreshNow_Rejected401_ReactiveRefreshTransientlyFails_SetsOffline()
+    {
+        // Same rejection, but the token endpoint is the thing that's unreachable. Telling the
+        // user to re-authenticate over a flaky connection would be wrong — this is "offline".
+        var credPath = WriteRefreshableCredentialFile();
+        var handler = new RoutingHttpHandler(
+            tokenResponse: "",
+            usageResponse: UsageBody,
+            tokenStatus: HttpStatusCode.InternalServerError,
+            usageRequiresToken: "fresh-access");
+
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher);
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.Offline, monitor.Status);
+        Assert.Contains("retry", monitor.LastError, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RefreshNow_Rejected401_NothingToRefreshWith_SurfacesTheApiMessage()
+    {
+        // No refresh token in the file, so there is no reactive refresh to attempt: the API's
+        // own auth message is what the user sees.
+        var credPath = WriteCredentialFile();
+        var handler = new MockHttpHandler(HttpStatusCode.Unauthorized, "");
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1));
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.AuthError, monitor.Status);
+        Assert.Contains("rejected", monitor.LastError);
+    }
+
+    [Fact]
+    public async Task RefreshNow_AnotherClientRotatedTheTokenMidRefresh_LeavesTheFileAlone()
+    {
+        // Refresh tokens rotate on every use, so a token we derived from a superseded lineage
+        // must not overwrite the newer one the CLI just wrote — but it still serves this poll.
+        var credPath = WriteExpiredCredentialFile();
+        var logger = new Logger(Path.Combine(_tempDir, "superseded-logs"));
+
+        var handler = new RoutingHttpHandler(
+            tokenResponse: """{"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":28800}""",
+            usageResponse: UsageBody,
+            duringRefresh: () => File.WriteAllText(credPath, """
+            {
+                "claudeAiOauth": {
+                    "accessToken": "cli-access",
+                    "refreshToken": "cli-refresh",
+                    "expiresAt": 9999999999999
+                }
+            }
+            """));
+
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher, logger);
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+        Assert.Equal("fresh-access", handler.LastUsageToken);
+        // The other client's tokens are untouched.
+        var raw = File.ReadAllText(credPath);
+        Assert.Contains("cli-refresh", raw);
+        Assert.DoesNotContain("fresh-refresh", raw);
+        Assert.Contains("already rotated", File.ReadAllText(logger.FilePath));
+    }
+
+    [Fact]
+    public async Task RefreshNow_WriteBackFails_PollStillSucceedsOnTheRefreshedToken()
+    {
+        // The refreshed token lives in memory for this poll regardless of whether it reached
+        // disk, so a failed write-back is a logged warning, not a failed poll.
+        var credPath = WriteExpiredCredentialFile();
+        var logger = new Logger(Path.Combine(_tempDir, "writeback-logs"));
+
+        var handler = new RoutingHttpHandler(
+            tokenResponse: """{"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":28800}""",
+            usageResponse: UsageBody,
+            // The credentials file disappears between the read and the write-back.
+            duringRefresh: () => File.Delete(credPath));
+
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher, logger);
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+        Assert.Equal("fresh-access", handler.LastUsageToken);
+        var log = File.ReadAllText(logger.FilePath);
+        Assert.Contains("[WARN]", log);
+        Assert.Contains("could not be written back", log);
+    }
+
+    [Fact]
+    public async Task RefreshNow_RateLimited_EventCarriesTheLastKnownUsage()
+    {
+        // A rate-limited poll must not blank the readout: the event still carries the numbers
+        // the tray icon is already showing, so subscribers can render status without losing data.
+        var credPath = WriteCredentialFile();
+        var handler = new MockHttpHandler(HttpStatusCode.OK, """
+        {"five_hour": {"utilization": 63.0, "resets_at": "2026-06-01T00:00:00Z"}}
+        """);
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1));
+
+        UsageUpdatedEventArgs? received = null;
+        monitor.UsageUpdated += (_, args) => received = args;
+
+        await monitor.RefreshNowAsync();
+        Assert.Equal(63.0, received?.Usage?.FiveHour?.UtilizationPct);
+
+        handler.SetResponse(HttpStatusCode.TooManyRequests, "");
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.RateLimited, received?.Status);
+        Assert.Equal(63.0, received?.Usage?.FiveHour?.UtilizationPct);
+        Assert.NotNull(received?.Error);
+    }
+
+    [Fact]
+    public async Task Poll_CancelledMidFlight_UnwindsQuietlyAndTheMonitorStaysUsable()
+    {
+        // Shutdown cancels the poll token, which cancels both the usage call and the
+        // piggybacked status fetch. Neither is a failure worth logging, and neither may escape
+        // to SafePollAsync (which would report a shutdown as "Usage poll failed") or leave the
+        // re-entrancy guard stuck so no later poll can run.
+        var credPath = WriteCredentialFile();
+        var logger = new Logger(Path.Combine(_tempDir, "cancel-logs"));
+        var handler = new CancellingHttpHandler(UsageBody, StatusBody("none", "All Systems Operational"));
+
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var statusClient = new ServiceStatusClient(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1),
+            tokenRefresher: null, logger: logger, history: null, serviceStatus: statusClient);
+
+        handler.CancelOnFirstRequest = monitor.Stop;
+        monitor.Start(); // Start creates the token Stop cancels.
+
+        await handler.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        monitor.Start(); // a fresh token, as restarting the monitor would give it
+        var status = await PollUntilConnectedAsync(monitor);
+        monitor.Stop();
+
+        Assert.Equal(MonitorStatus.Connected, status);
+        var log = ReadSharing(logger.FilePath);
+        Assert.DoesNotContain("Usage poll failed", log);
+        Assert.DoesNotContain("Service status check failed", log);
+    }
+
+    [Fact]
+    public async Task RefreshNow_ServiceStatusThrowsUnexpectedly_UsagePollStillSucceeds()
+    {
+        // The status fetch runs concurrently with the usage poll and is awaited in its finally,
+        // so anything escaping it would surface as a lost usage update. It gets logged instead.
+        var credPath = WriteCredentialFile();
+        var logger = new Logger(Path.Combine(_tempDir, "status-throw-logs"));
+
+        using var apiClient = new ClaudeApiClient(
+            new HttpClient(new MockHttpHandler(HttpStatusCode.OK, UsageBody)));
+        using var statusClient = new ServiceStatusClient(
+            new HttpClient(new ThrowingHttpHandler(new InvalidOperationException("status exploded"))));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1),
+            tokenRefresher: null, logger: logger, history: null, serviceStatus: statusClient);
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+        Assert.Null(monitor.LastServiceStatus);
+        var log = File.ReadAllText(logger.FilePath);
+        Assert.Contains("Service status check failed", log);
+        Assert.Contains("status exploded", log);
+    }
+
+    [Fact]
+    public async Task RefreshNow_OperationalServiceStatus_IsLoggedAsInformation()
+    {
+        // "All systems operational" is not a warning. Logging it at WARN would make a healthy
+        // service look like an incident to anyone reading the log.
+        var credPath = WriteCredentialFile();
+        var logger = new Logger(Path.Combine(_tempDir, "status-ok-logs"));
+        var handler = new StatusRoutingHttpHandler(UsageBody, StatusBody("none", "All Systems Operational"));
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var statusClient = new ServiceStatusClient(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1),
+            tokenRefresher: null, logger: logger, history: null, serviceStatus: statusClient);
+
+        await monitor.RefreshNowAsync();
+
+        var line = Assert.Single(
+            File.ReadAllLines(logger.FilePath), l => l.Contains("Anthropic service status"));
+        Assert.Contains("[INFO]", line);
+        Assert.Contains("Operational", line);
+    }
+
+    /// <summary>
+    /// Polls until one actually executes. PollAsync's re-entrancy guard only clears in its
+    /// finally, so a poll that lands proves the previous one unwound all the way out.
+    /// </summary>
+    private static async Task<MonitorStatus> PollUntilConnectedAsync(UsageMonitor monitor)
+    {
+        var deadline = Environment.TickCount64 + 10_000;
+        do
+        {
+            await monitor.RefreshNowAsync();
+            if (monitor.Status == MonitorStatus.Connected)
+                break;
+
+            await Task.Delay(10);
+        }
+        while (Environment.TickCount64 < deadline);
+
+        return monitor.Status;
+    }
+
+    /// <summary>
+    /// Cancels the monitor from inside the first request it makes — the only way to observe a
+    /// shutdown that lands while a poll is genuinely in flight. Disarms itself afterwards, so
+    /// later polls are served normally.
+    /// </summary>
+    private sealed class CancellingHttpHandler : HttpMessageHandler
+    {
+        private readonly string _usageBody;
+        private readonly string _statusBody;
+        private int _armed = 1;
+
+        public CancellingHttpHandler(string usageBody, string statusBody)
+        {
+            _usageBody = usageBody;
+            _statusBody = statusBody;
+        }
+
+        public Action? CancelOnFirstRequest { get; set; }
+
+        /// <summary>Completes once the first request has been cancelled mid-flight.</summary>
+        public TaskCompletionSource Cancelled { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Exchange(ref _armed, 0) == 1)
+            {
+                CancelOnFirstRequest?.Invoke();
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+                finally
+                {
+                    Cancelled.TrySetResult();
+                }
+            }
+
+            // A real transport refuses a cancelled request rather than answering it, and the
+            // usage call that follows the cancelled status fetch depends on that.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    request.RequestUri!.Host.Contains("status.") ? _statusBody : _usageBody),
             };
         }
     }

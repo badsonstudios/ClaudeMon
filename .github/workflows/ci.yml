@@ -27,11 +27,13 @@ jobs:
       TEST_PROJECT: tests/ClaudeMon.Tests/ClaudeMon.Tests.csproj
       # Coverage gate for the logic layer only — see coverage.runsettings for what that means
       # and .claude/skills/startup/references/testing.md for how to reproduce it locally.
-      # Measured at 87.0% line / 86.2% branch on 2026-08-04 (Release, as built below); the gate
-      # sits just below so it catches real regressions without tripping on rounding, a Debug
-      # build, or an unrelated refactor.
-      COVERAGE_MIN_LINE: '85'
-      COVERAGE_MIN_BRANCH: '84'
+      # Measured at 96.0% line / 91.4% branch on 2026-08-10 (Release, as built below); the gate
+      # sits below so it catches real regressions without tripping on rounding, a Debug build,
+      # or an unrelated refactor. The margin is wider than the measurement-minus-two the 85/84
+      # gate used, because several branches were in flight when this was measured and a gate
+      # that trips on an unrelated merge trains people to ignore it.
+      COVERAGE_MIN_LINE: '90'
+      COVERAGE_MIN_BRANCH: '87'
 
     steps:
       - name: Checkout

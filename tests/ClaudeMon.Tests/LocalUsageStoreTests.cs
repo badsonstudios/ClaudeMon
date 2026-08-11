@@ -49,7 +49,9 @@ public class LocalUsageStoreTests : IDisposable
         long input = 100,
         long output = 200,
         string model = "claude-fable-5",
-        string? cwd = null)
+        string? cwd = null,
+        long cacheWrite = 0,
+        long cacheRead = 0)
     {
         var idPart = msgId is null ? "" : $"\"id\":\"{msgId}\",";
         var reqPart = reqId is null ? "" : $"\"requestId\":\"{reqId}\",";
@@ -58,7 +60,7 @@ public class LocalUsageStoreTests : IDisposable
         return "{\"type\":\"assistant\"," + reqPart + cwdPart
             + $"\"timestamp\":\"{ts}\",\"message\":{{" + idPart
             + $"\"model\":\"{model}\",\"usage\":{{\"input_tokens\":{input},\"output_tokens\":{output},"
-            + "\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}";
+            + $"\"cache_creation_input_tokens\":{cacheWrite},\"cache_read_input_tokens\":{cacheRead}}}}}}}";
     }
 
     private string WriteTranscript(string name, params string[] lines) =>
@@ -309,6 +311,28 @@ public class LocalUsageStoreTests : IDisposable
         var snap = store.Snapshot();
         Assert.NotNull(snap);
         Assert.Equal(111, snap.TotalTokens);
+        // The snapshot says which local day it is about, so the flyout's "Today" line can't
+        // quietly go stale across midnight while the app stays open.
+        Assert.Equal(DateOnly.FromDateTime(todayLocal), snap.LocalDate);
+    }
+
+    [Fact]
+    public void Snapshot_SplitsCacheTokensOutOfTheTotal()
+    {
+        // The flyout reports cache writes and reads separately from the plain input/output
+        // traffic, so the store has to carry the split, not just the sum.
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddMinutes(-30), "msg_1", "req_1",
+                input: 100, output: 200, cacheWrite: 40, cacheRead: 1000));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var snap = store.Snapshot();
+        Assert.NotNull(snap);
+        Assert.Equal(40, snap.CacheWriteTokens);
+        Assert.Equal(1000, snap.CacheReadTokens);
+        Assert.Equal(1340, snap.TotalTokens);
     }
 
     [Fact]
@@ -438,6 +462,27 @@ public class LocalUsageStoreTests : IDisposable
         Assert.Equal(11, store.Breakdown(BreakdownTimeframe.SevenDays)!.Totals.TotalTokens);
         // 31 days ago is outside the retention window entirely.
         Assert.Equal(1111, store.Breakdown(BreakdownTimeframe.ThirtyDays)!.Totals.TotalTokens);
+    }
+
+    [Theory]
+    [InlineData(BreakdownTimeframe.Today, 0)]
+    [InlineData(BreakdownTimeframe.SevenDays, 6)]
+    [InlineData(BreakdownTimeframe.ThirtyDays, 29)]
+    public void Breakdown_ReportsTheInclusiveDateRangeItCovers(BreakdownTimeframe timeframe, int daysBack)
+    {
+        // The window heading is drawn from these dates, so "Last 7 days" has to mean today plus
+        // the six before it — an off-by-one here would label a range the tables don't contain.
+        WriteTranscript("s1.jsonl", Line(_now.AddMinutes(-30), "msg_1", "req_1"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var today = DateOnly.FromDateTime(_now.ToLocalTime().DateTime);
+        var breakdown = store.Breakdown(timeframe);
+
+        Assert.NotNull(breakdown);
+        Assert.Equal(today.AddDays(-daysBack), breakdown.FromDate);
+        Assert.Equal(today, breakdown.ToDate);
     }
 
     [Fact]

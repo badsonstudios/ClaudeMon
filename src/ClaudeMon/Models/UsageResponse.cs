@@ -115,6 +115,17 @@ public record UsageBucket(
         return Math.Clamp(elapsed, 0.0, 1.0);
     }
 
+    /// <summary>
+    /// When this window opened — <see cref="ResetAt"/> minus <paramref name="window"/> — or null
+    /// when the reset time is unknown. The boundary that separates this window's usage samples
+    /// from the previous window's, so a reset's cliff can't leak into a burn-rate trend (#160).
+    /// Unlike <see cref="ElapsedFraction"/> this does not null out for an expired window: the
+    /// start of a window that has ended is still known, and it lies far enough in the past that
+    /// no recent sample is excluded by it.
+    /// </summary>
+    public DateTimeOffset? WindowStart(TimeSpan window) =>
+        ResetAt is { } resetAt ? resetAt - window : null;
+
     public string FormatResetCountdown()
     {
         if (ResetAt is null)

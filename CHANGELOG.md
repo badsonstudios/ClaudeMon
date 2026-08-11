@@ -6,6 +6,16 @@ GitHub release; the release notes are taken from these entries.
 ## [0.27.0] - Unreleased
 
 ### Fixed
+- **The time-to-limit estimate now recovers within a couple of polls after a 5-hour reset**
+  instead of showing a dash for half an hour. The estimate reads the trend from the last 30
+  minutes of samples, and after a reset that half hour still contained the pre-reset numbers —
+  so a window that dropped from 49% to 2% looked like usage *falling* fast, and both the flyout
+  line and the taskbar readout's element showed `—` until the old samples aged out, even though
+  usage was climbing again the whole time. Samples from before the current window began are now
+  left out of the trend, so once the new window has three readings of its own the estimate comes
+  back as a real projection (or `safe` when the next reset beats it). With fewer than three it
+  still honestly shows `—`, and when Anthropic doesn't tell us when the window resets nothing
+  changes. (#160)
 - **Claude Opus 5 usage is priced, so today's cost stops being a floor** — the bundled price table
   had no row for `claude-opus-5`, so every token from it was counted but costed at nothing. If
   that was your main model the flyout read `Today: ≥$172` — a floor, not a figure — and the

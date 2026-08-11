@@ -32,6 +32,9 @@ internal sealed class AboutDialog : Form
     private const int ButtonsGap = 16;
     private const int ButtonHeight = 30;
     private const int OkButtonWidth = 82;
+    // Floor for the height clamp when the monitor's working area is too small to hold even the
+    // window chrome; see DialogPlacement.ClampClientHeight.
+    private const int MinClientHeight = 160;
 
     private readonly Theme _theme = Theme.Current;
 
@@ -131,6 +134,12 @@ internal sealed class AboutDialog : Form
     // reading _description.Bottom — AutoSize recomputes the height from it.
     private void Relayout()
     {
+        // Every top below is an unscrolled coordinate, so scroll back to the origin before writing
+        // them — AutoScroll (turned on at the bottom of this method when the window doesn't fit)
+        // otherwise offsets each control we position by the current scroll amount (#153).
+        if (AutoScroll)
+            AutoScrollPosition = Point.Empty;
+
         _heading.Location = new Point(Sc(Pad), Sc(HeadingTop));
         _description.MaximumSize = new Size(Sc(ContentRight - Pad), 0);
         _description.Location = new Point(Sc(Pad), Sc(DescriptionTop));
@@ -142,7 +151,12 @@ internal sealed class AboutDialog : Form
         _okButton.SetBounds(
             Sc(ContentRight - OkButtonWidth), buttonsTop, Sc(OkButtonWidth), Sc(ButtonHeight));
 
-        ClientSize = new Size(Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad));
+        // Fitted to the monitor rather than taken as-is: the description wraps to a DPI- and
+        // font-dependent number of lines and everything below it flows from that, so this dialog
+        // has no fixed height to reason about — on a short display or at a large scale factor the
+        // OK button is the first thing over the bottom edge (#153).
+        DialogPlacement.FitToMonitor(
+            this, Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad), Sc(MinClientHeight));
     }
 
     protected override void OnLoad(EventArgs e)

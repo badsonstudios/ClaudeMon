@@ -40,6 +40,9 @@ internal sealed class UpdateAvailableDialog : Form
     private const int GetButtonWidth = 118;
     private const int IgnoreButtonWidth = 82;
     private const int SkipButtonWidth = 126;
+    // Floor for the height clamp when the monitor's working area is too small to hold even the
+    // window chrome; see DialogPlacement.ClampClientHeight.
+    private const int MinClientHeight = 160;
 
     private readonly Theme _theme = Theme.Current;
 
@@ -205,6 +208,10 @@ internal sealed class UpdateAvailableDialog : Form
     // choice isn't next to the default one.
     private void Relayout()
     {
+        // Unscrolled coordinates below, so start from the origin — see AboutDialog.Relayout (#153).
+        if (AutoScroll)
+            AutoScrollPosition = Point.Empty;
+
         _heading.Location = new Point(Sc(Pad), Sc(HeadingTop));
         _versions.Location = new Point(Sc(Pad), Sc(VersionsTop));
         _releaseNotesLink.Location = new Point(Sc(Pad), Sc(NotesTop));
@@ -217,7 +224,11 @@ internal sealed class UpdateAvailableDialog : Form
             Sc(ContentRight - GetButtonWidth - ButtonGap - IgnoreButtonWidth), buttonsTop,
             Sc(IgnoreButtonWidth), Sc(ButtonHeight));
 
-        ClientSize = new Size(Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad));
+        // Fitted to the monitor rather than taken as-is (#153): the metrics are fixed but they are
+        // all multiplied by the scale factor, so at a large one on a short display the button row
+        // — the whole point of the dialog — is what goes off the bottom edge.
+        DialogPlacement.FitToMonitor(
+            this, Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad), Sc(MinClientHeight));
     }
 
     protected override void OnLoad(EventArgs e)

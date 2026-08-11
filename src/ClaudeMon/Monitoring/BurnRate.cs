@@ -40,19 +40,29 @@ public static class BurnRate
     /// <param name="recent">Recent samples (oldest first) over the burn window.</param>
     /// <param name="currentPct">The latest 5-hour utilization percentage.</param>
     /// <param name="timeUntilReset">Time until the 5-hour window resets, if known.</param>
+    /// <param name="windowStart">
+    /// When the current 5-hour window began, if known (see <see cref="UsageBucket.WindowStart"/>).
+    /// Samples older than this belong to the previous window and are excluded from the slope
+    /// (#160). Null keeps every sample, which is the behaviour when the reset time is unknown.
+    /// </param>
     public static TimeToLimitEstimate EstimateTimeToLimit(
-        IReadOnlyList<UsageSample> recent, double currentPct, TimeSpan? timeUntilReset)
+        IReadOnlyList<UsageSample> recent, double currentPct, TimeSpan? timeUntilReset,
+        DateTimeOffset? windowStart = null)
     {
         // Already maxed out — no projection needed.
         if (currentPct >= LimitPct)
             return TimeToLimitEstimate.AtLimit;
 
+        var samples = InCurrentWindow(recent, windowStart);
+
         // Three samples is the floor: two points fit any noise perfectly (zero
         // residual), so the slope — and the resulting ETA — would be untrustworthy.
-        if (recent is null || recent.Count < 3)
+        // Applied after the window filter, so a fresh window honestly reports "no
+        // estimate" until it has three samples of its own.
+        if (samples.Count < 3)
             return TimeToLimitEstimate.NoEstimate;
 
-        var slopePerMinute = SlopePctPerMinute(recent);
+        var slopePerMinute = SlopePctPerMinute(samples);
         if (slopePerMinute is null or <= 0)
             return TimeToLimitEstimate.NoEstimate;
 
@@ -127,6 +137,24 @@ public static class BurnRate
         var hours = totalMinutes / 60;
         var minutes = totalMinutes % 60;
         return minutes == 0 ? $"~{hours}h" : $"~{hours}h {minutes}m";
+    }
+
+    // Drops samples recorded before the current window opened (#160). A reset zeroes
+    // utilization, so a single pre-reset sample left in the lookback makes the least-squares
+    // fit measure the cliff instead of the climb since — the readout showed the flat/declining
+    // "—" for the ~30 minutes the old samples took to age out, even though two or three
+    // post-reset polls already described the new trend. An unknown window start keeps every
+    // sample: without the boundary there is nothing to be confident about.
+    private static IReadOnlyList<UsageSample> InCurrentWindow(
+        IReadOnlyList<UsageSample>? recent, DateTimeOffset? windowStart)
+    {
+        if (recent is null)
+            return Array.Empty<UsageSample>();
+
+        if (windowStart is not { } start)
+            return recent;
+
+        return recent.Where(s => s.Timestamp >= start).ToList();
     }
 
     // Least-squares slope of utilization (percent) over time (minutes). Returns

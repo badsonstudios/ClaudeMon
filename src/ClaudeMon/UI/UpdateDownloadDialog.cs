@@ -58,6 +58,9 @@ internal sealed class UpdateDownloadDialog : Form
     private const int ButtonGap = 8;
     private const int CancelButtonWidth = 82;
     private const int OpenPageButtonWidth = 136;
+    // Floor for the height clamp when the monitor's working area is too small to hold even the
+    // window chrome; see DialogPlacement.ClampClientHeight.
+    private const int MinClientHeight = 160;
 
     private readonly Theme _theme = Theme.Current;
 
@@ -207,6 +210,10 @@ internal sealed class UpdateDownloadDialog : Form
 
     private void Relayout()
     {
+        // Unscrolled coordinates below, so start from the origin — see AboutDialog.Relayout (#153).
+        if (AutoScroll)
+            AutoScrollPosition = Point.Empty;
+
         _heading.Location = new Point(Sc(Pad), Sc(HeadingTop));
         _status.SetBounds(Sc(Pad), Sc(StatusTop), Sc(ContentRight - Pad), Sc(StatusHeight));
         _progressBar.SetBounds(Sc(Pad), Sc(ProgressTop), Sc(ContentRight - Pad), Sc(ProgressHeight));
@@ -218,7 +225,10 @@ internal sealed class UpdateDownloadDialog : Form
             Sc(ContentRight - CancelButtonWidth - ButtonGap - OpenPageButtonWidth), buttonsTop,
             Sc(OpenPageButtonWidth), Sc(ButtonHeight));
 
-        ClientSize = new Size(Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad));
+        // Fitted to the monitor — same reasoning as UpdateAvailableDialog (#153). It matters a
+        // little more here: this dialog's Cancel button is the only way to stop a download.
+        DialogPlacement.FitToMonitor(
+            this, Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad), Sc(MinClientHeight));
     }
 
     protected override void OnLoad(EventArgs e)

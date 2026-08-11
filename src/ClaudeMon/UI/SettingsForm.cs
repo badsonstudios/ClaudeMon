@@ -11,7 +11,7 @@ using ClaudeMon.Models;
 /// optional visibility predicate — sub-options <em>collapse</em> when their parent toggle is off —
 /// and <see cref="Relayout"/> positions the active tab's visible rows and sizes the window to
 /// them (so the dialog height follows the current tab), within whatever height the monitor's
-/// working area allows — see <see cref="SettingsFormLayout"/>. The app-wide dark mode
+/// working area allows — see <see cref="DialogPlacement.ClampClientHeight"/>. The app-wide dark mode
 /// (<c>Application.SetColorMode</c> in Program.cs) themes the standard controls; this form only
 /// adds the accents and the custom <see cref="ToggleSwitch"/>/<see cref="TabStrip"/> controls.
 /// </summary>
@@ -72,7 +72,7 @@ public sealed class SettingsForm : Form
     private const int ToggleWidth = 40;
     private const int TabContentGap = 12; // between the tab strip's baseline and the first row
     // Floor for the height clamp when the monitor's working area is too small to hold even the
-    // window chrome; see SettingsFormLayout.ClampClientHeight.
+    // window chrome; see DialogPlacement.ClampClientHeight.
     private const int MinClientHeight = 200;
 
     // Light or dark accents/controls, matching the Windows app theme.
@@ -449,60 +449,24 @@ public sealed class SettingsForm : Form
         _okButton.Top = y;
         _cancelButton.Top = y;
 
-        // The height the content wants — which the monitor may not have room for. Clamping it, and
-        // then sliding the window back up under the bottom of the working area, is what keeps the
-        // OK/Cancel row on screen on a short display or at a large scale factor; the overflow
-        // becomes a scrollbar instead of falling off the bottom (#139). Both halves matter: the
-        // window grows downwards from the top it was centered at for the tab it opened on, so a
-        // taller tab can run off the bottom long before it is too tall for the monitor at all.
-        var area = CurrentWorkingArea();
+        // The height the content wants — which the monitor may not have room for. The shared clamp
+        // keeps the OK/Cancel row on screen on a short display or at a large scale factor (#139);
+        // see DialogPlacement.FitToMonitor for why both the height cap and the slide are needed.
+        // One thing that is specific to this form: AdjustWindowRectEx ignores WS_VSCROLL, so the
+        // scrollbar comes out of the client width rather than widening the window, and it fits in
+        // the right margin — but only just: the rows end at 456 logical and carry a 3px unscaled
+        // Margin, against a client width of 480 less a ~17px scrollbar. That is ~4px of slack, so
+        // don't grow ContentRight without re-checking it, or a spurious horizontal scrollbar
+        // appears (and inflates the chrome FitToMonitor measures by ~17px).
         var contentHeight = y + _okButton.Height + Sc(Pad);
-        var (clientHeight, scroll) = SettingsFormLayout.ClampClientHeight(
-            contentHeight, area.Height, Height - ClientSize.Height, Sc(MinClientHeight));
-
-        // Setting a non-empty AutoScrollMinSize turns AutoScroll on by itself; the assignment
-        // after it is what turns it back off once a shorter tab fits again. AdjustWindowRectEx
-        // ignores WS_VSCROLL, so the scrollbar comes out of the client width rather than widening
-        // the window, and it fits in the right margin — but only just: the rows end at 456 logical
-        // and carry a 3px unscaled Margin, against a client width of 480 less a ~17px scrollbar.
-        // That is ~4px of slack, so don't grow ContentRight without re-checking it, or a spurious
-        // horizontal scrollbar appears (and inflates the chrome measured above by ~17px).
-        AutoScrollMinSize = scroll ? new Size(0, contentHeight) : Size.Empty;
-        AutoScroll = scroll;
-        ClientSize = new Size(Sc(480), clientHeight);
-
-        // Only once the window exists — before that, Top is meaningless and OnLoad's
-        // CenterOnPrimary does the opening placement anyway.
-        if (IsHandleCreated)
-            Top = SettingsFormLayout.ClampTop(Top, Height, area.Top, area.Bottom);
+        var scroll = DialogPlacement.FitToMonitor(
+            this, Sc(480), contentHeight, Sc(MinClientHeight));
 
         // Last word on the scroll offset: hiding the focused control (which is what switching tabs
         // does) makes WinForms scroll whatever gains focus into view, so the reset at the top of
         // this method is not enough on its own. WinForms clamps the value to the new range.
         if (scroll)
             AutoScrollPosition = new Point(0, scrolledTo);
-    }
-
-    /// <summary>
-    /// The working area both clamps measure against: the monitor the dialog is on once it has a
-    /// window, the primary monitor's before that. Those agree for the first layout — the
-    /// dialog is centered on the primary in <see cref="OnLoad"/> (#88) and an as-yet-unplaced form
-    /// sits at the origin, which is on the primary by definition — so the pass that runs before
-    /// the window is shown already clamps against the monitor the user will see it on.
-    /// </summary>
-    private Rectangle CurrentWorkingArea()
-    {
-        try
-        {
-            if (IsHandleCreated)
-                return Screen.FromControl(this).WorkingArea;
-        }
-        catch
-        {
-            // Monitor enumeration can fail in odd session states; fall through to the primary.
-        }
-
-        return DialogPlacement.PrimaryWorkingArea();
     }
 
     protected override void OnLoad(EventArgs e)
@@ -741,7 +705,11 @@ public sealed class SettingsForm : Form
         return _configManager.Settings with
         {
             PollIntervalMinutes = pollMinutes,
-            AlertThresholds = new AlertThresholds
+            // `with` on the existing record, not `new` — for the same reason as TaskbarDisplay
+            // and Notifications below: every AlertThresholds field has a control today, so a
+            // reconstruction loses nothing yet, but the first field added without one would be
+            // reset on every settings save.
+            AlertThresholds = _configManager.Settings.AlertThresholds with
             {
                 PaceAlertsEnabled = _paceAlertsToggle.Checked,
                 PaceSensitivity = SelectedOption(_paceSensitivityCombo, PaceSensitivityOptions),
@@ -757,7 +725,10 @@ public sealed class SettingsForm : Form
                 NotifyOnServiceIncident = _notifyOnServiceIncidentToggle.Checked,
                 PushTopic = string.IsNullOrWhiteSpace(_pushTopicText.Text) ? null : _pushTopicText.Text.Trim(),
             },
-            Budgets = new BudgetSettings
+            // `with`, not `new` — same hazard as AlertThresholds above: the dialog edits all four
+            // budget fields today, and a fifth one without a control would silently snap back to
+            // its default on every save.
+            Budgets = _configManager.Settings.Budgets with
             {
                 DailyEnabled = _dailyBudgetToggle.Checked,
                 DailyCapUsd = (double)_dailyCapNumeric.Value,

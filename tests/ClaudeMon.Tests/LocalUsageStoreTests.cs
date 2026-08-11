@@ -240,6 +240,26 @@ public class LocalUsageStoreTests : IDisposable
     }
 
     [Fact]
+    public void Snapshot_BundledPricing_DayOfCurrentModels_IsRealCostNotAFloor()
+    {
+        // The bundled table — not the round-numbers fake — because the point is
+        // that a day of today's models is fully priced, so the flyout shows a
+        // real "Today: $…" and the chart doesn't hatch the bar (#161).
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddMinutes(-30), "msg_1", "req_1", input: 1_000_000, output: 1_000_000, model: "claude-opus-5"),
+            Line(_now.AddMinutes(-20), "msg_2", "req_2", input: 1_000_000, output: 1_000_000, model: "claude-sonnet-5"));
+
+        var store = Store(PricingTable.LoadEmbedded());
+        store.ScanOnce();
+
+        var snap = store.Snapshot();
+        Assert.NotNull(snap);
+        // opus-5: $5 + $25. sonnet-5: $3 + $15.
+        Assert.Equal(48.0, snap.CostUsd, precision: 10);
+        Assert.False(snap.HasUnpricedModels);
+    }
+
+    [Fact]
     public void Snapshot_BurnRate_FromRecentWindow()
     {
         // 1M output tokens 10 minutes ago = $50 in the 30-minute window → $100/hr.

@@ -16,6 +16,48 @@ GitHub release; the release notes are taken from these entries.
   accepted consequence — if the service recovers and breaks again entirely while ClaudeMon isn't
   looking, the second incident's balloon can be swallowed, though the flyout still shows it — is
   documented and pinned by tests. (#150)
+- **ClaudeMon now identifies itself the same way on every request it makes.** The usage API, the
+  GitHub update check, and the installer download each sent a different `User-Agent`, and the
+  OAuth token refresh sent none at all. All four now send one `ClaudeMon/<version>` built in a
+  single place, so an install's traffic reads as one app at one version rather than three. Headers
+  only — nothing about polling, updating, or signing in changed. (#141)
+
+### Fixed
+- **Windows no longer run off the bottom of a short screen** — the fit-to-monitor clamp added to
+  the Settings window now covers every window in the app. About, the update prompt, the update
+  download progress window and the Usage & costs window all size themselves from their content,
+  so on a short display or at a large scale factor any of them could put its buttons somewhere
+  below the taskbar. They now cap themselves to the monitor's working area (scrolling, or in the
+  resizable window's case simply opening smaller) and slide back on screen if a relayout grows
+  them past the bottom edge. No change on a screen where they already fit. (#153)
+- **CSV export follows the sort you're looking at** — clicking a column header re-sorted the
+  Usage & costs tables on screen, but the exported file still came out in the default
+  cost-descending order, so the spreadsheet didn't match the window it came from. Export now
+  writes each table in that table's own current order (the two sort independently, and so does
+  the file's model and project section), with the Total row still last. (#119)
+- **The time-to-limit estimate now recovers within a couple of polls after a 5-hour reset**
+  instead of showing a dash for half an hour. The estimate reads the trend from the last 30
+  minutes of samples, and after a reset that half hour still contained the pre-reset numbers —
+  so a window that dropped from 49% to 2% looked like usage *falling* fast, and both the flyout
+  line and the taskbar readout's element showed `—` until the old samples aged out, even though
+  usage was climbing again the whole time. Samples from before the current window began are now
+  left out of the trend, so once the new window has three readings of its own the estimate comes
+  back as a real projection (or `safe` when the next reset beats it). With fewer than three it
+  still honestly shows `—`, and when Anthropic doesn't tell us when the window resets nothing
+  changes. (#160)
+- **Claude Opus 5 usage is priced, so today's cost stops being a floor** — the bundled price table
+  had no row for `claude-opus-5`, so every token from it was counted but costed at nothing. If
+  that was your main model the flyout read `Today: ≥$172` — a floor, not a figure — and the
+  Usage & costs chart hatched the day as incomplete. Opus 5 is now priced at its published list
+  rates (input, output, and the separate 5-minute / 1-hour cache-write and cache-read rates), so
+  a day whose models are all known reads as a real number again. The rest of the table was
+  audited against Anthropic's published pricing page at the same time; every other current model
+  was already there and correct. (#161)
+- **Saving Settings keeps alert and budget values it doesn't show** — the alert thresholds and
+  budget caps were still rebuilt from the dialog's controls alone, the way the taskbar settings
+  were before #143. Nothing is lost today (every one of those values has a control), but they are
+  now layered onto your saved settings too, so a future setting stored alongside them can't be
+  quietly reset the next time you click OK. (#155)
 
 ## [0.26.0] - 2026-08-09
 

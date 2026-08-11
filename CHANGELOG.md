@@ -5,6 +5,13 @@ GitHub release; the release notes are taken from these entries.
 
 ## [0.27.0] - Unreleased
 
+### Fixed
+- **Saving Settings keeps alert and budget values it doesn't show** — the alert thresholds and
+  budget caps were still rebuilt from the dialog's controls alone, the way the taskbar settings
+  were before #143. Nothing is lost today (every one of those values has a control), but they are
+  now layered onto your saved settings too, so a future setting stored alongside them can't be
+  quietly reset the next time you click OK. (#155)
+
 ## [0.26.0] - 2026-08-09
 
 ### Added

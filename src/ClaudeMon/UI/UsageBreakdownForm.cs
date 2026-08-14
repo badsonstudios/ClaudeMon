@@ -263,6 +263,16 @@ internal sealed class UsageBreakdownForm : Form
         AcceptButton = _closeButton;
         CancelButton = _closeButton;
 
+        // The tables were added before this bottom band, which in WinForms puts them in *front* of
+        // it (index 0 is the front). That never mattered while MinimumSize guaranteed room for
+        // everything, but since #172 the floor is capped at the monitor, so on a screen too small
+        // to hold the window the tables keep their floor height and run under the hint and the
+        // buttons. Put the band back in front, where a ListView can no longer paint over Export and
+        // Close — or, worse, swallow their clicks. No effect at any size that fits.
+        _hint.BringToFront();
+        _exportButton.BringToFront();
+        _closeButton.BringToFront();
+
         Reload();
         ApplyTab();
         ClientSize = DefaultClientSize();
@@ -740,9 +750,10 @@ internal sealed class UsageBreakdownForm : Form
     /// smaller share — no scrollbar, hence the discarded flag. The floor is the same
     /// two-floor-height-tables minimum <see cref="MinClientSize"/> uses, so the clamp lands on the
     /// window's own minimum rather than somewhere below it. (Not exactly: the two measure the hint
-    /// line at different widths, so on a working area small enough for the floor to bite,
-    /// <c>OnLoad</c>'s <c>MinimumSize</c> may still nudge the window a line taller. That is the
-    /// pre-existing behaviour for a monitor that cannot hold the window at all, and harmless.)
+    /// line at different widths, so the floor here can come out a line shorter than the one
+    /// <c>OnLoad</c> sets. It no longer nudges the window taller, though — since #172 that floor is
+    /// itself capped at the working area, which on any monitor small enough for this floor to bite
+    /// is shorter than the window it produced.)
     /// </summary>
     private Size DefaultClientSize()
     {
@@ -785,9 +796,27 @@ internal sealed class UsageBreakdownForm : Form
         return new Size(width, MinContentHeight(hint));
     }
 
-    // MinimumSize is the outer window size, so the frame has to be added back on. Deliberately
-    // not called from OnResize on every pass — the value is resize-invariant, and assigning it
-    // can itself resize the window, which would bounce straight back in here.
+    /// <summary>
+    /// Recomputes the window's resize floor. <c>MinimumSize</c> is the outer window size, so the
+    /// frame has to be added back on, and the result is capped at the monitor's working area
+    /// (#172): on a small panel at a large scale factor the content-derived floor can be bigger
+    /// than the screen, and then the user cannot shrink the window to fit — the one case #153's cap
+    /// on the *opening* size cannot save, since it only bounds where the window starts. Shrunk that
+    /// far the window is below its own content minimum, so the tables stop at their floor height
+    /// (see <see cref="UsageBreakdownLayout.SplitTableHeights"/>) and are clipped by the hint and
+    /// the button row, which the constructor puts in front of them for exactly this case: cramped,
+    /// but on a screen that small a cramped window beats one that can't be shrunk onto it at all.
+    ///
+    /// Deliberately not called from <see cref="OnResize"/> on every pass — the value is
+    /// resize-invariant, and assigning it can itself resize the window, which would bounce straight
+    /// back in here. That also settles what happens when the window is dragged to a smaller
+    /// monitor: the cap is re-evaluated on the triggers that already exist (open, DPI change,
+    /// restore from minimized), and a same-DPI move to a smaller screen keeps the old floor until
+    /// one of those fires or the window is reopened. That is the app's existing rule for monitor
+    /// moves — <see cref="DialogPlacement.CenterOnPrimary"/> never re-centers a dialog the user
+    /// dragged either — and the alternative, chasing <c>Screen.FromControl</c> on every move,
+    /// would resize a window out from under the hand that is dragging it.
+    /// </summary>
     private void UpdateMinimumSize()
     {
         // Minimizing reports a degenerate frame, so there is nothing sensible to compute from;
@@ -799,9 +828,11 @@ internal sealed class UsageBreakdownForm : Form
         try
         {
             var min = MinClientSize();
-            MinimumSize = new Size(
-                min.Width + (Width - ClientSize.Width),
-                min.Height + (Height - ClientSize.Height));
+            MinimumSize = DialogPlacement.ClampMinimumSize(
+                new Size(
+                    min.Width + (Width - ClientSize.Width),
+                    min.Height + (Height - ClientSize.Height)),
+                DialogPlacement.WorkingAreaFor(this).Size);
         }
         finally
         {

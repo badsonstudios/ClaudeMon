@@ -356,6 +356,93 @@ public class DialogPlacementTests
         Assert.True(scroll);
     }
 
+    // --- The resize floor of the one resizable window (#172). Capping the size the Usage & costs
+    // window *opens* at (#153) is no help on a monitor smaller than its content-derived minimum:
+    // the user cannot drag it down to fit either. These pin the cap on that minimum.
+
+    // Roughly the Usage & costs window's floor at 100% — its width comes from the table columns and
+    // its height from two floor-height tables plus the chrome. Illustrative, not measured from the
+    // form: this fixes the arithmetic below, not the window's real minimum.
+    private static readonly Size BreakdownMinimum = new(716, 420);
+
+    [Fact]
+    public void ClampMinimumSize_LeavesAMinimumThatFitsAlone()
+    {
+        var min = DialogPlacement.ClampMinimumSize(BreakdownMinimum, new Size(1920, 1040));
+
+        Assert.Equal(BreakdownMinimum, min);
+    }
+
+    [Fact]
+    public void ClampMinimumSize_LeavesAMinimumThatExactlyFillsTheWorkingAreaAlone()
+    {
+        var min = DialogPlacement.ClampMinimumSize(BreakdownMinimum, BreakdownMinimum);
+
+        Assert.Equal(BreakdownMinimum, min);
+    }
+
+    [Fact]
+    public void ClampMinimumSize_ClampsAFloorThatOutgrewTheScreenOnBothAxes()
+    {
+        // #172's case: the floor doubles to 1432x840 at 200%, and a 1366x768 laptop's working area
+        // has 1366x728. Unclamped, the window cannot be shrunk onto the screen it opened on.
+        var min = DialogPlacement.ClampMinimumSize(new Size(1432, 840), new Size(1366, 728));
+
+        Assert.Equal(new Size(1366, 728), min);
+    }
+
+    [Fact]
+    public void ClampMinimumSize_ClampsTheHeightOnItsOwn()
+    {
+        // The two dimensions are clamped independently; a short monitor need not be a narrow one.
+        var min = DialogPlacement.ClampMinimumSize(BreakdownMinimum, new Size(1920, 300));
+
+        Assert.Equal(new Size(716, 300), min);
+    }
+
+    [Fact]
+    public void ClampMinimumSize_ClampsTheWidthOnItsOwn()
+    {
+        // The width comes from the table columns, so a narrow monitor can bite while height doesn't.
+        var min = DialogPlacement.ClampMinimumSize(BreakdownMinimum, new Size(600, 1040));
+
+        Assert.Equal(new Size(600, 420), min);
+    }
+
+    [Theory]
+    [InlineData(0)]     // no size reported
+    [InlineData(-500)]  // a nonsense working area
+    public void ClampMinimumSize_KeepsTheFloorForADegenerateWorkingArea(int workingAreaSide)
+    {
+        // Nothing to measure against, so the floor stands: unlike ClampClientHeight this only ever
+        // lowers one, and declining to lower it is the status quo. WorkingAreaFor never produces
+        // this — it falls back to the primary monitor — so it is the pure function staying total.
+        var min = DialogPlacement.ClampMinimumSize(
+            BreakdownMinimum, new Size(workingAreaSide, workingAreaSide));
+
+        Assert.Equal(BreakdownMinimum, min);
+    }
+
+    [Fact]
+    public void ClampMinimumSize_ClampsTheUsableDimensionOfAHalfDegenerateWorkingArea()
+    {
+        var min = DialogPlacement.ClampMinimumSize(BreakdownMinimum, new Size(0, 300));
+
+        Assert.Equal(new Size(BreakdownMinimum.Width, 300), min);
+    }
+
+    [Theory]
+    [InlineData(1920, 1040)]  // a real monitor
+    [InlineData(0, 0)]        // and the degenerate path, which must not pass the negative through
+    public void ClampMinimumSize_NeverReturnsANegativeMinimum(int areaWidth, int areaHeight)
+    {
+        // Form.MinimumSize throws on a negative dimension, so the clamp has to be total.
+        var min = DialogPlacement.ClampMinimumSize(
+            new Size(-10, -10), new Size(areaWidth, areaHeight));
+
+        Assert.Equal(Size.Empty, min);
+    }
+
     [Fact]
     public void ClampTop_LeavesAWindowThatAlreadyFitsWhereItIs()
     {

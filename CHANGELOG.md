@@ -87,6 +87,13 @@ GitHub release; the release notes are taken from these entries.
   were before #143. Nothing is lost today (every one of those values has a control), but they are
   now layered onto your saved settings too, so a future setting stored alongside them can't be
   quietly reset the next time you click OK. (#155)
+- **The Usage & costs window can be resized to fit a small screen.** It is the app's one resizable
+  window, and it refused to shrink below the size its two tables need — a size that, on a small
+  laptop panel at a large scale factor, is bigger than the screen itself, leaving the window stuck
+  hanging off the edge with no way to drag it back. Its minimum size is now capped at the monitor's
+  working area, so it can always be shrunk to fit the display it opened on. Nothing changes where
+  the minimum already fits, which is every normal-sized screen. Dragging the window to a *smaller*
+  monitor re-caps it when the two screens differ in scaling, and otherwise on the next open. (#172)
 
 ### Internal
 - **Second coverage pass over the logic layer, and a higher bar to keep it there.** The classes

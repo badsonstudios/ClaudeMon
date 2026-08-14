@@ -12,12 +12,13 @@ using System.Drawing;
 /// working (issue #108). Nothing here ever reads the cursor position.
 ///
 /// The size half of the same question lives here too (<see cref="ClampClientHeight"/> /
-/// <see cref="ClampTop"/>, moved out of a <c>SettingsFormLayout</c> helper in #153): every dialog
-/// in the app sizes itself from its content, so on a short display or at a large scale factor any
-/// of them can want more height than the monitor has. Deciding how big a window may be and
-/// deciding where it lands are one question — <see cref="CenterIn"/> already carries the same
-/// "keep the title bar reachable" clamp — so one type owns both rather than each form growing its
-/// own copy.
+/// <see cref="ClampTop"/>, moved out of a <c>SettingsFormLayout</c> helper in #153, joined by
+/// <see cref="ClampMinimumSize"/> in #172): every dialog in the app sizes itself from its content,
+/// so on a short display or at a large scale factor any of them can want more room than the
+/// monitor has — to open at, and, where the window is resizable, to shrink to. Deciding how big a
+/// window may be and deciding where it lands are one question — <see cref="CenterIn"/> already
+/// carries the same "keep the title bar reachable" clamp — so one type owns both rather than each
+/// form growing its own copy.
 /// </summary>
 internal static class DialogPlacement
 {
@@ -74,6 +75,44 @@ internal static class DialogPlacement
 
         var clientHeight = Math.Min(contentHeight, available);
         return (clientHeight, contentHeight > clientHeight);
+    }
+
+    /// <summary>
+    /// The smallest size a resizable window may refuse to shrink past, clamped so it never exceeds
+    /// the monitor's working area. Returns <paramref name="minimum"/> unchanged whenever it already
+    /// fits — the common case, where nothing about the window changes.
+    ///
+    /// The companion to <see cref="ClampClientHeight"/>, and the one case that clamp cannot save
+    /// (#172): capping the size a window <em>opens</em> at is no help if its floor is still bigger
+    /// than the screen, because then the user cannot drag it down to fit either. Both dimensions are
+    /// clamped — a window whose minimum width comes from its table columns can be too wide for a
+    /// small panel at a large scale factor just as easily as it is too tall.
+    ///
+    /// Every value is physical pixels, and both are <em>outer</em> window sizes: that is what
+    /// <c>Form.MinimumSize</c> means, and what the working area limits.
+    /// Pure, for unit tests.
+    /// </summary>
+    /// <param name="minimum">The outer window size the content says the window needs.</param>
+    /// <param name="workingArea">
+    /// The size of the working area of the monitor the window is on. A zero or negative dimension
+    /// is nothing to measure against, so it leaves that dimension of <paramref name="minimum"/>
+    /// alone rather than clamping the floor to nothing — totality for a pure function, not a policy
+    /// for a failed monitor lookup, which <see cref="WorkingAreaFor"/> already answers with the
+    /// primary monitor's area. That is the opposite of <see cref="ClampClientHeight"/>'s response
+    /// to a degenerate area, and deliberately so: that one has to choose a size, while this one is
+    /// only ever *lowering* a floor, so declining to act is the status quo rather than a window
+    /// nobody can read.
+    /// </param>
+    public static Size ClampMinimumSize(Size minimum, Size workingArea) =>
+        new(ClampMinimum(minimum.Width, workingArea.Width),
+            ClampMinimum(minimum.Height, workingArea.Height));
+
+    // Negative is never a legal Form.MinimumSize (the setter throws), so the clamp is also the
+    // place that guarantees one dimension of a nonsense measurement can't take a window down.
+    private static int ClampMinimum(int minimum, int available)
+    {
+        minimum = Math.Max(0, minimum);
+        return available > 0 ? Math.Min(minimum, available) : minimum;
     }
 
     /// <summary>

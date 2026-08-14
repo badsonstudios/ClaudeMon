@@ -26,6 +26,11 @@ GitHub release; the release notes are taken from these entries.
   the same `ClaudeMon/<version>` as everything else — a self-hosted ntfy's logs can name the
   sender. The installer download sets that header on each request rather than on the shared
   `HttpClient`, which it had no business modifying. Headers only; nothing else changed. (#171)
+- **A push notification in flight no longer outlives the app.** The ntfy POST was the one request
+  ClaudeMon made that couldn't be cancelled, so quitting while an unresponsive push server held
+  the connection left it hanging until it timed out. It's now tied to the notifier's lifetime and
+  dropped on shutdown — silently, since that cancellation is deliberate and not a delivery
+  failure worth a log line. Nothing about when or what gets pushed changed. (#180)
 
 ### Fixed
 - **Sonnet 5 costs are no longer overstated by half, and the long-context models are priced at

@@ -57,6 +57,13 @@ ClaudeMon/
   `CapacityEstimateRecorder` is its glue (fed by `LimitLogRecorder`, state in
   `capacity.json`, one-time bounded JSONL backfill at startup) and `CapacityReadoutText`
   composes the flyout's "≈N of ≈M tokens (est.)" lines.
+  `DriftDetector` (#186) is the pure throttle-drift state machine over those estimates
+  (daily confident points, 30-day plan-partitioned baseline median, once-per-episode latch
+  with hysteresis re-arm and ack-by-viewing); `DriftMonitor` is its glue (state in
+  `drift.json`, evaluated per poll after the usage alerts). `LimitWindowCapacity` +
+  `LimitHistoryText` + `Services/LimitWindowSort` are the pure derivation/text/sort behind
+  the Usage & costs window's Limit history tab, whose chart geometry lives in the pure
+  `UI/LimitHistoryChartLayout` (painted by the coverage-excluded `LimitHistoryChart`).
 - **Services** (`Services/`) — `ClaudeApiClient` calls the Anthropic usage API;
   `ServiceStatusClient` reads the public status page (`status.claude.com/api/v2/status.json`,
   unauthenticated, silent on any failure) with a pure `Parse`, fetched by `UsageMonitor` on the

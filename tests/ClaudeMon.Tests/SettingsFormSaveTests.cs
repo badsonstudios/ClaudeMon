@@ -62,6 +62,25 @@ public class SettingsFormSaveTests : IDisposable
     }
 
     [Fact]
+    public void BuildSettings_RoundTripsTheDriftSettings()
+    {
+        // The drift alert settings (issue #186) map both ways, including the off/non-default case.
+        var manager = ManagerHolding(new AppSettings
+        {
+            AlertThresholds = new AlertThresholds
+            {
+                DriftAlertsEnabled = false,
+                DriftThresholdPercent = 35,
+            },
+        });
+        using var form = new SettingsForm(manager);
+
+        var thresholds = form.BuildSettings().AlertThresholds;
+        Assert.False(thresholds.DriftAlertsEnabled);
+        Assert.Equal(35, thresholds.DriftThresholdPercent);
+    }
+
+    [Fact]
     public void BuildSettings_RoundTripsThePlan_IncludingNotSet()
     {
         // The plan combo (issue #184) maps both ways: a saved plan loads into the combo and

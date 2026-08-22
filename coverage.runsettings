@@ -32,6 +32,7 @@
             [ClaudeMon]ClaudeMon.Services.SystemSessionEvents,
             [ClaudeMon]ClaudeMon.UI.AboutDialog,
             [ClaudeMon]ClaudeMon.UI.CostChart,
+            [ClaudeMon]ClaudeMon.UI.LimitHistoryChart,
             [ClaudeMon]ClaudeMon.UI.FlyoutPanel,
             [ClaudeMon]ClaudeMon.UI.SettingsForm,
             [ClaudeMon]ClaudeMon.UI.SystemTheme,

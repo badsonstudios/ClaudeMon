@@ -6,6 +6,21 @@ GitHub release; the release notes are taken from these entries.
 ## [0.27.0] - Unreleased
 
 ### Added
+- **Limit history & throttle-drift detection — the epic lands.** The point of logging every
+  window forever and estimating real capacity was always to *see change over time*, and now you
+  can: a new **Limit history** tab in the Usage & costs window charts implied capacity per
+  window (per limit kind, plan changes annotated, low-confidence windows drawn hollow), shows
+  how fast recent windows filled (tokens per window against peak %), and lists every recorded
+  window in a sortable table that pages back through the entire log without ever holding it all
+  in memory. The headline is proactive: if the implied capacity for your plan **drops
+  materially below its own 30-day norm** — throttling, goalpost-moving — ClaudeMon raises a
+  **possible-throttling alert** with the numbers in hand. Once per drift episode, not per poll;
+  re-arms after recovery or after you open the tab and see the evidence; deferred (not lost)
+  while snoozed; and a plan change you made yourself can never be mistaken for throttling —
+  estimates are partitioned by plan on both ends. Two new Alerts settings control it: the
+  toggle (on by default) and the drift threshold (default 20% below the norm). Detection state
+  lives in `limit-log\drift.json`; losing it costs a quiet week of baseline rebuilding, never a
+  wrong alert. (#186 — completing #183 with #184's correlated log and #185's capacity engine)
 - **The flyout now estimates your real token allowance.** Anthropic reports limits only as a
   percentage — how many tokens a window actually holds is published nowhere. ClaudeMon now
   answers it empirically: correlating how far the official percentages move against the tokens

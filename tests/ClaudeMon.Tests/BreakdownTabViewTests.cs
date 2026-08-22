@@ -57,11 +57,44 @@ public class BreakdownTabViewTests
     [Fact]
     public void ExactlyOneViewIsEverVisible()
     {
-        foreach (var tab in new[] { BreakdownTabView.TablesTab, BreakdownTabView.ChartTab, 7, -1 })
+        foreach (var tab in new[]
+            { BreakdownTabView.TablesTab, BreakdownTabView.ChartTab, BreakdownTabView.LimitsTab, 7, -1 })
         {
             var visible = BreakdownTabView.For(tab, modelDrilled: true, projectDrilled: true);
-            Assert.True(visible.Tables ^ visible.Chart, $"tab {tab} showed both views or neither");
+            var count = (visible.Tables ? 1 : 0) + (visible.Chart ? 1 : 0) + (visible.Limits ? 1 : 0);
+            Assert.True(count == 1, $"tab {tab} showed {count} views");
         }
+    }
+
+    [Fact]
+    public void LimitsTab_HidesTheTimeframeAndExport_TheOthersKeepThem()
+    {
+        // The limit log is whole-history: the timeframe combo would promise a scoping it
+        // doesn't do, and its CSV export belongs to #68.
+        var limits = BreakdownTabView.For(
+            BreakdownTabView.LimitsTab, modelDrilled: false, projectDrilled: false);
+        Assert.True(limits.Limits);
+        Assert.False(limits.Timeframe);
+        Assert.False(limits.Export);
+        Assert.False(limits.SelectHint);
+
+        foreach (var tab in new[] { BreakdownTabView.TablesTab, BreakdownTabView.ChartTab })
+        {
+            var visible = BreakdownTabView.For(tab, modelDrilled: false, projectDrilled: false);
+            Assert.True(visible.Timeframe);
+            Assert.True(visible.Export);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void LimitsTab_NeverLeavesAShowAllButtonBehind(bool modelDrilled, bool projectDrilled)
+    {
+        var visible = BreakdownTabView.For(BreakdownTabView.LimitsTab, modelDrilled, projectDrilled);
+
+        Assert.False(visible.ModelShowAll);
+        Assert.False(visible.ProjectShowAll);
     }
 
     [Theory]

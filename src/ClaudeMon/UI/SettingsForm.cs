@@ -36,6 +36,8 @@ public sealed class SettingsForm : Form
     private readonly ComboBox _paceSensitivityCombo;
     private readonly NumericUpDown _nearCapNumeric;
     private readonly NumericUpDown _sevenDayWarningNumeric;
+    private readonly ToggleSwitch _driftAlertsToggle;
+    private readonly NumericUpDown _driftThresholdNumeric;
     private readonly ToggleSwitch _notifyOnResetToggle;
     private readonly ToggleSwitch _notifyOnServiceIncidentToggle;
     private readonly TextBox _pushTopicText;
@@ -204,6 +206,12 @@ public sealed class SettingsForm : Form
             indent: true, visible: () => AlertsOn() && _paceAlertsToggle.Checked);
         _nearCapNumeric = AddNumericRow("Critical alert near the limit at", 50, 100, indent: true, visible: AlertsOn);
         _sevenDayWarningNumeric = AddNumericRow("Weekly (7-day) warning at", 10, 100, indent: true, visible: AlertsOn);
+        // The throttle-drift alert (issue #186): implied capacity falling materially below its
+        // 30-day norm. On by default; the threshold row collapses with its toggle.
+        _driftAlertsToggle = AddToggleRow("Warn when implied capacity drops (possible throttling)",
+            indent: true, visible: AlertsOn);
+        _driftThresholdNumeric = AddNumericRow("Drift threshold (% below normal)", 5, 75,
+            indent: true, visible: () => AlertsOn() && _driftAlertsToggle.Checked);
         _notifyOnResetToggle = AddToggleRow("Notify when the limit resets", indent: true, visible: AlertsOn);
         // Off by default: the flyout already shows an incident passively (issue #132).
         _notifyOnServiceIncidentToggle = AddToggleRow("Notify on Anthropic service incidents",
@@ -519,6 +527,7 @@ public sealed class SettingsForm : Form
         _notificationsToggle.CheckedChanged += (_, _) => RelayoutLive();
         _checkForUpdatesToggle.CheckedChanged += (_, _) => RelayoutLive();
         _paceAlertsToggle.CheckedChanged += (_, _) => RelayoutLive();
+        _driftAlertsToggle.CheckedChanged += (_, _) => RelayoutLive();
         _dailyBudgetToggle.CheckedChanged += (_, _) => RelayoutLive();
         _weeklyBudgetToggle.CheckedChanged += (_, _) => RelayoutLive();
         _taskbarToggle.CheckedChanged += (_, _) =>
@@ -651,6 +660,8 @@ public sealed class SettingsForm : Form
         SelectOption(_paceSensitivityCombo, PaceSensitivityOptions, settings.AlertThresholds.PaceSensitivity);
         _nearCapNumeric.Value = ClampToRange(_nearCapNumeric, settings.AlertThresholds.NearCapWarning);
         _sevenDayWarningNumeric.Value = ClampToRange(_sevenDayWarningNumeric, settings.AlertThresholds.SevenDayWarning);
+        _driftAlertsToggle.Checked = settings.AlertThresholds.DriftAlertsEnabled;
+        _driftThresholdNumeric.Value = ClampToRange(_driftThresholdNumeric, settings.AlertThresholds.DriftThresholdPercent);
         _notifyOnResetToggle.Checked = settings.Notifications.NotifyOnReset;
         _notifyOnServiceIncidentToggle.Checked = settings.Notifications.NotifyOnServiceIncident;
         _pushTopicText.Text = settings.Notifications.PushTopic ?? string.Empty;
@@ -731,6 +742,8 @@ public sealed class SettingsForm : Form
                 PaceSensitivity = SelectedOption(_paceSensitivityCombo, PaceSensitivityOptions),
                 NearCapWarning = (int)_nearCapNumeric.Value,
                 SevenDayWarning = (int)_sevenDayWarningNumeric.Value,
+                DriftAlertsEnabled = _driftAlertsToggle.Checked,
+                DriftThresholdPercent = (int)_driftThresholdNumeric.Value,
             },
             // `with` on the existing record, not `new` — a reconstruction would
             // silently drop SnoozeUntil (an active snooze) on every settings save.

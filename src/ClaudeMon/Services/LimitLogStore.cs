@@ -184,6 +184,142 @@ public sealed class LimitLogStore
         }
     }
 
+    /// <summary>
+    /// Loads the drift detector's state (issue #186), or null when missing, unreadable, or
+    /// from another schema version — the detector then re-accumulates quietly (a week or so
+    /// of silence, never a wrong alert).
+    /// </summary>
+    public DriftState? LoadDriftState()
+    {
+        try
+        {
+            var path = DriftPath;
+            if (!File.Exists(path))
+                return null;
+
+            var state = JsonSerializer.Deserialize<DriftState>(File.ReadAllText(path), JsonOptions);
+            return state?.Version == DriftState.CurrentVersion ? state : null;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Persists the drift state (temp file + atomic move, like the other state files).</summary>
+    public void SaveDriftState(DriftState state)
+    {
+        try
+        {
+            EnsureDir();
+            var path = DriftPath;
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(
+                state with { Version = DriftState.CurrentVersion }, JsonOptions));
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or NotSupportedException or JsonException)
+        {
+            // Best-effort: losing drift state costs a quiet week, never the poll.
+        }
+    }
+
+    /// <summary>
+    /// Streams recorded window rollups from <paramref name="from"/> onward, oldest file first —
+    /// the Limit history tab's page loader. Same reader contract as <see cref="ReadSamples"/>:
+    /// month files intersecting the range only, per-line parsing, torn and foreign-version
+    /// lines skipped. Callers dedupe on (kind, model, end) per the schema's at-least-once note.
+    /// </summary>
+    public IEnumerable<LimitWindowRecord> ReadWindows(DateTimeOffset from, DateTimeOffset until)
+    {
+        if (!Directory.Exists(_dir))
+            yield break;
+
+        for (var month = new DateTime(from.UtcDateTime.Year, from.UtcDateTime.Month, 1);
+             month <= until.UtcDateTime;
+             month = month.AddMonths(1))
+        {
+            var path = MonthFile("windows", new DateTimeOffset(month, TimeSpan.Zero));
+            if (!File.Exists(path))
+                continue;
+
+            IEnumerator<string>? lines = null;
+            try
+            {
+                lines = File.ReadLines(path).GetEnumerator();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            using (lines)
+            {
+                while (true)
+                {
+                    LimitWindowRecord? record;
+                    try
+                    {
+                        if (!lines.MoveNext())
+                            break;
+
+                        record = JsonSerializer.Deserialize<LimitWindowRecord>(lines.Current, JsonOptions);
+                    }
+                    catch (JsonException)
+                    {
+                        continue;
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        break;
+                    }
+
+                    if (record is { Version: LimitLogSchema.SchemaVersion } r
+                        && r.End >= from && r.End <= until)
+                    {
+                        yield return r;
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The month (first day, UTC) of the oldest windows-*.jsonl file on disk, or null when
+    /// none exist — how the history tab's "Load older" knows when to stop, without opening
+    /// a single file.
+    /// </summary>
+    public DateTime? OldestWindowMonth()
+    {
+        try
+        {
+            if (!Directory.Exists(_dir))
+                return null;
+
+            DateTime? oldest = null;
+            foreach (var path in Directory.EnumerateFiles(_dir, "windows-*.jsonl"))
+            {
+                var name = Path.GetFileNameWithoutExtension(path);
+                if (DateTime.TryParseExact(
+                        name["windows-".Length..], "yyyy-MM", CultureInfo.InvariantCulture,
+                        DateTimeStyles.None, out var month)
+                    && (oldest is null || month < oldest))
+                {
+                    oldest = month;
+                }
+            }
+
+            return oldest;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private string DriftPath => Path.Combine(_dir, "drift.json");
+
     // Same comparer fold as LoadState, for the estimator's dictionaries — plus dropping any
     // ring entry whose delta is below the engine's closing threshold: the engine can never
     // write one, but this file tolerates hand-editing, and a dp of 0 would divide out to an

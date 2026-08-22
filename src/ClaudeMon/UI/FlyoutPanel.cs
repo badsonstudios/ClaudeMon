@@ -22,6 +22,7 @@ public sealed class FlyoutPanel : Form
     private UsageColorMode _colorMode = UsageColorMode.Pace;
     // Composed once per data update; null = no local cost data, line not drawn.
     private string? _localCostLine;
+    private IReadOnlyList<string> _capacityLines = Array.Empty<string>();
     // The Anthropic service-status line: null = healthy or unknown, so nothing is drawn.
     private string? _serviceStatusLine;
     private ServiceStatusLevel _serviceStatusLevel = ServiceStatusLevel.Operational;
@@ -110,7 +111,8 @@ public sealed class FlyoutPanel : Form
         TimeToLimitEstimate timeToLimit = default,
         UsageColorMode colorMode = UsageColorMode.Pace,
         LocalUsageSnapshot? localUsage = null,
-        ServiceStatus? serviceStatus = null)
+        ServiceStatus? serviceStatus = null,
+        IReadOnlyList<ImpliedCapacity>? capacities = null)
     {
         _usage = usage;
         _rows = usage is null ? Array.Empty<LimitRow>() : LimitDisplay.BuildRows(usage);
@@ -120,6 +122,7 @@ public sealed class FlyoutPanel : Form
         _timeToLimit = timeToLimit;
         _colorMode = colorMode;
         _localCostLine = LocalCostText.Compose(localUsage);
+        _capacityLines = CapacityReadoutText.Compose(capacities, usage);
         _serviceStatusLine = ServiceStatusText.Compose(serviceStatus);
         _serviceStatusLevel = serviceStatus?.Level ?? ServiceStatusLevel.Operational;
         Relayout();
@@ -139,7 +142,8 @@ public sealed class FlyoutPanel : Form
             hasForecast: _usage?.FiveHour is not null,
             hasHistory: HasHistory,
             hasLocalCost: _localCostLine is not null,
-            hasServiceStatus: _serviceStatusLine is not null);
+            hasServiceStatus: _serviceStatusLine is not null,
+            capacityLines: _capacityLines.Count);
 
         // Gear in the right corner, vertically centred on the status line (the bottom-left text)
         // so it reads as part of that row. The point-size glyph scales with DPI on its own; only
@@ -336,6 +340,15 @@ public sealed class FlyoutPanel : Form
                 y += m.LocalCostGap;
                 g.DrawString(_localCostLine, labelFont, dimBrush, left, y);
                 y += m.LocalCostHeight;
+            }
+
+            // Implied-capacity estimates (issue #185) — secondary info, drawn dim like the
+            // cost line; the composer already hid anything not confident enough to show.
+            foreach (var line in _capacityLines)
+            {
+                y += m.CapacityGap;
+                g.DrawString(line, labelFont, dimBrush, left, y);
+                y += m.CapacityLineHeight;
             }
         }
 

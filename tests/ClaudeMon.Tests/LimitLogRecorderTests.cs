@@ -110,6 +110,25 @@ public class LimitLogRecorderTests : IDisposable
     }
 
     [Fact]
+    public void Record_ForwardsTheSampleToTheCapacityRecorder()
+    {
+        // The one seam between the two recorders: each successful poll's sample must reach
+        // the implied-capacity engine too (issue #185).
+        var capacity = new CapacityEstimateRecorder(
+            new LimitLogStore(_logDir), () => null, clock: () => _now);
+        var recorder = new LimitLogRecorder(
+            new LimitLogStore(_logDir),
+            () => new Dictionary<string, ModelTokens> { ["opus"] = new(10_000, 0, 0, 0) },
+            () => null, clock: () => _now, capacity: capacity);
+
+        recorder.Record(SessionAt(10, T0 + UsageWindows.FiveHour));
+
+        var estimate = Assert.Single(capacity.Snapshot(), e => e.Kind == "session");
+        Assert.Equal(0, estimate.ObservationCount); // baseline poll — but the key exists:
+        Assert.NotNull(estimate);                   // the sample demonstrably arrived.
+    }
+
+    [Fact]
     public void Record_TokensProviderThrowing_StillAppendsTheSampleWithoutTokens()
     {
         var recorder = Recorder(tokens: () => throw new InvalidOperationException("scanner broke"));

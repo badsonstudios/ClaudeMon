@@ -147,6 +147,71 @@ public class LimitLogStoreTests : IDisposable
     }
 
     [Fact]
+    public void CapacityState_RoundTrips_AndRejectsOtherVersions()
+    {
+        var store = new LimitLogStore(_logDir);
+        var state = new CapacityEstimateState
+        {
+            Version = CapacityEstimateState.CurrentVersion,
+            LastSampleAt = new DateTimeOffset(2026, 8, 22, 12, 0, 0, TimeSpan.Zero),
+            LastTokens = new Dictionary<string, ModelTokens> { ["opus"] = new(1, 2, 3, 4) },
+            Plan = ClaudePlan.Max20x,
+            Limits =
+            [
+                new LimitCapacityState
+                {
+                    Kind = "session",
+                    Ring = [new CapacityObservation(2.0, 20_000, "opus",
+                        new DateTimeOffset(2026, 8, 22, 11, 0, 0, TimeSpan.Zero),
+                        new DateTimeOffset(2026, 8, 22, 11, 10, 0, TimeSpan.Zero))],
+                    TotalObservations = 7,
+                },
+            ],
+        };
+
+        store.SaveCapacityState(state);
+        var loaded = new LimitLogStore(_logDir).LoadCapacityState();
+
+        Assert.NotNull(loaded);
+        Assert.Equal(ClaudePlan.Max20x, loaded.Plan);
+        var limit = Assert.Single(loaded.Limits);
+        Assert.Equal(7, limit.TotalObservations);
+        Assert.Equal(20_000, Assert.Single(limit.Ring).WeightedTokens);
+
+        // A version-less or future-format file must not masquerade as current.
+        File.WriteAllText(Path.Combine(_logDir, "capacity.json"), "{\"plan\":\"Pro\"}");
+        Assert.Null(new LimitLogStore(_logDir).LoadCapacityState());
+    }
+
+    [Fact]
+    public void ReadSamples_StreamsTheRangeOldestFirst_SkippingTornAndForeignLines()
+    {
+        var store = new LimitLogStore(_logDir);
+        var july = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var august = new DateTimeOffset(2026, 8, 22, 12, 0, 0, TimeSpan.Zero);
+        store.AppendSample(Sample(july));
+        store.AppendSample(Sample(august));
+
+        // A future-version line and a torn, unterminated tail (a crash mid-append): the next
+        // append heals the tail onto its own line, so only the torn fragment is lost.
+        File.AppendAllText(Path.Combine(_logDir, "samples-2026-08.jsonl"),
+            "{\"v\":999,\"t\":\"2026-08-22T13:00:00+00:00\",\"limits\":[]}\n{\"v\":1,\"t\":\"2026-08-2");
+        store.AppendSample(Sample(august + TimeSpan.FromMinutes(5)));
+
+        var all = store.ReadSamples(july - TimeSpan.FromDays(1), august + TimeSpan.FromHours(1)).ToList();
+        Assert.Equal(3, all.Count);
+        Assert.Equal(july, all[0].Timestamp); // oldest file first
+
+        // The range filter skips months (and samples) outside it.
+        var recentOnly = store.ReadSamples(august - TimeSpan.FromDays(1), august + TimeSpan.FromHours(1));
+        Assert.Equal(2, recentOnly.Count());
+
+        // A missing directory streams nothing.
+        Assert.Empty(new LimitLogStore(Path.Combine(_tempDir, "nope"))
+            .ReadSamples(july, august));
+    }
+
+    [Fact]
     public void LoadState_RebuildsTokenDictionariesCaseInsensitively()
     {
         // Deserialization loses the tracker's comparer; a case miss on a model key would

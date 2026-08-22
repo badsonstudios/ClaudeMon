@@ -47,6 +47,20 @@ public enum UsageColorMode
 }
 
 /// <summary>
+/// The user's Claude subscription plan, stamped into the correlated limit log
+/// (see <see cref="Monitoring.LimitWindowTracker"/>) as context: a plan change must be
+/// visible in the log so later capacity analysis never mistakes it for throttling
+/// (issue #184). Context only — never a token-budget source; Anthropic publishes none.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum ClaudePlan
+{
+    Pro,
+    Max5x,
+    Max20x,
+}
+
+/// <summary>
 /// The selectable visual style of the taskbar usage readout. <see cref="Numbers"/> is the
 /// stacked label + percentage text (the original look); <see cref="Bar"/> draws a compact
 /// horizontal usage bar with hour/day dividers and a time-in-window tick (mirrors the flyout
@@ -130,6 +144,14 @@ public record AppSettings
     [JsonPropertyName("serviceIncidentLevel")]
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public ServiceStatusLevel? ServiceIncidentLevel { get; init; }
+
+    /// <summary>
+    /// The user's Claude plan (Pro / Max 5x / Max 20x), or null when they haven't said.
+    /// Stamped into the correlated limit log's window records as context (issue #184);
+    /// null serializes as an absent key, so upgrades are no-ops.
+    /// </summary>
+    [JsonPropertyName("claudePlan")]
+    public ClaudePlan? Plan { get; init; }
 
     [JsonPropertyName("taskbarDisplay")]
     public TaskbarDisplaySettings TaskbarDisplay { get; init; } = new();

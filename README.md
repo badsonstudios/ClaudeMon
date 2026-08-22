@@ -55,6 +55,10 @@ ClaudeMon writes diagnostics to a per-day file, `%LocalAppData%\ClaudeMon\logs\c
 
 Recent usage samples are recorded to `%LocalAppData%\ClaudeMon\history.json` to power the flyout's trend sparkline. The file is a rolling window (pruned by age and count, so it never grows without bound) and survives restarts. It contains only utilization percentages and timestamps — no account or token data.
 
+### Correlated limit log
+
+ClaudeMon also keeps a long-term record that pairs the two halves of "how much do I actually get per window": each successful poll appends the API's utilization percentages *and* the local transcripts' token totals by model to `%LocalAppData%\ClaudeMon\limit-log\` (per-month `samples-*.jsonl` / `windows-*.jsonl` files plus a small `state.json`). When a 5-hour or weekly window ends, a one-line rollup is recorded — window start/end, peak and last percentage, tokens burned by model, and your configured plan, so a plan change is never mistaken for throttling. This log is **deliberately never pruned** (a few MB per month at most): it is the raw material for the upcoming empirical capacity estimates and throttle-drift detection. Windows the app wasn't running to observe fully are recorded flagged as incomplete rather than guessed at. Contents are limited to percentages, timestamps, token counts, model names, and the plan setting — no prompts, no account data, and nothing leaves your machine.
+
 ### Anthropic service status
 
 Alongside each usage poll, ClaudeMon reads Anthropic's public status summary at `https://status.claude.com/api/v2/status.json` (the address `status.anthropic.com` redirects to) — the same JSON the status page itself is built from. The request is unauthenticated and sends nothing about you or your account; only the overall indicator and its description are read.
@@ -87,6 +91,7 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 |---------|-------------|
 | **Start ClaudeMon when Windows starts** | Launch ClaudeMon at login |
 | **Check usage every** | Polling interval (2, 3, 5, or 10 minutes) |
+| **Claude plan** | Your subscription plan (Pro, Max 5x, or Max 20x; default **Not set**) — recorded into the [correlated limit log](#correlated-limit-log) as context so a plan change is never mistaken for throttling. Informational only; it changes no limits or alerts |
 
 ### Alerts
 

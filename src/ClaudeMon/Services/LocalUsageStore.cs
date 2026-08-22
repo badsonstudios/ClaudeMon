@@ -287,6 +287,36 @@ public sealed class LocalUsageStore
     }
 
     /// <summary>
+    /// Cumulative token totals by (normalized) model across every retained day — the local
+    /// half of the correlated limit log's samples (issue #184). Cumulative within the 30-day
+    /// retention window, so totals can dip when old days age out; the log's delta math clamps
+    /// for that. A read-only re-aggregation of the existing cells — no transcript rescan.
+    /// Null when the transcript directory is unavailable.
+    /// </summary>
+    public Dictionary<string, ModelTokens>? TokensByModel()
+    {
+        lock (_lock)
+        {
+            if (!_available)
+                return null;
+
+            var totals = new Dictionary<string, ModelTokens>(StringComparer.OrdinalIgnoreCase);
+            foreach (var dayCells in _cells.Values)
+            {
+                foreach (var (cellKey, cell) in dayCells)
+                {
+                    var model = SplitCellKey(cellKey).Model;
+                    totals.TryGetValue(model, out var t);
+                    totals[model] = (t ?? ModelTokens.Zero).Plus(new ModelTokens(
+                        cell.InputTokens, cell.OutputTokens, cell.CacheWriteTokens, cell.CacheReadTokens));
+                }
+            }
+
+            return totals;
+        }
+    }
+
+    /// <summary>
     /// The sums the budget alerts compare against their caps: today, and the
     /// current local calendar week (Monday through today). Null when unavailable.
     /// </summary>

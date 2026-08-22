@@ -76,6 +76,9 @@ public sealed class LocalUsageMonitor : IDisposable
     /// <summary>The sums the budget alerts compare against their caps.</summary>
     public LocalBudgetTotals? BudgetTotals() => _store.BudgetTotals();
 
+    /// <summary>Cumulative tokens by model for the correlated limit log (null = unavailable).</summary>
+    public Dictionary<string, ModelTokens>? TokensByModel() => _store.TokensByModel();
+
     // Timer/Task.Run entry point: nothing may escape a fire-and-forget callback.
     // Internal rather than private so tests can drive it synchronously instead of
     // racing the timer and Task.Run.

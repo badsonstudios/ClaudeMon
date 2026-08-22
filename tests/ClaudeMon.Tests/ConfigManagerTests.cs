@@ -65,6 +65,26 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void Plan_RoundTripsAsAString_AndDefaultsToUnset()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        manager.Load();
+
+        // Absent key (an upgraded or fresh config) → unset; unset stays an absent key on save.
+        Assert.Null(manager.Settings.Plan);
+        Assert.DoesNotContain("claudePlan", File.ReadAllText(path));
+
+        manager.Update(manager.Settings with { Plan = ClaudePlan.Max20x });
+
+        // Stored by name, not ordinal — a reordered enum can't silently change the plan.
+        Assert.Contains("\"claudePlan\": \"Max20x\"", File.ReadAllText(path));
+        var reloaded = new ConfigManager(path);
+        reloaded.Load();
+        Assert.Equal(ClaudePlan.Max20x, reloaded.Settings.Plan);
+    }
+
+    [Fact]
     public void ServiceIncidentLevel_RoundTrips_AndIsAbsentByDefault()
     {
         var path = Path.Combine(_tempDir, "config.json");

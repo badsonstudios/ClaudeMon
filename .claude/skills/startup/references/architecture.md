@@ -43,6 +43,13 @@ ClaudeMon/
   flyout's Anthropic-service line (null while healthy, so a healthy service draws nothing) and
   `ServiceStatusAlerts` is the pure incident-start/escalation decision behind the optional
   outage notification, settings gate (opt-in toggle, notifications switch, snooze) included.
+  `LimitWindowTracker` is the pure state machine behind the correlated limit log (#184):
+  one observation in → (sample, finalized window records, new state) out, windows keyed by
+  (kind, scope model) with server-authoritative `resets_at` boundaries; `LimitLogRecorder`
+  glues it to the poll (called by `UsageMonitor` on the success path only) and appends via
+  `Services/LimitLogStore` (per-month, never-pruned JSONL under
+  `%LocalAppData%\ClaudeMon\limit-log\` plus an atomic `state.json`, the only piece the app
+  ever reads back — startup and memory stay O(1) in log size).
 - **Services** (`Services/`) — `ClaudeApiClient` calls the Anthropic usage API;
   `ServiceStatusClient` reads the public status page (`status.claude.com/api/v2/status.json`,
   unauthenticated, silent on any failure) with a pure `Parse`, fetched by `UsageMonitor` on the

@@ -30,6 +30,7 @@ public sealed class SettingsForm : Form
 
     private readonly TabStrip _tabStrip;
     private readonly ComboBox _pollIntervalCombo;
+    private readonly ComboBox _planCombo;
     private readonly ToggleSwitch _notificationsToggle;
     private readonly ToggleSwitch _paceAlertsToggle;
     private readonly ComboBox _paceSensitivityCombo;
@@ -113,6 +114,16 @@ public sealed class SettingsForm : Form
         ("Late — only when well over", PaceSensitivity.Late),
     ];
 
+    // The user's Claude plan, stamped into the correlated limit log as context (issue #184).
+    // "Not set" is a real option, not a placeholder — the log records the plan as unknown.
+    private static readonly (string Text, ClaudePlan? Value)[] PlanOptions =
+    [
+        ("Not set", null),
+        ("Pro", ClaudePlan.Pro),
+        ("Max 5x", ClaudePlan.Max5x),
+        ("Max 20x", ClaudePlan.Max20x),
+    ];
+
     private static readonly (string Text, TaskbarStyle Value)[] StyleOptions =
     [
         // The composition (session/weekly/countdown) is described by the display toggles below.
@@ -181,6 +192,8 @@ public sealed class SettingsForm : Form
         // 2 minutes is the floor: polling every minute made the API refresh fail every other
         // request (see AppSettings.PollIntervalMinutes).
         _pollIntervalCombo = AddComboRow("Check usage every", ["2 minutes", "3 minutes", "5 minutes", "10 minutes"]);
+        // Context for the limit log's window records (issue #184) — never a budget source.
+        _planCombo = AddComboRow("Claude plan", PlanOptions.Select(o => o.Text));
 
         // --- Alerts tab ---
         _currentTab = 1;
@@ -631,6 +644,8 @@ public sealed class SettingsForm : Form
             _ => 2,
         };
 
+        SelectOption(_planCombo, PlanOptions, settings.Plan);
+
         _notificationsToggle.Checked = settings.Notifications.Enabled;
         _paceAlertsToggle.Checked = settings.AlertThresholds.PaceAlertsEnabled;
         SelectOption(_paceSensitivityCombo, PaceSensitivityOptions, settings.AlertThresholds.PaceSensitivity);
@@ -705,6 +720,7 @@ public sealed class SettingsForm : Form
         return _configManager.Settings with
         {
             PollIntervalMinutes = pollMinutes,
+            Plan = SelectedOption(_planCombo, PlanOptions),
             // `with` on the existing record, not `new` — for the same reason as TaskbarDisplay
             // and Notifications below: every AlertThresholds field has a control today, so a
             // reconstruction loses nothing yet, but the first field added without one would be

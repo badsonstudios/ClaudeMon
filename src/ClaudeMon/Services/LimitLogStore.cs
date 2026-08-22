@@ -80,6 +80,133 @@ public sealed class LimitLogStore
         }
     }
 
+    /// <summary>
+    /// Loads the capacity estimator's state (issue #185), or null when missing, unreadable, or
+    /// from another schema version — the estimator then rebuilds from the samples themselves
+    /// (<see cref="ReadSamples"/>): this file is a cache of sufficient statistics, the
+    /// forever-log is the source of truth.
+    /// </summary>
+    public CapacityEstimateState? LoadCapacityState()
+    {
+        try
+        {
+            var path = CapacityPath;
+            if (!File.Exists(path))
+                return null;
+
+            var state = JsonSerializer.Deserialize<CapacityEstimateState>(File.ReadAllText(path), JsonOptions);
+            return state?.Version == CapacityEstimateState.CurrentVersion
+                ? WithFoldedCapacityModelKeys(state)
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Persists the estimator state (temp file + atomic move, like the other stores).</summary>
+    public void SaveCapacityState(CapacityEstimateState state)
+    {
+        try
+        {
+            EnsureDir();
+            var path = CapacityPath;
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(
+                state with { Version = CapacityEstimateState.CurrentVersion }, JsonOptions));
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or NotSupportedException or JsonException)
+        {
+            // Best-effort: losing this state costs only a rebuild from the log, never the poll.
+        }
+    }
+
+    /// <summary>
+    /// Streams the recorded samples from <paramref name="from"/> onward, oldest file first —
+    /// the estimator's one-time cold-start backfill. Only month files intersecting the range
+    /// are opened, each line parses independently, and torn or foreign-version lines are
+    /// skipped: exactly the reader contract the schema promises. Never used on the poll path.
+    /// </summary>
+    public IEnumerable<LimitLogSample> ReadSamples(DateTimeOffset from, DateTimeOffset until)
+    {
+        if (!Directory.Exists(_dir))
+            yield break;
+
+        for (var month = new DateTime(from.UtcDateTime.Year, from.UtcDateTime.Month, 1);
+             month <= until.UtcDateTime;
+             month = month.AddMonths(1))
+        {
+            var path = MonthFile("samples", new DateTimeOffset(month, TimeSpan.Zero));
+            if (!File.Exists(path))
+                continue;
+
+            IEnumerator<string>? lines = null;
+            try
+            {
+                lines = File.ReadLines(path).GetEnumerator();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            using (lines)
+            {
+                while (true)
+                {
+                    LimitLogSample? sample;
+                    try
+                    {
+                        if (!lines.MoveNext())
+                            break;
+
+                        sample = JsonSerializer.Deserialize<LimitLogSample>(lines.Current, JsonOptions);
+                    }
+                    catch (JsonException)
+                    {
+                        continue; // A torn or malformed line — skip it, keep streaming.
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        break; // The file went away mid-read — take what we got.
+                    }
+
+                    if (sample is { Version: LimitLogSchema.SchemaVersion } s
+                        && s.Timestamp >= from && s.Timestamp <= until)
+                    {
+                        yield return s;
+                    }
+                }
+            }
+        }
+    }
+
+    // Same comparer fold as LoadState, for the estimator's dictionaries — plus dropping any
+    // ring entry whose delta is below the engine's closing threshold: the engine can never
+    // write one, but this file tolerates hand-editing, and a dp of 0 would divide out to an
+    // infinite capacity that sails through every confidence gate into the UI.
+    private static CapacityEstimateState WithFoldedCapacityModelKeys(CapacityEstimateState state) => state with
+    {
+        LastTokens = FoldModelKeys(state.LastTokens),
+        Limits = state.Limits
+            .Select(l =>
+            {
+                var folded = l with
+                {
+                    Ring = l.Ring
+                        .Where(o => o.DeltaPercent >= Monitoring.CapacityEstimator.MinDeltaPct)
+                        .ToList(),
+                };
+                return folded.Accumulator is { } acc
+                    ? folded with { Accumulator = acc with { Tokens = FoldModelKeys(acc.Tokens)! } }
+                    : folded;
+            })
+            .ToList(),
+    };
+
     // Deserialization loses the tracker's case-insensitive comparer, and a case miss on a
     // model key would silently rebase that model's delta to zero — attributing its whole
     // 30-day cumulative total as fresh burn to every open window, in a log built for later
@@ -109,7 +236,23 @@ public sealed class LimitLogStore
         try
         {
             EnsureDir();
-            File.AppendAllText(path, JsonSerializer.Serialize(line, JsonOptions) + "\n");
+            var bytes = System.Text.Encoding.UTF8.GetBytes(
+                JsonSerializer.Serialize(line, JsonOptions) + "\n");
+
+            using var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
+
+            // Heal a torn tail first: a crash mid-append can leave the file ending without a
+            // newline, and appending straight onto it would weld the new line to the torn one —
+            // losing a good record, not just the torn fragment. Terminating the tail isolates
+            // the damage to the one line readers were already going to skip.
+            if (fs.Length > 0)
+            {
+                fs.Seek(-1, SeekOrigin.End);
+                if (fs.ReadByte() != '\n')
+                    fs.WriteByte((byte)'\n');
+            }
+
+            fs.Write(bytes, 0, bytes.Length);
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or NotSupportedException or JsonException)
@@ -125,6 +268,8 @@ public sealed class LimitLogStore
     }
 
     private string StatePath => Path.Combine(_dir, "state.json");
+
+    private string CapacityPath => Path.Combine(_dir, "capacity.json");
 
     private string MonthFile(string prefix, DateTimeOffset timestamp) =>
         Path.Combine(

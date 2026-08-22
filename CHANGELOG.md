@@ -6,6 +6,19 @@ GitHub release; the release notes are taken from these entries.
 ## [0.27.0] - Unreleased
 
 ### Added
+- **The flyout now estimates your real token allowance.** Anthropic reports limits only as a
+  percentage — how many tokens a window actually holds is published nowhere. ClaudeMon now
+  answers it empirically: correlating how far the official percentages move against the tokens
+  your local transcripts burned in the same span yields an implied capacity, and the flyout
+  shows your position in real tokens — `5-hour: ≈8.1M of ≈61M tokens (est.)` — beneath the
+  official bars (weekly and per-model weekly caps too, when the data supports them). The
+  estimator is deliberately skeptical: usage from other devices or claude.ai moves the
+  percentage with no local tokens and is excluded rather than absorbed, intervals spanning a
+  reset or an offline gap are discarded, cache reads weigh a tenth of fresh tokens, and a line
+  appears only once enough consistent evidence spans full windows — no estimate rather than a
+  wrong one. Capacity is quoted in a specific model's tokens when your usage makes that
+  meaningful. Everything is computed locally from the correlated limit log; its compact working
+  state lives in `limit-log\capacity.json` and rebuilds itself from the log if lost. (#185)
 - **A correlated limit log: the groundwork for knowing your real limits.** Anthropic publishes
   no token budgets for Max plans — the usage API only reports percentages — so ClaudeMon now
   writes down, on every successful poll, the two halves of the only empirical answer: the API's

@@ -21,6 +21,7 @@ public sealed class LimitLogRecorder
     private readonly Func<ClaudePlan?> _plan;
     private readonly Logger? _logger;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly CapacityEstimateRecorder? _capacity;
     private readonly object _lock = new();
     private LimitLogState _state = new() { Version = LimitLogState.CurrentVersion };
 
@@ -29,13 +30,15 @@ public sealed class LimitLogRecorder
         Func<IReadOnlyDictionary<string, ModelTokens>?> tokensByModel,
         Func<ClaudePlan?> plan,
         Logger? logger = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        CapacityEstimateRecorder? capacity = null)
     {
         _store = store;
         _tokensByModel = tokensByModel;
         _plan = plan;
         _logger = logger;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _capacity = capacity;
     }
 
     /// <summary>
@@ -83,6 +86,11 @@ public sealed class LimitLogRecorder
 
                 _state = result.NewState;
                 _store.SaveState(_state);
+
+                // The implied-capacity engine (issue #185) consumes the very sample just
+                // logged — the same record the cold-start backfill replays, so the two paths
+                // are byte-identical inputs. Its own never-throws contract keeps this safe.
+                _capacity?.Observe(result.Sample);
             }
             catch (Exception ex)
             {

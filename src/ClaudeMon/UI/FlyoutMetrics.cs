@@ -35,6 +35,8 @@ public sealed class FlyoutMetrics
     internal const int BaseForecastHeight = 16;
     internal const int BaseLocalCostGap = 6;
     internal const int BaseLocalCostHeight = 16;
+    internal const int BaseCapacityGap = 6;
+    internal const int BaseCapacityLineHeight = 16;
     internal const int BaseServiceStatusGap = 6;
     internal const int BaseServiceStatusHeight = 16;
 
@@ -57,6 +59,8 @@ public sealed class FlyoutMetrics
     public int ForecastHeight { get; }
     public int LocalCostGap { get; }
     public int LocalCostHeight { get; }
+    public int CapacityGap { get; }
+    public int CapacityLineHeight { get; }
     public int ServiceStatusGap { get; }
     public int ServiceStatusHeight { get; }
 
@@ -84,6 +88,8 @@ public sealed class FlyoutMetrics
         ForecastHeight = S(BaseForecastHeight);
         LocalCostGap = S(BaseLocalCostGap);
         LocalCostHeight = S(BaseLocalCostHeight);
+        CapacityGap = S(BaseCapacityGap);
+        CapacityLineHeight = S(BaseCapacityLineHeight);
         ServiceStatusGap = S(BaseServiceStatusGap);
         ServiceStatusHeight = S(BaseServiceStatusHeight);
     }
@@ -99,7 +105,7 @@ public sealed class FlyoutMetrics
     public Size ContentSize(
         bool isAuthError, int usageRows,
         bool hasForecast = false, bool hasHistory = false, bool hasLocalCost = false,
-        bool hasServiceStatus = false)
+        bool hasServiceStatus = false, int capacityLines = 0)
     {
         int body;
         if (isAuthError)
@@ -123,6 +129,11 @@ public sealed class FlyoutMetrics
         // The local cost line ("Today: ~$…"), fed from the Claude Code transcripts.
         if (hasLocalCost && !isAuthError)
             body += LocalCostGap + LocalCostHeight;
+
+        // The implied-capacity lines ("5-hour: ≈8.1M of ≈61M tokens (est.)", issue #185) —
+        // zero to three, present only when the estimate is confident enough to show.
+        if (capacityLines > 0 && !isAuthError)
+            body += capacityLines * (CapacityGap + CapacityLineHeight);
 
         // The Anthropic service line, present only during an incident — and then in the
         // auth-expired state too, since "is it me or is it down?" is exactly the question a

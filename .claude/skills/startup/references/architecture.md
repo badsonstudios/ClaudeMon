@@ -48,8 +48,15 @@ ClaudeMon/
   (kind, scope model) with server-authoritative `resets_at` boundaries; `LimitLogRecorder`
   glues it to the poll (called by `UsageMonitor` on the success path only) and appends via
   `Services/LimitLogStore` (per-month, never-pruned JSONL under
-  `%LocalAppData%\ClaudeMon\limit-log\` plus an atomic `state.json`, the only piece the app
-  ever reads back — startup and memory stay O(1) in log size).
+  `%LocalAppData%\ClaudeMon\limit-log\` plus an atomic `state.json`; at steady state the
+  app only reads state files back — startup and memory stay O(1) in log size).
+  `CapacityEstimator` (#185) is the pure implied-capacity engine over those samples: polls
+  coarsen into ≥1-point percent-movement intervals per limit key, a bounded ring's median
+  implies tokens-per-window, foreign-surface movement is flagged unexplained and excluded,
+  and a typed `CapacityConfidence` gates the readout (hidden below Medium).
+  `CapacityEstimateRecorder` is its glue (fed by `LimitLogRecorder`, state in
+  `capacity.json`, one-time bounded JSONL backfill at startup) and `CapacityReadoutText`
+  composes the flyout's "≈N of ≈M tokens (est.)" lines.
 - **Services** (`Services/`) — `ClaudeApiClient` calls the Anthropic usage API;
   `ServiceStatusClient` reads the public status page (`status.claude.com/api/v2/status.json`,
   unauthenticated, silent on any failure) with a pure `Parse`, fetched by `UsageMonitor` on the

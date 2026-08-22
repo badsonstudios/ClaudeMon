@@ -216,6 +216,27 @@ public class FlyoutMetricsTests
     }
 
     [Fact]
+    public void ContentSize_CapacityLines_AddOneBandEach()
+    {
+        var m = FlyoutMetrics.ForDpi(96);
+
+        var without = m.ContentSize(false, usageRows: 2, hasForecast: true).Height;
+        var withTwo = m.ContentSize(false, usageRows: 2, hasForecast: true, capacityLines: 2).Height;
+
+        Assert.Equal(2 * (m.CapacityGap + m.CapacityLineHeight), withTwo - without);
+    }
+
+    [Fact]
+    public void ContentSize_AuthError_HasNoCapacityBand()
+    {
+        var m = FlyoutMetrics.ForDpi(96);
+
+        Assert.Equal(
+            m.ContentSize(isAuthError: true, 0).Height,
+            m.ContentSize(isAuthError: true, 0, capacityLines: 3).Height);
+    }
+
+    [Fact]
     public void ContentSize_WithServiceStatus_AddsServiceStatusBand()
     {
         var m = FlyoutMetrics.ForDpi(96);

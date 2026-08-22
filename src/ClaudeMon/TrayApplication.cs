@@ -25,6 +25,7 @@ public sealed class TrayApplication : IDisposable
     private readonly Logger _logger;
     private readonly UsageHistoryStore _history;
     private readonly LocalUsageMonitor _localUsage;
+    private readonly CapacityEstimateRecorder _capacityEstimates;
     private readonly ConfigManager _configManager;
     private readonly SynchronizationContext _syncContext;
     private readonly FlyoutPanel _flyout;
@@ -101,12 +102,20 @@ public sealed class TrayApplication : IDisposable
         // percentages with the scanner's cumulative tokens-by-model, appended forever under
         // %LocalAppData%\ClaudeMon\limit-log. The plan is read live from settings so a change
         // takes effect at the next poll; missed windows finalize (flagged) before polling starts.
+        var limitLogStore = new LimitLogStore();
+        // The implied-capacity engine (issue #185) rides the same store and the same samples;
+        // it loads (or rebuilds from the log) before polling starts so backfill and live
+        // samples can never interleave.
+        _capacityEstimates = new CapacityEstimateRecorder(
+            limitLogStore, () => _configManager.Settings.Plan, _logger);
         var limitLog = new LimitLogRecorder(
-            new LimitLogStore(),
+            limitLogStore,
             _localUsage.TokensByModel,
             () => _configManager.Settings.Plan,
-            _logger);
+            _logger,
+            capacity: _capacityEstimates);
         limitLog.FinalizeMissedOnStartup();
+        _capacityEstimates.LoadOrBackfillOnStartup();
 
         _apiClient = new ClaudeApiClient();
         _tokenRefresher = new TokenRefresher();
@@ -350,7 +359,8 @@ public sealed class TrayApplication : IDisposable
 
         _flyout.UpdateData(
             _monitor.LastUsage, _monitor.Status, _monitor.LastUpdated, fiveHourTrend, timeToLimit,
-            _configManager.Settings.ColorMode, _localUsage.Snapshot(), _monitor.LastServiceStatus);
+            _configManager.Settings.ColorMode, _localUsage.Snapshot(), _monitor.LastServiceStatus,
+            _capacityEstimates.Snapshot());
         _flyout.ShowNear(anchor);
     }
 

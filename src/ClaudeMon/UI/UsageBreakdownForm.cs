@@ -85,6 +85,8 @@ internal sealed class UsageBreakdownForm : Form
     private readonly Theme _theme = Theme.Current;
     private readonly LocalUsageMonitor _localUsage;
     private readonly Logger? _logger;
+    private readonly LimitLogStore? _limitLog;
+    private readonly Action? _onLimitHistoryViewed;
 
     private readonly Font _baseFont = new("Segoe UI", 9.75f);
     private readonly Font _headingFont = new("Segoe UI Semibold", 11.25f);
@@ -105,6 +107,19 @@ internal sealed class UsageBreakdownForm : Form
     private readonly Label _hint;
     private readonly Button _exportButton;
     private readonly Button _closeButton;
+
+    // The Limit history tab (#186): per-window capacity chart + table over the forever log,
+    // loaded lazily one month-page at a time so memory never scales with log size.
+    private readonly Label _limitLabel;
+    private readonly ComboBox _limitViewCombo;
+    private readonly ComboBox _limitKindCombo;
+    private readonly LimitHistoryChart _limitChart;
+    private readonly ListView _limitList;
+    private readonly Button _limitLoadOlder;
+    private List<LimitHistoryRow> _limitRows = [];
+    private LimitWindowSortState _limitSort = LimitWindowSortState.Default;
+    private DateTime? _limitOldestLoaded;
+    private bool _limitLoadedOnce;
 
     private LocalUsageBreakdown? _current;
     private bool _updatingMinimum;
@@ -140,10 +155,35 @@ internal sealed class UsageBreakdownForm : Form
         ("Last 30 days", BreakdownTimeframe.ThirtyDays),
     ];
 
-    public UsageBreakdownForm(LocalUsageMonitor localUsage, Logger? logger = null)
+    /// <summary>The limit table's eight columns — indexes cast straight to <see cref="LimitWindowColumn"/>.</summary>
+    private static readonly (string Text, int Width, bool Right)[] LimitColumns =
+    [
+        ("Start", 104, false),
+        ("End", 104, false),
+        ("Kind", 108, false),
+        ("Peak %", 56, true),
+        ("Tokens", 64, true),
+        ("Top model", 128, false),
+        ("Capacity (est.)", 88, true),
+        ("Plan", 88, false),
+    ];
+
+    private static readonly (string Text, string? Kind)[] LimitKindOptions =
+    [
+        ("All kinds", null),
+        ("Session (5-hour)", "session"),
+        ("Weekly", "weekly_all"),
+        ("Per-model weekly", "weekly_scoped"),
+    ];
+
+    public UsageBreakdownForm(
+        LocalUsageMonitor localUsage, Logger? logger = null,
+        LimitLogStore? limitLog = null, Action? onLimitHistoryViewed = null)
     {
         _localUsage = localUsage;
         _logger = logger;
+        _limitLog = limitLog;
+        _onLimitHistoryViewed = onLimitHistoryViewed;
 
         Text = "ClaudeMon — Usage & costs";
         // The one resizable window in the app (#110) — the tables are the content, and there is
@@ -193,9 +233,10 @@ internal sealed class UsageBreakdownForm : Form
 
         // Tables first and selected by default: the numbers are what this window is for, and the
         // chart is one click away when the question is "how is it trending?" instead (#113).
-        _tabStrip = new TabStrip("Tables", "Chart") { AccessibleName = "Usage views" };
+        _tabStrip = new TabStrip("Tables", "Chart", "Limit history") { AccessibleName = "Usage views" };
         _tabStrip.SelectedIndexChanged += (_, _) =>
         {
+            OnLimitTabMaybeSelected();
             ApplyTab();
             // A mouse click on a tab header doesn't move the focus (TabStrip only sets its own
             // SelectedIndex), so hiding the table that had it would let WinForms hand the focus to
@@ -244,9 +285,64 @@ internal sealed class UsageBreakdownForm : Form
         _projectShowAll = MakeShowAllButton();
         Controls.Add(_projectShowAll);
 
+        // --- Limit history tab (#186), laid out in the same region and hidden behind the
+        // tables until its tab comes forward — the Chart tab's convention. ---
+        _limitLabel = MakeSectionLabel("Recorded limit windows");
+        _limitLabel.Visible = false;
+        Controls.Add(_limitLabel);
+
+        // The chart before the combo whose handler drives its mode, so the capture is
+        // provably initialized.
+        _limitChart = new LimitHistoryChart { Visible = false, BackColor = _theme.FieldBack };
+        Controls.Add(_limitChart);
+
+        _limitViewCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Visible = false };
+        _limitViewCombo.Items.AddRange(["Capacity over time", "Tokens & peak per window"]);
+        _limitViewCombo.SelectedIndex = 0;
+        _limitViewCombo.SelectedIndexChanged += (_, _) =>
+        {
+            _limitChart.Mode = _limitViewCombo.SelectedIndex == 1
+                ? LimitHistoryChartMode.Utilization
+                : LimitHistoryChartMode.Capacity;
+        };
+        Controls.Add(_limitViewCombo);
+
+        _limitKindCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Visible = false };
+        _limitKindCombo.Items.AddRange(LimitKindOptions.Select(o => (object)o.Text).ToArray());
+        _limitKindCombo.SelectedIndex = 0;
+        _limitKindCombo.SelectedIndexChanged += (_, _) => RefreshLimitViews();
+        Controls.Add(_limitKindCombo);
+
+        _limitList = new ListView
+        {
+            View = View.Details,
+            FullRowSelect = true,
+            MultiSelect = false,
+            HideSelection = false,
+            HeaderStyle = ColumnHeaderStyle.Clickable,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = _theme.FieldBack,
+            ForeColor = _theme.FieldText,
+            Visible = false,
+            ShowItemToolTips = true,
+        };
+        foreach (var (text, _, right) in LimitColumns)
+            _limitList.Columns.Add(text, -2, right ? HorizontalAlignment.Right : HorizontalAlignment.Left);
+        _limitList.ColumnClick += (_, e) =>
+        {
+            _limitSort = _limitSort.Toggle(e.Column);
+            FillLimitList();
+        };
+        Controls.Add(_limitList);
+
+        _limitLoadOlder = MakeButton("Load older");
+        _limitLoadOlder.Visible = false;
+        _limitLoadOlder.Click += (_, _) => LoadOlderLimitPage();
+        Controls.Add(_limitLoadOlder);
+
         _hint = new Label
         {
-            Text = "Estimates at API list prices, computed locally from Claude Code transcripts — not billing.",
+            Text = CostHintText,
             AutoSize = true,
             ForeColor = _theme.HintText,
         };
@@ -288,11 +384,18 @@ internal sealed class UsageBreakdownForm : Form
     // The tabs share one layout, so switching them only changes what is visible. The rule itself
     // lives in the pure BreakdownTabView -- a drill-down survives a trip to the Chart tab, so a
     // "Show all" button's visibility depends on the tab as well as on the drill.
+    private const string CostHintText =
+        "Estimates at API list prices, computed locally from Claude Code transcripts — not billing.";
+    private const string LimitsHintText =
+        "Every finalized rate-limit window from the local log; capacities are estimates from this machine's tokens.";
+
     private void ApplyTab()
     {
         var visible = Visibility;
 
         _selectHint.Visible = visible.SelectHint;
+        _timeframeLabel.Visible = visible.Timeframe;
+        _timeframeCombo.Visible = visible.Timeframe;
         _modelLabel.Visible = visible.Tables;
         _modelList.Visible = visible.Tables;
         _projectLabel.Visible = visible.Tables;
@@ -301,6 +404,195 @@ internal sealed class UsageBreakdownForm : Form
         _chart.Visible = visible.Chart;
         _modelShowAll.Visible = visible.ModelShowAll;
         _projectShowAll.Visible = visible.ProjectShowAll;
+        _limitLabel.Visible = visible.Limits;
+        _limitViewCombo.Visible = visible.Limits;
+        _limitKindCombo.Visible = visible.Limits;
+        _limitChart.Visible = visible.Limits;
+        _limitList.Visible = visible.Limits;
+        _limitLoadOlder.Visible = visible.Limits;
+        _exportButton.Visible = visible.Export;
+        // One hint label serves all three tabs; the limits tab tells its own truth.
+        _hint.Text = visible.Limits ? LimitsHintText : CostHintText;
+    }
+
+    // First selection loads the newest page (lazy: users who never open the tab never read a
+    // file), and every selection acknowledges an active drift episode — the tab is where the
+    // evidence lives, so viewing it is the natural "I've seen this".
+    private void OnLimitTabMaybeSelected()
+    {
+        if (_tabStrip.SelectedIndex != BreakdownTabView.LimitsTab)
+            return;
+
+        if (!_limitLoadedOnce)
+        {
+            _limitLoadedOnce = true;
+            LoadInitialLimitPage();
+        }
+
+        _onLimitHistoryViewed?.Invoke();
+    }
+
+    private void LoadInitialLimitPage()
+    {
+        if (_limitLog is null)
+            return;
+
+        // Newest month plus the one before it, so a fresh month's first days still show a
+        // meaningful page; "Load older" walks further back one month at a time.
+        var now = DateTimeOffset.UtcNow;
+        var from = new DateTime(now.UtcDateTime.Year, now.UtcDateTime.Month, 1).AddMonths(-1);
+        LoadLimitWindows(from, now);
+    }
+
+    private void LoadOlderLimitPage()
+    {
+        if (_limitLog is null || _limitOldestLoaded is not { } oldest)
+            return;
+
+        var from = oldest.AddMonths(-1);
+        LoadLimitWindows(from, new DateTimeOffset(oldest, TimeSpan.Zero) - TimeSpan.FromTicks(1));
+    }
+
+    // Streams one page of window records into the loaded set. Records are deduped on
+    // (kind, model, end) per the log's at-least-once delivery, kept chronological, and both
+    // views rebuilt from the same rows so the chart and table can never disagree. A failed
+    // read leaves the paging state where it was — the initial page retries on the next tab
+    // selection, and "Load older" retries the same month instead of silently skipping it.
+    private void LoadLimitWindows(DateTime fromMonth, DateTimeOffset until)
+    {
+        try
+        {
+            var loaded = _limitLog!
+                .ReadWindows(new DateTimeOffset(fromMonth, TimeSpan.Zero), until)
+                .ToList();
+            var merged = LimitWindowCapacity.Dedupe(
+                loaded.Concat(_limitRows.Select(r => r.Record)));
+
+            _limitRows = merged
+                .OrderBy(r => r.End)
+                .Select(LimitWindowCapacity.RowFor)
+                .ToList();
+            _limitOldestLoaded = fromMonth;
+        }
+        catch (Exception ex)
+        {
+            _logger?.Warn($"Limit history load failed: {ex.Message}");
+            if (_limitOldestLoaded is null)
+                _limitLoadedOnce = false;
+        }
+
+        var oldestOnDisk = _limitLog!.OldestWindowMonth();
+        _limitLoadOlder.Enabled = _limitOldestLoaded is { } loadedFrom
+            && oldestOnDisk is { } disk && disk < loadedFrom;
+
+        RefreshLimitViews();
+    }
+
+    private string? SelectedLimitKind =>
+        _limitKindCombo.SelectedIndex is var i && i >= 0 && i < LimitKindOptions.Length
+            ? LimitKindOptions[i].Kind
+            : null;
+
+    // The kind filter narrows both views identically.
+    private List<LimitHistoryRow> FilteredLimitRows()
+    {
+        var kind = SelectedLimitKind;
+        return kind is null
+            ? _limitRows
+            : _limitRows
+                .Where(r => string.Equals(r.Record.Kind?.Trim(), kind, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+    }
+
+    private void RefreshLimitViews()
+    {
+        FillLimitList();
+        UpdateLimitChart();
+    }
+
+    private void FillLimitList()
+    {
+        _limitList.BeginUpdate();
+        _limitList.Items.Clear();
+
+        var rows = FilteredLimitRows();
+        if (rows.Count == 0)
+        {
+            _limitList.Items.Add(new ListViewItem("(no recorded windows yet)") { ForeColor = _theme.HintText });
+        }
+        else
+        {
+            foreach (var row in LimitWindowSort.Order(rows, _limitSort))
+                _limitList.Items.Add(MakeLimitItem(row));
+        }
+
+        _limitList.EndUpdate();
+        ListViewSortIndicator.Apply(_limitList, (int)_limitSort.Column, _limitSort.Ascending);
+    }
+
+    private ListViewItem MakeLimitItem(LimitHistoryRow row)
+    {
+        var record = row.Record;
+        // The same helpers the sorter uses, so a cell can never disagree with its own ordering.
+        var total = LimitWindowCapacity.RawTotal(record);
+        var topModel = LimitWindowCapacity.TopModel(record) ?? "—";
+
+        var item = new ListViewItem(LimitHistoryText.TimeText(record.Start));
+        item.SubItems.Add(LimitHistoryText.TimeText(record.End));
+        item.SubItems.Add(LimitHistoryText.KindLabel(record.Kind, record.ScopeModel));
+        item.SubItems.Add(record.PeakPercent.ToString("0", CultureInfo.InvariantCulture) + "%");
+        item.SubItems.Add(total > 0 ? LocalCostText.FormatTokens(total) : "—");
+        item.SubItems.Add(topModel);
+        item.SubItems.Add(LimitHistoryText.CapacityText(row));
+        item.SubItems.Add(LimitHistoryText.PlanText(record));
+
+        if (record.Incomplete)
+        {
+            // Best-effort windows read dimmed, with the reason a hover away.
+            item.ForeColor = _theme.HintText;
+            item.ToolTipText = $"Incomplete ({record.IncompleteReason ?? "partial observation"}) — " +
+                "the app wasn't watching for part of this window.";
+        }
+
+        return item;
+    }
+
+    private void UpdateLimitChart()
+    {
+        var rows = FilteredLimitRows();
+        var records = rows.Select(r => r.Record).ToList();
+
+        // Series index per kind label, in order of first appearance — the legend's order.
+        var seriesLabels = new List<string>();
+        var seriesByLabel = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var slots = new List<LimitHistorySlot>(rows.Count);
+        foreach (var row in rows)
+        {
+            var label = LimitHistoryText.KindLabel(row.Record.Kind, row.Record.ScopeModel);
+            if (!seriesByLabel.TryGetValue(label, out var series))
+            {
+                series = seriesLabels.Count;
+                seriesByLabel[label] = series;
+                seriesLabels.Add(label);
+            }
+
+            slots.Add(new LimitHistorySlot(
+                row.Record.End, series, row.ImpliedCapacity,
+                row.Quality == WindowCapacityQuality.Low,
+                row.WeightedTokens, Math.Max(row.Record.PeakPercent, row.Record.LastPercent)));
+        }
+
+        var markers = LimitWindowCapacity.PlanTransitions(records)
+            .Select(t => (t.Index, t.Plan switch
+            {
+                ClaudePlan.Pro => "Pro",
+                ClaudePlan.Max5x => "Max 5x",
+                ClaudePlan.Max20x => "Max 20x",
+                _ => "plan?",
+            }))
+            .ToList();
+
+        _limitChart.SetData(slots, seriesLabels, markers);
     }
 
     // A table's heading. Sized in LayoutSectionRow rather than by AutoSize: a drilled heading
@@ -860,6 +1152,39 @@ internal sealed class UsageBreakdownForm : Form
             Sc(Pad), SectionTop + ((SectionRowHeight - _chartLabel.PreferredHeight) / 2),
             contentWidth, _chartLabel.PreferredHeight);
         _chart.SetBounds(Sc(Pad), tablesTop, contentWidth, Math.Max(0, contentBottom - tablesTop));
+
+        // The Limit history tab shares the same region (#186): its filter row sits in the
+        // section row — label left, the two combos and "Load older" right — with the chart on
+        // top and the window table below, split like the two breakdown tables.
+        var comboW = Sc(ComboWidth);
+        var loadOlderW = Sc(ShowAllWidth);
+        var right = Sc(Pad) + contentWidth;
+        _limitLoadOlder.SetBounds(
+            right - loadOlderW, SectionTop + ((SectionRowHeight - Sc(ShowAllHeight)) / 2),
+            loadOlderW, Sc(ShowAllHeight));
+        _limitKindCombo.SetBounds(
+            right - loadOlderW - Sc(ButtonGap) - comboW, SectionTop, comboW, 0,
+            BoundsSpecified.Location | BoundsSpecified.Width);
+        _limitViewCombo.SetBounds(
+            right - loadOlderW - (2 * Sc(ButtonGap)) - (2 * comboW), SectionTop, comboW, 0,
+            BoundsSpecified.Location | BoundsSpecified.Width);
+        _limitLabel.SetBounds(
+            Sc(Pad), SectionTop + ((SectionRowHeight - _limitLabel.PreferredHeight) / 2),
+            Math.Max(0, contentWidth - loadOlderW - (2 * comboW) - (3 * Sc(ButtonGap))),
+            _limitLabel.PreferredHeight);
+
+        var limitAvailable = Math.Max(2 * Sc(MinTableHeight), contentBottom - tablesTop - Sc(SectionGap));
+        var limitChartHeight = Math.Max(Sc(MinTableHeight), limitAvailable * 45 / 100);
+        var limitListHeight = Math.Max(Sc(MinTableHeight), limitAvailable - limitChartHeight);
+        _limitChart.SetBounds(Sc(Pad), tablesTop, contentWidth, limitChartHeight);
+        _limitList.SetBounds(
+            Sc(Pad), tablesTop + limitChartHeight + Sc(SectionGap), contentWidth, limitListHeight);
+        for (var i = 0; i < LimitColumns.Length; i++)
+        {
+            var width = Sc(LimitColumns[i].Width);
+            if (_limitList.Columns[i].Width != width)
+                _limitList.Columns[i].Width = width;
+        }
 
         var betweenTables = Sc(SectionGap) + SectionRowHeight + Sc(LabelGap);
         var (modelHeight, projectHeight) = UsageBreakdownLayout.SplitTableHeights(

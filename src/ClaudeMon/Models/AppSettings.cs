@@ -367,6 +367,23 @@ public record AlertThresholds
     public int SevenDayWarning { get; init; } = 50;
 
     /// <summary>
+    /// Whether the throttle-drift alert fires (issue #186): a notification when the implied
+    /// window capacity for a limit drops materially below its trailing 30-day norm — evidence
+    /// that the goalposts moved. On by default: being told proactively is the feature's point,
+    /// and it can only fire at all once weeks of confident estimates exist.
+    /// </summary>
+    [JsonPropertyName("driftAlertsEnabled")]
+    public bool DriftAlertsEnabled { get; init; } = true;
+
+    /// <summary>
+    /// How far (percent) below the 30-day norm the implied capacity must fall to count as
+    /// drift. Default 20; the detector adds its own hysteresis on recovery so a value hovering
+    /// at the trigger can't fire repeatedly.
+    /// </summary>
+    [JsonPropertyName("driftThresholdPercent")]
+    public int DriftThresholdPercent { get; init; } = 20;
+
+    /// <summary>
     /// The pace ratio (usage ÷ window-elapsed fraction) that triggers the early-warning at the
     /// configured <see cref="PaceSensitivity"/>. A ratio of 1 is exactly on pace; higher means
     /// burning faster than the clock. Not persisted — derived from the sensitivity.

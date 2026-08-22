@@ -26,6 +26,8 @@ public sealed class TrayApplication : IDisposable
     private readonly UsageHistoryStore _history;
     private readonly LocalUsageMonitor _localUsage;
     private readonly CapacityEstimateRecorder _capacityEstimates;
+    private readonly LimitLogStore _limitLogStore;
+    private readonly DriftMonitor _driftMonitor;
     private readonly ConfigManager _configManager;
     private readonly SynchronizationContext _syncContext;
     private readonly FlyoutPanel _flyout;
@@ -102,7 +104,8 @@ public sealed class TrayApplication : IDisposable
         // percentages with the scanner's cumulative tokens-by-model, appended forever under
         // %LocalAppData%\ClaudeMon\limit-log. The plan is read live from settings so a change
         // takes effect at the next poll; missed windows finalize (flagged) before polling starts.
-        var limitLogStore = new LimitLogStore();
+        _limitLogStore = new LimitLogStore();
+        var limitLogStore = _limitLogStore;
         // The implied-capacity engine (issue #185) rides the same store and the same samples;
         // it loads (or rebuilds from the log) before polling starts so backfill and live
         // samples can never interleave.
@@ -116,6 +119,10 @@ public sealed class TrayApplication : IDisposable
             capacity: _capacityEstimates);
         limitLog.FinalizeMissedOnStartup();
         _capacityEstimates.LoadOrBackfillOnStartup();
+        // Throttle-drift detection (#186): evaluated per poll against the capacity estimates,
+        // acknowledged by opening the Limit history tab.
+        _driftMonitor = new DriftMonitor(_limitLogStore, _logger);
+        _driftMonitor.LoadOnStartup();
 
         _apiClient = new ClaudeApiClient();
         _tokenRefresher = new TokenRefresher();
@@ -278,6 +285,16 @@ public sealed class TrayApplication : IDisposable
                 _notifyIcon.Text = TrayTooltip.Compose(e.Usage, e.Status);
 
                 _alertManager.Check(e.Usage, _configManager.Settings);
+
+                // Throttle-drift check (#186): pure decision (DriftDetector, via the monitor's
+                // glue), once per episode, deferred while snoozed. Same alert channels as
+                // everything else. At most one drift alert per poll in practice — a second
+                // balloon in the same poll would overwrite (the accepted NotifyIcon quirk).
+                foreach (var drift in _driftMonitor.Evaluate(
+                    _capacityEstimates.Snapshot(), _configManager.Settings, DateTimeOffset.UtcNow))
+                {
+                    ShowAlert(drift.Title, drift.Text, ToolTipIcon.Warning);
+                }
                 // Persisted unconditionally, unlike BudgetAlertState's Equals-guard — the
                 // per-bucket Dictionary here doesn't get structural equality from the record,
                 // so a reference comparison would always look "changed" anyway. The write is a
@@ -945,7 +962,8 @@ public sealed class TrayApplication : IDisposable
         _breakdownOpen = true;
         try
         {
-            using var form = new UsageBreakdownForm(_localUsage, _logger);
+            using var form = new UsageBreakdownForm(
+                _localUsage, _logger, _limitLogStore, _driftMonitor.Acknowledge);
             form.ShowDialog();
         }
         finally

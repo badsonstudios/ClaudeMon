@@ -212,6 +212,72 @@ public class LimitLogStoreTests : IDisposable
     }
 
     [Fact]
+    public void DriftState_RoundTrips_AndRejectsOtherVersions()
+    {
+        var store = new LimitLogStore(_logDir);
+        var state = new DriftState
+        {
+            Version = DriftState.CurrentVersion,
+            Keys =
+            [
+                new DriftKeyState
+                {
+                    Kind = "session",
+                    Points = [new DriftPoint(new DateOnly(2026, 8, 22), 60_000_000, ClaudePlan.Max20x)],
+                    Notified = true,
+                    AcknowledgedAt = new DateTimeOffset(2026, 8, 22, 12, 0, 0, TimeSpan.Zero),
+                },
+            ],
+        };
+
+        store.SaveDriftState(state);
+        var loaded = new LimitLogStore(_logDir).LoadDriftState();
+
+        Assert.NotNull(loaded);
+        var key = Assert.Single(loaded.Keys);
+        Assert.True(key.Notified);
+        Assert.Equal(60_000_000, Assert.Single(key.Points).Capacity);
+        Assert.Equal(ClaudePlan.Max20x, Assert.Single(key.Points).Plan);
+
+        File.WriteAllText(Path.Combine(_logDir, "drift.json"), "{\"keys\":[]}");
+        Assert.Null(new LimitLogStore(_logDir).LoadDriftState());
+    }
+
+    [Fact]
+    public void ReadWindows_StreamsTheRange_SkippingTornAndForeignLines()
+    {
+        var store = new LimitLogStore(_logDir);
+        var july = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var august = new DateTimeOffset(2026, 8, 22, 12, 0, 0, TimeSpan.Zero);
+        store.AppendWindow(Window(july));
+        store.AppendWindow(Window(august));
+        File.AppendAllText(Path.Combine(_logDir, "windows-2026-08.jsonl"),
+            "{\"v\":999,\"kind\":\"x\"}\n{\"v\":1,\"kind\":\"torn");
+        store.AppendWindow(Window(august + TimeSpan.FromHours(5)));
+
+        var all = store.ReadWindows(july - TimeSpan.FromDays(1), august + TimeSpan.FromDays(1)).ToList();
+        Assert.Equal(3, all.Count);
+        Assert.Equal(july, all[0].End); // oldest file first
+
+        var recent = store.ReadWindows(august - TimeSpan.FromDays(1), august + TimeSpan.FromDays(1));
+        Assert.Equal(2, recent.Count());
+
+        Assert.Empty(new LimitLogStore(Path.Combine(_tempDir, "nope")).ReadWindows(july, august));
+    }
+
+    [Fact]
+    public void OldestWindowMonth_FindsTheOldestFileWithoutOpeningAny()
+    {
+        Assert.Null(new LimitLogStore(_logDir).OldestWindowMonth());
+
+        var store = new LimitLogStore(_logDir);
+        store.AppendWindow(Window(new DateTimeOffset(2026, 8, 22, 12, 0, 0, TimeSpan.Zero)));
+        store.AppendWindow(Window(new DateTimeOffset(2026, 3, 2, 12, 0, 0, TimeSpan.Zero)));
+
+        Assert.Equal(new DateTime(2026, 3, 1), store.OldestWindowMonth());
+    }
+
+    [Fact]
     public void LoadState_RebuildsTokenDictionariesCaseInsensitively()
     {
         // Deserialization loses the tracker's comparer; a case miss on a model key would

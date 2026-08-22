@@ -5,6 +5,23 @@ GitHub release; the release notes are taken from these entries.
 
 ## [0.27.0] - Unreleased
 
+### Added
+- **A correlated limit log: the groundwork for knowing your real limits.** Anthropic publishes
+  no token budgets for Max plans — the usage API only reports percentages — so ClaudeMon now
+  writes down, on every successful poll, the two halves of the only empirical answer: the API's
+  utilization per limit *and* the local transcripts' token totals by model, together. When a
+  5-hour or weekly window ends, a one-line rollup is recorded (start/end, peak and last
+  percentage, tokens burned by model, your plan). The log lives in
+  `%LocalAppData%\ClaudeMon\limit-log\` as per-month append-only files and is deliberately kept
+  forever — it's the raw material for the upcoming implied-capacity estimates and
+  throttle-drift detection (#185/#186). Windows that ended while ClaudeMon wasn't running are
+  finalized on the next launch flagged as incomplete rather than silently wrong. Nothing about
+  polling, the sparkline, or the flyout changed, and the log contains only percentages,
+  timestamps, token counts, model names, and the plan — never message content. (#184)
+- **New "Claude plan" setting (General tab):** Pro / Max 5x / Max 20x, default **Not set**.
+  Stamped into each limit-log window record as context so a plan change in the history is never
+  mistaken for throttling. Informational only — it changes no limits or alerts. (#184)
+
 ### Changed
 - **Service-incident notifications: tidied up and the design decision written down** — no change
   to what you see. The service-status event no longer carries the previous status, which nothing

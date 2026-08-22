@@ -906,6 +906,39 @@ public class LocalUsageStoreTests : IDisposable
     }
 
     [Fact]
+    public void TokensByModel_SumsAcrossDaysAndProjectsByModel()
+    {
+        // Two projects and two days, two models: the correlated limit log's totals fold the
+        // (day, project) axes away and keep only per-model sums.
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddHours(-1), "msg_1", "req_1", input: 100, output: 200),
+            Line(_now.AddDays(-2), "msg_2", "req_2", input: 50, output: 10, cacheWrite: 5, cacheRead: 7));
+        WriteTranscriptTo("proj-b", "s2.jsonl",
+            Line(_now.AddHours(-2), "msg_3", "req_3", input: 30, output: 40, model: "claude-opus-4-6"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var totals = store.TokensByModel();
+        Assert.NotNull(totals);
+        Assert.Equal(2, totals.Count);
+        Assert.Equal(new ModelTokens(150, 210, 5, 7), totals["claude-fable-5"]);
+        Assert.Equal(new ModelTokens(30, 40, 0, 0), totals["claude-opus-4-6"]);
+    }
+
+    [Fact]
+    public void TokensByModel_NullWhenUnavailable_EmptyWhenNoUsage()
+    {
+        var missing = Store(projectsDir: Path.Combine(_tempDir, "does-not-exist"));
+        missing.ScanOnce();
+        Assert.Null(missing.TokensByModel());
+
+        var empty = Store();
+        empty.ScanOnce();
+        Assert.Empty(empty.TokensByModel()!);
+    }
+
+    [Fact]
     public void ScanOnce_MalformedLinesSkipped_RestStillCount()
     {
         WriteTranscript("s1.jsonl",

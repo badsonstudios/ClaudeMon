@@ -13,6 +13,7 @@ public sealed class UsageMonitor : IDisposable
     private readonly TokenRefresher? _tokenRefresher;
     private readonly Logger? _logger;
     private readonly UsageHistoryStore? _history;
+    private readonly LimitLogRecorder? _limitLog;
     private readonly ServiceStatusClient? _serviceStatus;
     private readonly System.Timers.Timer _timer;
     private readonly object _lock = new();
@@ -45,13 +46,15 @@ public sealed class UsageMonitor : IDisposable
         TokenRefresher? tokenRefresher = null,
         Logger? logger = null,
         UsageHistoryStore? history = null,
-        ServiceStatusClient? serviceStatus = null)
+        ServiceStatusClient? serviceStatus = null,
+        LimitLogRecorder? limitLog = null)
     {
         _credentialReader = credentialReader;
         _apiClient = apiClient;
         _tokenRefresher = tokenRefresher;
         _logger = logger;
         _history = history;
+        _limitLog = limitLog;
         _serviceStatus = serviceStatus;
         _timer = new System.Timers.Timer(pollInterval.TotalMilliseconds);
         // The poll runs unawaited on a timer thread-pool thread: any exception PollAsync
@@ -221,6 +224,9 @@ public sealed class UsageMonitor : IDisposable
                 LogTransition(MonitorStatus.Connected, "usage poll succeeded");
                 LogUnknownLimitKinds(apiResult.Data!);
                 RecordHistory(apiResult.Data!);
+                // The correlated limit log (issue #184): one sample per successful poll —
+                // success-path only, so it adds zero API traffic. Record never throws.
+                _limitLog?.Record(apiResult.Data!);
 
                 UsageUpdated?.Invoke(this, new UsageUpdatedEventArgs(
                     apiResult.Data!, null, MonitorStatus.Connected));

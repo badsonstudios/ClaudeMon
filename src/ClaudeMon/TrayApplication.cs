@@ -97,6 +97,17 @@ public sealed class TrayApplication : IDisposable
         // Budget alerts (issue #74) re-evaluate after every transcript scan.
         _localUsage.ScanCompleted += OnLocalScanCompleted;
 
+        // The correlated limit log (issue #184): pairs every successful poll's utilization
+        // percentages with the scanner's cumulative tokens-by-model, appended forever under
+        // %LocalAppData%\ClaudeMon\limit-log. The plan is read live from settings so a change
+        // takes effect at the next poll; missed windows finalize (flagged) before polling starts.
+        var limitLog = new LimitLogRecorder(
+            new LimitLogStore(),
+            _localUsage.TokensByModel,
+            () => _configManager.Settings.Plan,
+            _logger);
+        limitLog.FinalizeMissedOnStartup();
+
         _apiClient = new ClaudeApiClient();
         _tokenRefresher = new TokenRefresher();
         // Anthropic's status page (issue #132), fetched on the usage poll's cadence so there is
@@ -105,7 +116,7 @@ public sealed class TrayApplication : IDisposable
         var credentialReader = new CredentialReader();
         _monitor = new UsageMonitor(
             credentialReader, _apiClient, _configManager.Settings.PollInterval,
-            _tokenRefresher, _logger, _history, _serviceStatusClient);
+            _tokenRefresher, _logger, _history, _serviceStatusClient, limitLog);
         _monitor.UsageUpdated += OnUsageUpdated;
         _monitor.ServiceStatusUpdated += OnServiceStatusUpdated;
 

@@ -62,6 +62,18 @@ public class SettingsFormSaveTests : IDisposable
     }
 
     [Fact]
+    public void BuildSettings_RoundTripsThePlan_IncludingNotSet()
+    {
+        // The plan combo (issue #184) maps both ways: a saved plan loads into the combo and
+        // saves back unchanged, and "Not set" is a real value that round-trips as null.
+        using (var form = new SettingsForm(ManagerHolding(new AppSettings { Plan = ClaudePlan.Max5x })))
+            Assert.Equal(ClaudePlan.Max5x, form.BuildSettings().Plan);
+
+        using (var form = new SettingsForm(ManagerHolding(new AppSettings())))
+            Assert.Null(form.BuildSettings().Plan);
+    }
+
+    [Fact]
     public void BuildSettings_PreservesATaskbarFieldTheDialogDoesNotEdit()
     {
         // LegacyShowSevenDay is the only such field today (ConfigManager's 0.10.x migration owns

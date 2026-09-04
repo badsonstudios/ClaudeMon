@@ -65,9 +65,13 @@ internal static class ForegroundMonitor
 
         // Our own window is foreground: the tray menu dropdown, the flyout, the overlay, or an
         // earlier dialog. Following ourselves would be circular, so fall back to the primary
-        // monitor. (Whether a tray-menu-triggered check actually lands here depends on whether
-        // Windows has already restored foreground to the previously active app by then — both
-        // outcomes are reasonable, so this isn't relied on either way.)
+        // monitor. Whether a tray-menu-triggered open lands here depends on whether Windows has
+        // already restored foreground to the previously active app by the time the click handler
+        // runs — an OS/WinForms ordering detail this code does not control. #108's dialogs are
+        // popped by a background timer, so they never hit it; the Usage & costs window (#116) is
+        // opened straight from the tray menu, so for that window this branch is the difference
+        // between following the user and falling back to the primary. Falling back is the old
+        // behaviour, so the worst case is a no-op rather than a wrong monitor.
         if (foregroundProcessId == ownProcessId)
             return false;
 

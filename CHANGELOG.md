@@ -3,6 +3,23 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.27.1] - 2026-09-04
+
+### Fixed
+- **A failed credential write-back can no longer sign every Claude client out.** OAuth refresh
+  tokens rotate: every refresh consumes the on-disk token and issues a new one. If ClaudeMon
+  refreshed and then couldn't write the result back to `~/.claude/.credentials.json` (file
+  locked by a sync tool or AV, briefly read-only, etc.), the rotated token lived for exactly
+  one poll and was then discarded — the next poll re-read the now-dead token from disk, and
+  ClaudeMon, the Claude Code CLI, and the VS Code extension were all signed out until a fresh
+  `claude` login. ClaudeMon now keeps the refreshed sign-in in memory, polls on it, and retries
+  the write on every poll until it lands — the file converges to the live tokens and nobody
+  gets stranded. A sign-in you make while it's retrying still wins (the no-clobber guard is
+  preserved), and if the file becomes unreadable outright mid-episode, polling continues from
+  memory instead of flapping to a false "sign-in expired". Restarting ClaudeMon inside such a
+  window is the one remaining loss — tokens are deliberately never stored anywhere but the
+  credentials file. (#192)
+
 ## [0.27.0] - 2026-08-22
 
 ### Added

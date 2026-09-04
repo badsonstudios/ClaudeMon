@@ -37,6 +37,22 @@ GitHub release; the release notes are taken from these entries.
   memory instead of flapping to a false "sign-in expired". Restarting ClaudeMon inside such a
   window is the one remaining loss — tokens are deliberately never stored anywhere but the
   credentials file. (#192)
+- **The taskbar readout now heals itself after a reboot or a resume from sleep.** It could go
+  missing after waking the machine — and still, on some setups, after a reboot — and stay
+  missing until you opened Settings and toggled the taskbar display off and on. The self-repair
+  added in 0.12.1 only ever looked for a *missing* readout, so a readout window that still
+  existed but had stopped being a readout (frozen, blank, buried, or left at coordinates from a
+  display layout that no longer existed) was never noticed, and that rebuild-everything toggle
+  was the only cure. ClaudeMon now checks each readout's health every couple of seconds — is its
+  window still there, is its own refresh loop still running, is it visible, still marked
+  always-on-top, still sitting on its taskbar, and has it ever managed to draw anything? — and
+  rebuilds the ones that fail. It also reacts directly to waking up, unlocking, and reconnecting
+  a remote session, forcing a repaint (a woken display can drop what the readout drew without
+  telling anyone) and re-checking on a short schedule while the monitors, DPI and taskbar settle.
+  Sleep is caught even when Windows never sends a wake event, by noticing that the health check
+  itself hasn't run for a while. A readout hidden on purpose under a fullscreen app, or waiting
+  out an Explorer restart, is left alone; Explorer restarts and monitor hotplug behave as before.
+  The log now names which failure mode happened, so a single bad cycle is diagnosable. (#199)
 
 ## [0.27.0] - 2026-08-22
 

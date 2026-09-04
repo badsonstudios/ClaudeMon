@@ -10,8 +10,9 @@ using Microsoft.Win32;
 /// every secondary-monitor taskbar — so the usage readout appears on all of them. The
 /// live set is reconciled whenever the display layout changes (monitor plugged or
 /// unplugged, "show taskbar on all displays" toggled), when Explorer (re)creates the
-/// taskbar (the <c>TaskbarCreated</c> broadcast), and on a short retry timer while no
-/// taskbar has been found — so starting before Explorer at login still ends with a
+/// taskbar (the <c>TaskbarCreated</c> broadcast), when the machine resumes or the session is
+/// unlocked, and on a steady health timer that both creates missing readouts and rebuilds
+/// broken ones — so starting before Explorer at login, or waking from sleep, still ends with a
 /// readout. This mirrors the
 /// <see cref="TaskbarOverlayWindow"/> surface so <see cref="TrayApplication"/> drives the
 /// multi-monitor case exactly as it did the single one.
@@ -19,8 +20,10 @@ using Microsoft.Win32;
 /// <remarks>
 /// All members are expected to run on the UI thread: <see cref="TrayApplication"/> calls
 /// them from its constructor, the settings dialog, and the synchronized usage callback,
-/// and <see cref="SystemEvents.DisplaySettingsChanged"/> is raised on the UI thread of a
-/// WinForms app. Overlays (WinForms <c>Form</c>s) must be created on that thread.
+/// and the <see cref="SystemEvents"/> notifications used here (display settings, power mode,
+/// session switch) are raised on the UI thread of a WinForms app — <c>SystemEvents</c> shares
+/// the STA thread that first subscribes rather than starting one of its own. Overlays (WinForms
+/// <c>Form</c>s) must be created on that thread.
 /// </remarks>
 public sealed class TaskbarOverlayManager : IDisposable
 {
@@ -42,14 +45,28 @@ public sealed class TaskbarOverlayManager : IDisposable
     private readonly Logger _logger;
     private readonly TaskbarCreatedListener _taskbarCreatedListener;
 
-    // Retries Reconcile while the feature is enabled but no taskbar has been found yet.
-    // Apps launched from the Run key race Explorer's shell initialization at login: if we
-    // start before Explorer has created the taskbar windows, the startup Reconcile finds
-    // nothing and would otherwise never run again (the per-overlay keep-alive can only heal
-    // overlays that already exist). The TaskbarCreated broadcast below is the canonical
-    // recovery hook; this timer backstops the narrow window where that broadcast fires
-    // before our listener window exists, and any other "enabled but zero overlays" state.
-    private readonly System.Windows.Forms.Timer _emptyRetryTimer;
+    // Re-reconciles every couple of seconds for as long as the feature is enabled. It has two
+    // jobs, and the second one is why #62's fix wasn't enough (#199):
+    //  - Create readouts that don't exist yet. Apps launched from the Run key race Explorer's
+    //    shell initialization at login: start before Explorer has created the taskbar windows
+    //    and the startup Reconcile finds nothing. The TaskbarCreated broadcast below is the
+    //    canonical recovery hook; this backstops the narrow window where that broadcast fires
+    //    before our listener window exists, and any other "enabled but zero overlays" state.
+    //  - Rebuild readouts that exist but are broken. #62's backstops only ever ran while the
+    //    overlay set was EMPTY, so a window that was present and dead (frozen keep-alive, lost
+    //    z-order, stale coordinates, blank layered surface) was never healed and the Settings
+    //    toggle was the only cure. Health is checked here, on every tick, for that reason.
+    private readonly System.Windows.Forms.Timer _healthTimer;
+
+    // Runs the short burst of extra checks after the world changed underneath us (resume,
+    // unlock, or a detected process gap) — see TaskbarHealPolicy.SettleIntervalMs. One-shot per
+    // attempt: each tick stops it and schedules the next interval.
+    private readonly System.Windows.Forms.Timer _settleTimer;
+    private int _settleAttempt;
+
+    // When the health timer last ran, so an outsized gap can be recognised as "this process
+    // wasn't running in between" — the machine slept — rather than a late tick.
+    private long _lastHealthCheckTicks = Environment.TickCount64;
 
     // Whether the last Reconcile found no taskbars, so the empty/recovered log lines fire
     // once per transition instead of on every retry tick.
@@ -59,6 +76,12 @@ public sealed class TaskbarOverlayManager : IDisposable
     // failure doesn't re-WARN on every 2-second retry tick — once per device until it
     // succeeds (or its taskbar goes away and comes back).
     private readonly HashSet<string> _creationFailureLogged = new();
+
+    // Per-device health bookkeeping for the check above, keyed like _overlays.
+    private readonly TaskbarHealTracker _healTracker = new();
+
+    // Reentrancy guard for TryReconcile — see the comment there.
+    private bool _reconciling;
 
     // Presentation settings seeded onto every overlay (and any created later).
     private TaskbarTextColor _labelColor = TaskbarTextColor.White;
@@ -85,9 +108,15 @@ public sealed class TaskbarOverlayManager : IDisposable
     {
         _logger = logger;
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        // Resume and unlock are the two moments users report the readout going missing across:
+        // the overlay windows survive both, so nothing else in this class would ever notice.
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        SystemEvents.SessionSwitch += OnSessionSwitch;
         _taskbarCreatedListener = new TaskbarCreatedListener(OnTaskbarCreated);
-        _emptyRetryTimer = new System.Windows.Forms.Timer { Interval = 2000 };
-        _emptyRetryTimer.Tick += (_, _) => TryReconcile("Taskbar overlay retry reconcile failed");
+        _healthTimer = new System.Windows.Forms.Timer { Interval = TaskbarHealPolicy.CheckIntervalMs };
+        _healthTimer.Tick += (_, _) => OnHealthTick();
+        _settleTimer = new System.Windows.Forms.Timer();
+        _settleTimer.Tick += (_, _) => OnSettleTick();
     }
 
     /// <summary>Set the text colour presets on every overlay (and on ones created later).</summary>
@@ -188,20 +217,26 @@ public sealed class TaskbarOverlayManager : IDisposable
         _enabled = enabled;
         if (enabled)
         {
+            // Baselined here so the first health tick after a long spell with the feature off
+            // isn't mistaken for the process having been suspended.
+            _lastHealthCheckTicks = Environment.TickCount64;
             // Guarded: this runs from the TrayApplication constructor at login, exactly
             // when taskbar enumeration is most likely to misbehave — a throw here must
-            // not take the app down (the retry timer will heal it).
+            // not take the app down (the health timer will heal it).
             TryReconcile("Taskbar overlay reconcile on enable failed");
         }
         else
         {
-            _emptyRetryTimer.Stop();
+            _healthTimer.Stop();
+            _settleTimer.Stop();
             // Reset the transition flag so re-enabling with a taskbar present doesn't log
             // a spurious "Taskbar appeared" — nothing appeared, the user toggled a setting.
-            // The failure-log dampener resets too: toggling the feature off and on is the
-            // natural "try again" gesture, and that retry's diagnostics should be logged.
+            // The failure-log dampener and the health bookkeeping reset too: toggling the
+            // feature off and on is the natural "try again" gesture, and that retry's
+            // diagnostics should be logged, on readouts that no longer exist to have a history.
             _noTaskbarsFound = false;
             _creationFailureLogged.Clear();
+            _healTracker.Clear();
             DisposeAllOverlays();
         }
     }
@@ -243,14 +278,109 @@ public sealed class TaskbarOverlayManager : IDisposable
 
     private void OnOverlayCycleRequested(object? sender, EventArgs e) => CycleRequested?.Invoke(this, e);
 
-    private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e)
+    {
+        // A resolution or DPI change usually moves the readout, which repaints it anyway — but
+        // a monitor that merely woke up can come back at the identical geometry with its
+        // layered content gone, and then only a forced repaint brings the readout back.
+        RefreshAllOverlays();
         TryReconcile("Taskbar overlay reconcile failed");
+    }
 
     // Explorer broadcasts TaskbarCreated when it (re)creates the taskbar — at login, and
     // after an Explorer restart. Reconciling here closes the startup race (see the
-    // _emptyRetryTimer remarks) with no polling delay.
-    private void OnTaskbarCreated() =>
+    // _healthTimer remarks) with no polling delay.
+    private void OnTaskbarCreated()
+    {
+        RefreshAllOverlays();
         TryReconcile("Taskbar overlay reconcile after TaskbarCreated failed");
+    }
+
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == PowerModes.Resume)
+            BeginHeal("system resumed from sleep");
+    }
+
+    private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
+    {
+        if (TaskbarHealPolicy.IsResumeLike(e.Reason))
+            BeginHeal($"session event {e.Reason}");
+    }
+
+    /// <summary>
+    /// The steady health tick: reconcile (which now also health-checks the live readouts), or,
+    /// if the machine was evidently asleep between two ticks, run the full heal instead.
+    /// </summary>
+    private void OnHealthTick()
+    {
+        var now = Environment.TickCount64;
+        var sinceLast = now - _lastHealthCheckTicks;
+        _lastHealthCheckTicks = now;
+
+        // The tick source keeps counting through suspend while this timer doesn't, so an
+        // outsized gap means the process wasn't running in between. Driving the heal from the
+        // gap as well as from PowerModeChanged matters: on modern-standby machines the power
+        // event is unreliable, and this path needs no event at all.
+        if (TaskbarHealPolicy.IsSystemGap(sinceLast))
+            BeginHeal($"no health check for {sinceLast / 1000}s (sleep, hibernate, or a stalled process)");
+        else
+            TryReconcile("Taskbar overlay health reconcile failed");
+    }
+
+    /// <summary>
+    /// Recovery for "the world changed underneath us" — resume, unlock/reconnect, or a detected
+    /// process gap. Repaints every readout (a layered window can survive with its content lost,
+    /// which the keep-alive's dirty check would never notice), re-checks health now, and then
+    /// re-checks on a short settling schedule: monitor topology, DPI and the taskbar itself are
+    /// usually still churning for several seconds after the event.
+    /// </summary>
+    private void BeginHeal(string reason)
+    {
+        if (_disposed || !_enabled) return;
+
+        _logger.Info($"Taskbar readout heal: {reason} — repainting and re-checking.");
+        RefreshAllOverlays();
+        _healTracker.ClearStrikes();
+        TryReconcile("Taskbar overlay heal reconcile failed");
+
+        _settleAttempt = 0;
+        ScheduleNextSettle();
+    }
+
+    private void ScheduleNextSettle()
+    {
+        _settleTimer.Stop();
+        if (_disposed || !_enabled) return;
+        if (TaskbarHealPolicy.SettleIntervalMs(_settleAttempt) is not { } interval) return;
+
+        _settleTimer.Interval = interval;
+        _settleTimer.Start();
+    }
+
+    private void OnSettleTick()
+    {
+        _settleTimer.Stop();
+        _settleAttempt++;
+        // Repaint on every settle tick, not just at the event: the display stack can finish
+        // coming back a second or two after resume, dropping the content we just pushed.
+        RefreshAllOverlays();
+        TryReconcile("Taskbar overlay settle reconcile failed");
+        ScheduleNextSettle();
+    }
+
+    /// <summary>
+    /// Force every live readout to repaint on its next keep-alive tick — see
+    /// <see cref="TaskbarOverlayWindow.RefreshAfterSystemChange"/> for why that is the one
+    /// thing the keep-alive can't fix by itself.
+    /// </summary>
+    private void RefreshAllOverlays()
+    {
+        // Snapshot: showing a Form pumps messages, so a reconcile lower down the stack can be
+        // mutating _overlays while this runs.
+        foreach (var overlay in _overlays.Values.ToList())
+            overlay.RefreshAfterSystemChange();
+    }
 
     /// <summary>
     /// Reconcile guarded for event-driven callers (system events, window messages, timer
@@ -261,6 +391,14 @@ public sealed class TaskbarOverlayManager : IDisposable
     {
         if (_disposed || !_enabled) return;
 
+        // Creating and showing a Form pumps messages, so another timer tick or system event can
+        // land mid-reconcile. Nested reconciles would then dispose overlays the outer pass is
+        // still working with; there are now several trigger sources, so guard rather than hope.
+        // Skipping is safe: the outer pass is already doing this work, and the health tick will
+        // come round again in two seconds.
+        if (_reconciling) return;
+
+        _reconciling = true;
         try
         {
             Reconcile();
@@ -269,42 +407,69 @@ public sealed class TaskbarOverlayManager : IDisposable
         {
             _logger.Warn($"{failureContext}: {ex.Message}");
         }
+        finally
+        {
+            _reconciling = false;
+        }
     }
 
     /// <summary>
-    /// Brings the live overlay set in line with the taskbars currently present: creates an
-    /// overlay (seeded with the current settings and reading) for any taskbar that has none,
-    /// and disposes overlays whose taskbar (monitor) has gone away.
+    /// Brings the live overlay set in line with the taskbars currently present: rebuilds
+    /// readouts that exist but are broken, creates an overlay (seeded with the current settings
+    /// and reading) for any taskbar that has none, and disposes overlays whose taskbar
+    /// (monitor) has gone away.
     /// </summary>
     private void Reconcile()
     {
         if (!_enabled) return;
 
-        // The retry-timer decision lives in the finally: even if reconciling throws partway
-        // (a caught-and-logged event path), an empty overlay set must still be retrying —
-        // otherwise one bad tick recreates exactly the "nothing ever retries" state this
-        // timer exists to eliminate.
+        // The timer decision lives in the finally: even if reconciling throws partway (a
+        // caught-and-logged event path), the health timer must still be running — otherwise one
+        // bad tick recreates exactly the "nothing ever retries" state it exists to eliminate.
         try
         {
             var taskbars = TaskbarEnumerator.Enumerate();
 
-            // Log the empty/recovered transitions once each (not per retry tick), so a single
-            // boot's log shows whether the login race was hit and when it healed.
+            // Log the empty/recovered transitions once each (not per tick), so a single boot's
+            // log shows whether the login race was hit and when it healed.
             if (taskbars.Count == 0 && !_noTaskbarsFound)
                 _logger.Warn("No taskbars found to overlay (Explorer may still be starting) — retrying until one appears.");
             else if (taskbars.Count > 0 && _noTaskbarsFound)
                 _logger.Info("Taskbar appeared — creating overlay(s).");
             _noTaskbarsFound = taskbars.Count == 0;
 
-            var present = new HashSet<string>();
+            // The taskbars that should carry a readout, with the handle just enumerated for
+            // each. When multi-monitor is off, only the primary taskbar gets one.
+            var wanted = new Dictionary<string, IntPtr>();
             foreach (var taskbar in taskbars)
             {
-                // When multi-monitor is off, only the primary taskbar gets a readout.
-                if (!_allMonitors && !taskbar.IsPrimary)
+                // First wins, matching TaskbarEnumerator.FindByDevice — so if two taskbars ever
+                // transiently resolve to one monitor, the readout is judged against the same
+                // taskbar it glued itself to rather than a different one.
+                if (_allMonitors || taskbar.IsPrimary)
+                    wanted.TryAdd(taskbar.MonitorDevice, taskbar.Handle);
+            }
+
+            // Health pass first, so a readout torn down here is replaced by the creation loop
+            // below in this same reconcile — the user never sees the gap.
+            foreach (var (device, handle) in wanted)
+            {
+                if (!_overlays.TryGetValue(device, out var existing) || ShouldKeepOverlay(device, existing, handle))
                     continue;
 
-                present.Add(taskbar.MonitorDevice);
-                if (_overlays.ContainsKey(taskbar.MonitorDevice))
+                DisposeOverlay(existing);
+                _overlays.Remove(device);
+            }
+
+            foreach (var device in wanted.Keys)
+            {
+                // Re-checked each iteration: creating a Form pumps messages, so a SetEnabled(false)
+                // can land mid-loop and the rest of this pass must not publish new readouts into a
+                // disabled manager (nothing would ever tear them down).
+                if (!_enabled || _disposed)
+                    break;
+
+                if (_overlays.ContainsKey(device))
                     continue;
 
                 // Build the overlay fully before publishing it, so a failure mid-construction
@@ -312,7 +477,7 @@ public sealed class TaskbarOverlayManager : IDisposable
                 TaskbarOverlayWindow? overlay = null;
                 try
                 {
-                    overlay = new TaskbarOverlayWindow(taskbar.MonitorDevice, _logger);
+                    overlay = new TaskbarOverlayWindow(device, _logger);
                     overlay.Clicked += OnOverlayClicked;
                     overlay.CycleRequested += OnOverlayCycleRequested;
                     Seed(overlay);
@@ -320,40 +485,91 @@ public sealed class TaskbarOverlayManager : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    // Once per device until it succeeds — the 2-second retry would otherwise
+                    // Once per device until it succeeds — the 2-second tick would otherwise
                     // turn a persistent failure into unbounded WARN spam.
-                    if (_creationFailureLogged.Add(taskbar.MonitorDevice))
-                        _logger.Warn($"Failed to create taskbar overlay for {taskbar.MonitorDevice}: {ex.Message}");
+                    if (_creationFailureLogged.Add(device))
+                        _logger.Warn($"Failed to create taskbar overlay for {device}: {ex.Message}");
                     overlay?.Dispose();
                     continue;
                 }
 
-                _creationFailureLogged.Remove(taskbar.MonitorDevice);
-                _overlays[taskbar.MonitorDevice] = overlay;
+                _creationFailureLogged.Remove(device);
+                _overlays[device] = overlay;
             }
 
             // Tear down overlays whose taskbar is no longer present (monitor unplugged, or its
             // taskbar turned off). ToList so we don't mutate the dictionary while enumerating it.
-            foreach (var device in _overlays.Keys.Where(k => !present.Contains(k)).ToList())
+            foreach (var device in _overlays.Keys.Where(k => !wanted.ContainsKey(k)).ToList())
             {
                 DisposeOverlay(_overlays[device]);
                 _overlays.Remove(device);
             }
 
-            // A device that left re-arms its failure log line, so a taskbar that goes away
-            // and comes back broken is diagnosable again.
-            _creationFailureLogged.RemoveWhere(d => !present.Contains(d));
+            // A device that left re-arms its failure log line and forgets its health history,
+            // so a taskbar that goes away and comes back broken is diagnosable again.
+            _creationFailureLogged.RemoveWhere(d => !wanted.ContainsKey(d));
+            _healTracker.RetainOnly(wanted.Keys);
         }
         finally
         {
-            // Keep retrying while enabled with nothing to show (login race, or overlay
-            // creation failed); stop as soon as an overlay exists — the per-overlay
-            // keep-alive owns recovery from there.
-            if (_overlays.Count == 0)
-                _emptyRetryTimer.Start();
-            else
-                _emptyRetryTimer.Stop();
+            // Unlike #62's version this keeps running once there ARE overlays, not only while
+            // there is nothing to show: the per-overlay keep-alive re-asserts geometry and
+            // z-order but cannot notice that it has stopped running, or that its window is no
+            // longer painting — so something outside the overlay has to keep looking.
+            // Conditional because showing a Form pumps messages: a SetEnabled(false) or Dispose
+            // that lands mid-reconcile must not have its timer re-armed underneath it.
+            if (_enabled && !_disposed)
+                _healthTimer.Start();
         }
+    }
+
+    /// <summary>
+    /// Classifies one readout and decides whether to keep it. Returns false only when it is
+    /// broken enough, for long enough, to be worth tearing down and rebuilding — the tolerance
+    /// and the rebuild cooldown live in <see cref="TaskbarHealPolicy"/>. Status changes are
+    /// logged as transitions rather than per tick, so one bad reboot or sleep cycle leaves a log
+    /// that names the failure mode instead of thousands of identical lines.
+    /// </summary>
+    private bool ShouldKeepOverlay(string device, TaskbarOverlayWindow overlay, IntPtr taskbarHandle)
+    {
+        TaskbarOverlayStatus status;
+        try
+        {
+            status = overlay.CheckHealth(taskbarHandle);
+        }
+        catch (Exception ex)
+        {
+            // A diagnostic that failed is not evidence the readout is broken — keep it.
+            _logger.Warn($"Taskbar readout health check failed for {device}: {ex.Message}");
+            return true;
+        }
+
+        var verdict = _healTracker.Observe(device, status, Environment.TickCount64);
+
+        // The two "hidden on purpose" states are logged as well as the faults: they are the only
+        // healthy ways for a readout to be invisible, so a report of "it disappeared" is only
+        // diagnosable if the log says when it went and when it came back.
+        switch (verdict.Log)
+        {
+            case TaskbarHealLog.Recovered:
+                _logger.Info($"Taskbar readout healthy again on {device} (was {verdict.PreviousStatus}).");
+                break;
+            case TaskbarHealLog.Suppressed:
+                _logger.Info($"Taskbar readout hidden for a fullscreen app on {device}.");
+                break;
+            case TaskbarHealLog.Waiting:
+                _logger.Info($"Taskbar readout waiting for its taskbar on {device}.");
+                break;
+            case TaskbarHealLog.Fault:
+                _logger.Warn($"Taskbar readout unhealthy on {device}: {status}.");
+                break;
+            case TaskbarHealLog.Rebuilding:
+                _logger.Warn(
+                    $"Rebuilding taskbar readout on {device} after {verdict.ConsecutiveUnhealthy} unhealthy checks ({status}).");
+                break;
+        }
+
+        return !verdict.Rebuild;
     }
 
     /// <summary>Applies the current settings and latest reading to a freshly created overlay.</summary>
@@ -399,7 +615,10 @@ public sealed class TaskbarOverlayManager : IDisposable
         if (_disposed) return;
         _disposed = true;
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
-        _emptyRetryTimer.Dispose();
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        SystemEvents.SessionSwitch -= OnSessionSwitch;
+        _healthTimer.Dispose();
+        _settleTimer.Dispose();
         _taskbarCreatedListener.Dispose();
         DisposeAllOverlays();
     }

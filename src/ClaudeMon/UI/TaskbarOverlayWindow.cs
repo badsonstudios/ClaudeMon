@@ -65,6 +65,24 @@ public sealed class TaskbarOverlayWindow : Form
     // Drives the keep-alive loop and whether Reposition shows or hides the overlay.
     private bool _enabled;
 
+    // When the keep-alive last ran, so the manager's health check (see CheckHealth) can tell a
+    // frozen loop — nothing repositions or repaints any more — from a merely misplaced readout.
+    // Re-baselined by RefreshAfterSystemChange, because the tick source counts through sleep
+    // while the timer doesn't, and a resumed machine hasn't got a stalled keep-alive.
+    private long _lastKeepAliveTicks = Environment.TickCount64;
+
+    // The two reasons the last Reposition may have hidden the readout on purpose: its taskbar
+    // wasn't there to sit on, or a fullscreen app covers it (#123). Recorded so the manager's
+    // health check reads a deliberately hidden readout as such, instead of as an unexplained
+    // invisible window it should rebuild. Starts resolved: nothing has hidden anything yet.
+    private bool _ownTaskbarResolved = true;
+    private bool _suppressedForFullscreen;
+
+    // Whether any content has ever reached the screen. A layered window that has never been
+    // through UpdateLayeredWindow is an invisible hole, which is indistinguishable from "the
+    // readout is missing" to the user — so it is a health failure, not a cosmetic one.
+    private bool _hasPainted;
+
     // User nudges applied to the computed X (positive = right, negative = left). The primary
     // and secondary taskbars each have their own: the primary is anchored exactly to its tray
     // while the secondary anchor is estimated around a non-queryable clock, so one shared
@@ -169,6 +187,9 @@ public sealed class TaskbarOverlayWindow : Form
         _keepAliveTimer = new System.Windows.Forms.Timer { Interval = 500 };
         _keepAliveTimer.Tick += (_, _) =>
         {
+            // Recorded before the guard and before the work, so it measures the loop itself —
+            // a tick that throws still proves the keep-alive is alive.
+            _lastKeepAliveTicks = Environment.TickCount64;
             if (!_enabled) return;
             try
             {
@@ -258,6 +279,7 @@ public sealed class TaskbarOverlayWindow : Form
         _enabled = enabled;
         if (enabled)
         {
+            _lastKeepAliveTicks = Environment.TickCount64;
             if (!Visible) Show();
             Reposition();
             _keepAliveTimer.Start();
@@ -562,19 +584,25 @@ public sealed class TaskbarOverlayWindow : Form
             _contentDirty = true;
         }
 
-        var taskbar = TaskbarEnumerator.FindByDevice(_targetMonitorDevice);
-        if (taskbar is null || !GetWindowRect(taskbar.Value.Handle, out var rect))
+        var rect = default(RECT);
+        if (TaskbarEnumerator.FindByDevice(_targetMonitorDevice) is not { } taskbar
+            || !GetWindowRect(taskbar.Handle, out rect))
         {
+            _ownTaskbarResolved = false;
+            _suppressedForFullscreen = false;
             if (Visible) Hide();
             return;
         }
+
+        _ownTaskbarResolved = true;
 
         // A fullscreen app covering this monitor hides the taskbar beneath it — the readout
         // must follow the taskbar down rather than float over games or fullscreen RDP
         // sessions (issue #123). Running on the keep-alive tick means the readout returns
         // within 500 ms of the app closing or losing foreground, mirroring the shell's own
         // "rude app" taskbar behaviour (alt-tab out of a borderless game and both come back).
-        if (FullscreenCoversTaskbar(rect))
+        _suppressedForFullscreen = FullscreenCoversTaskbar(rect);
+        if (_suppressedForFullscreen)
         {
             if (Visible) Hide();
             return;
@@ -584,7 +612,7 @@ public sealed class TaskbarOverlayWindow : Form
         // TrayNotifyWnd we can anchor exactly to; secondary taskbars don't (their clock is a
         // windowless XAML surface), so there we reserve estimated clock space at the right.
         int? notifyLeft = null;
-        var notifyHwnd = FindWindowEx(taskbar.Value.Handle, IntPtr.Zero, "TrayNotifyWnd", null);
+        var notifyHwnd = FindWindowEx(taskbar.Handle, IntPtr.Zero, "TrayNotifyWnd", null);
         if (notifyHwnd != IntPtr.Zero && GetWindowRect(notifyHwnd, out var notify))
             notifyLeft = notify.Left;
 
@@ -595,7 +623,7 @@ public sealed class TaskbarOverlayWindow : Form
         // bitmap-stretched one, and the Size setting tunes that. The logical layout height is
         // derived from the physical taskbar height at the content scale, so the readout stays
         // vertically centred and can never overflow the taskbar at any size.
-        var dpi = GetDpiForWindow(taskbar.Value.Handle);
+        var dpi = GetDpiForWindow(taskbar.Handle);
         _monitorScale = DpiScale.FactorForDpi((int)dpi);
         _scale = _monitorScale * _sizeFactor;
 
@@ -615,7 +643,7 @@ public sealed class TaskbarOverlayWindow : Form
         // the primary's is exact, the secondary's is estimated around the clock). Default 0
         // keeps the primary's exact tray anchoring untouched.
         var offset = DpiScale.Scale(
-            taskbar.Value.IsPrimary ? _primaryHorizontalOffset : _secondaryHorizontalOffset,
+            taskbar.IsPrimary ? _primaryHorizontalOffset : _secondaryHorizontalOffset,
             _monitorScale);
 
         // Size the overlay to its content so a multi-element readout never clips. The window is
@@ -682,10 +710,10 @@ public sealed class TaskbarOverlayWindow : Form
         _ = GetWindowThreadProcessId(foreground, out var pid);
 
         return TaskbarOverlayFullscreen.ShouldHide(
-            Rectangle.FromLTRB(fg.Left, fg.Top, fg.Right, fg.Bottom),
+            ToRectangle(fg),
             className.ToString(),
             ownProcess: pid == (uint)Environment.ProcessId,
-            Rectangle.FromLTRB(taskbarRect.Left, taskbarRect.Top, taskbarRect.Right, taskbarRect.Bottom));
+            ToRectangle(taskbarRect));
     }
 
     /// <summary>Renders the readout to a 32bpp ARGB bitmap and pushes it via UpdateLayeredWindow.</summary>
@@ -802,7 +830,68 @@ public sealed class TaskbarOverlayWindow : Form
         _paintedScale = _scale;
         _paintedLight = light;
         _contentDirty = false;
+        _hasPainted = true;
     }
+
+    /// <summary>
+    /// Re-baseline this readout after the system changed underneath it — resume from sleep,
+    /// session unlock, a display change, or Explorer recreating the taskbar. Two things happen:
+    /// the next keep-alive tick is forced to repaint, and the keep-alive stall clock restarts.
+    /// </summary>
+    /// <remarks>
+    /// The repaint is the point. Everything else the keep-alive asserts (position, size,
+    /// visibility, topmost, NonRudeHWND) is re-applied unconditionally every 500 ms, so it
+    /// cannot stay wrong — but the <c>UpdateLayeredWindow</c> content is deliberately skipped
+    /// while geometry, scale, theme, and text are unchanged. A layered surface that the display
+    /// stack dropped across a suspend therefore stays blank forever: window present, correctly
+    /// placed, painting nothing, and only the Settings toggle (which rebuilds it) brings it back
+    /// (#199). Forcing the dirty flag is the cheap, targeted cure. Deliberately does not
+    /// repaint inline — it only sets fields, so it cannot throw into a system-event callback.
+    /// </remarks>
+    internal void RefreshAfterSystemChange()
+    {
+        _contentDirty = true;
+        _lastKeepAliveTicks = Environment.TickCount64;
+    }
+
+    /// <summary>
+    /// Gather this readout's live facts and classify them (see <see cref="TaskbarOverlayHealth"/>).
+    /// <paramref name="taskbarHandle"/> is the taskbar the manager just enumerated for this
+    /// monitor; the readout resolves its own taskbar independently on every keep-alive tick, so
+    /// disagreement between the two is itself a symptom worth reporting.
+    /// </summary>
+    internal TaskbarOverlayStatus CheckHealth(IntPtr taskbarHandle)
+    {
+        if (!IsHandleCreated)
+            return TaskbarOverlayStatus.HandleLost;
+
+        var taskbarRect = default(RECT);
+        var taskbarFound = taskbarHandle != IntPtr.Zero && GetWindowRect(taskbarHandle, out taskbarRect);
+        var windowFound = GetWindowRect(Handle, out var windowRect);
+
+        // GetWindowLong reports failure as 0, which is indistinguishable from "no extended
+        // styles" — except that this window always has at least WS_EX_LAYERED, so 0 can only be
+        // a failed read. A failed diagnostic is not evidence of a fault, so it reads as topmost.
+        var exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
+
+        return TaskbarOverlayHealth.Evaluate(new TaskbarOverlayFacts(
+            HandleCreated: true,
+            // A stopped keep-alive is intended while disabled, not a stall.
+            MsSinceKeepAlive: _enabled ? Environment.TickCount64 - _lastKeepAliveTicks : 0,
+            OwnTaskbarResolved: _ownTaskbarResolved,
+            SuppressedForFullscreen: _suppressedForFullscreen,
+            TaskbarFound: taskbarFound,
+            TaskbarBounds: ToRectangle(taskbarRect),
+            // The real window state, not WinForms' cached Visible flag: the point of the check
+            // is to catch a window that stopped matching what this process believes about it.
+            WindowVisible: IsWindowVisible(Handle),
+            WindowTopmost: exStyle == 0 || (exStyle & WS_EX_TOPMOST) != 0,
+            WindowBounds: windowFound ? ToRectangle(windowRect) : null,
+            HasPainted: _hasPainted));
+    }
+
+    private static Rectangle ToRectangle(RECT rect) =>
+        Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
 
     protected override void Dispose(bool disposing)
     {
@@ -815,9 +904,12 @@ public sealed class TaskbarOverlayWindow : Form
 
     // --- Win32 interop ---
 
+    private const int WS_EX_TOPMOST = 0x00000008;
     private const int WS_EX_LAYERED = 0x00080000;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_NOACTIVATE = 0x08000000;
+
+    private const int GWL_EXSTYLE = -20;
 
     private const int WM_MOUSEACTIVATE = 0x0021;
     private const int MA_NOACTIVATE = 0x0003;
@@ -896,6 +988,15 @@ public sealed class TaskbarOverlayWindow : Form
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    // Only ever read with GWL_EXSTYLE, whose value is a 32-bit LONG on every architecture —
+    // the ...Ptr variant is needed for the pointer-sized indices (GWLP_WNDPROC and friends).
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+    private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

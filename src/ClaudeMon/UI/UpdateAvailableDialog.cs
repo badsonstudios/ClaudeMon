@@ -206,7 +206,12 @@ internal sealed class UpdateAvailableDialog : Form
     // Positions everything from the logical metrics at the current monitor DPI. "Skip this
     // version" sits alone on the left, away from the Ignore/Get pair, so the destructive-ish
     // choice isn't next to the default one.
-    private void Relayout()
+    //
+    // `area` is the working area the height cap measures against, or null for the monitor the
+    // dialog is currently on. While the initial placement is in flight the callers pass the
+    // monitor the dialog is about to open on (#195) — until that move happens the dialog is still
+    // parked at the origin, so a cap computed there describes the monitor it is leaving.
+    private void Relayout(Rectangle? area = null)
     {
         // Unscrolled coordinates below, so start from the origin — see AboutDialog.Relayout (#153).
         if (AutoScroll)
@@ -228,24 +233,34 @@ internal sealed class UpdateAvailableDialog : Form
         // all multiplied by the scale factor, so at a large one on a short display the button row
         // — the whole point of the dialog — is what goes off the bottom edge.
         DialogPlacement.FitToMonitor(
-            this, Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad), Sc(MinClientHeight));
+            this, Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad), Sc(MinClientHeight),
+            area);
     }
 
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
+        // Resolve the target monitor first, so the fit below and the move afterwards describe the
+        // same screen (#195). The dialog is still parked at the origin here, so measuring the
+        // monitor it is on would cap the height against the one it is about to leave — voiding
+        // #153's fit whenever the foreground monitor is the shorter of the two.
+        _placementArea = DialogPlacement.ResolveArea(_requestedArea);
         // DeviceDpi is only reliable once the handle exists; the constructor's Relayout ran at
         // the default DPI, so redo it here (before first paint) at the real monitor DPI.
-        Relayout();
-        _placementArea = DialogPlacement.ResolveArea(_requestedArea);
+        Relayout(_placementArea);
         PlaceOn(_placementArea.Value);
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
     {
         base.OnDpiChanged(e);
-        // Re-fit if the dialog is dragged to a monitor with a different scale.
-        Relayout();
+        // Re-fit if the dialog is dragged to a monitor with a different scale — measuring where it
+        // is now is then the only answer that can be right. Until it is shown the placement is
+        // still in progress, so the target area is the better answer there for the same reason the
+        // re-center below uses it: the dialog may not have reached that monitor yet, and in the
+        // normal case (Windows deferring the transition to show time) it already has, so the two
+        // agree and this changes nothing.
+        Relayout(_shown ? null : _placementArea);
 
         // Still part of the initial placement: if Windows deferred the DPI transition from the
         // OnLoad move until the window was shown, the relayout above has just resized the

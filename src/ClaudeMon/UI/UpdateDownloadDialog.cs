@@ -208,7 +208,9 @@ internal sealed class UpdateDownloadDialog : Form
 
     private int Sc(int value) => DpiScale.Scale(value, DeviceDpi / 96f);
 
-    private void Relayout()
+    // `area` is the working area the height cap measures against, or null for the monitor the
+    // dialog is currently on — see UpdateAvailableDialog.Relayout (#195).
+    private void Relayout(Rectangle? area = null)
     {
         // Unscrolled coordinates below, so start from the origin — see AboutDialog.Relayout (#153).
         if (AutoScroll)
@@ -228,22 +230,26 @@ internal sealed class UpdateDownloadDialog : Form
         // Fitted to the monitor — same reasoning as UpdateAvailableDialog (#153). It matters a
         // little more here: this dialog's Cancel button is the only way to stop a download.
         DialogPlacement.FitToMonitor(
-            this, Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad), Sc(MinClientHeight));
+            this, Sc(ClientWidth), buttonsTop + Sc(ButtonHeight) + Sc(Pad), Sc(MinClientHeight),
+            area);
     }
 
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
-        // DeviceDpi is only reliable once the handle exists (see UpdateAvailableDialog.OnLoad).
-        Relayout();
+        // Target monitor first, then fit to it, then move — see UpdateAvailableDialog.OnLoad
+        // (#195). DeviceDpi is only reliable once the handle exists, hence the second Relayout.
         _placementArea = DialogPlacement.ResolveArea(_requestedArea);
+        Relayout(_placementArea);
         PlaceOn(_placementArea.Value);
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
     {
         base.OnDpiChanged(e);
-        Relayout();
+        // The target area until the window is shown, the monitor it is on after — see
+        // UpdateAvailableDialog.OnDpiChanged.
+        Relayout(_shown ? null : _placementArea);
 
         // Initial placement is not finished until the window is shown — see
         // UpdateAvailableDialog.OnDpiChanged for why this re-center is guarded by _shown.

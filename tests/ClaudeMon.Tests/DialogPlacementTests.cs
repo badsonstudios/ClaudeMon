@@ -551,4 +551,45 @@ public class DialogPlacementTests
         Assert.Equal(Size.Empty, form.AutoScrollMinSize);
         Assert.Equal(new Size(430, 176), form.ClientSize);
     }
+
+    // The explicit-area overload (#195): the update dialogs lay themselves out in OnLoad while
+    // still parked at the origin, then move to the foreground window's monitor, so the cap has to
+    // be told which monitor the window is going to rather than measuring the one it is leaving.
+    // Both directions are asserted, because either alone could pass by accident on a machine whose
+    // primary happens to match.
+
+    [Fact]
+    public void FitToMonitor_WithAnExplicitArea_CapsAgainstItAndNotTheFormsOwnMonitor()
+    {
+        using var form = new Form { FormBorderStyle = FormBorderStyle.FixedDialog };
+        var chrome = form.Height - form.ClientSize.Height;
+        // A short target monitor: 200px of client room, well under the 300px the content wants and
+        // (on any real display) well under what the primary would have allowed.
+        var target = new Rectangle(0, 0, 1000, chrome + 200);
+
+        var scroll = DialogPlacement.FitToMonitor(form, 430, 300, minClientHeight: 160, area: target);
+
+        Assert.True(scroll);
+        Assert.True(form.AutoScroll);
+        Assert.Equal(200, form.ClientSize.Height);
+        Assert.Equal(300, form.AutoScrollMinSize.Height);
+    }
+
+    [Fact]
+    public void FitToMonitor_WithAnExplicitAreaTallerThanTheFormsOwnMonitor_IsNotCapped()
+    {
+        using var form = new Form { FormBorderStyle = FormBorderStyle.FixedDialog };
+        var chrome = form.Height - form.ClientSize.Height;
+        var contentHeight = DialogPlacement.WorkingAreaFor(form).Height + 500;
+        var target = new Rectangle(0, 0, 1000, chrome + contentHeight);
+
+        var scroll = DialogPlacement.FitToMonitor(
+            form, 430, contentHeight, minClientHeight: 160, area: target);
+
+        // Taller than the monitor the form is actually on, so the null-area path would have
+        // clamped and scrolled here.
+        Assert.False(scroll);
+        Assert.False(form.AutoScroll);
+        Assert.Equal(new Size(430, contentHeight), form.ClientSize);
+    }
 }

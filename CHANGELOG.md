@@ -15,6 +15,15 @@ GitHub release; the release notes are taken from these entries.
   opens on the primary monitor as before. The window's opening size and its resize floor are
   now measured against that same monitor, so a smaller screen gets a window that fits it and
   can still be shrunk on it. Nothing changes on a single-monitor setup. (#116)
+- **The update window now sizes itself for the monitor it opens on.** Since 0.24.0 it has
+  opened on the monitor holding whatever you were last working in, but it still measured how
+  tall it was allowed to be against the *primary* monitor — the one it was about to leave. On a
+  mixed-resolution or mixed-DPI setup, where the screen you're working on is shorter than your
+  primary, that could put the buttons ("Get the update", "Ignore", "Skip this version", or
+  Cancel while a download runs) off the bottom edge with no scrollbar to reach them. Both the
+  update prompt and the download/progress window now fit themselves to the monitor they're
+  actually about to appear on. Nothing changes on a single-monitor setup, or on any setup where
+  the target screen is tall enough for the window anyway. (#195)
 - **A failed credential write-back can no longer sign every Claude client out.** OAuth refresh
   tokens rotate: every refresh consumes the on-disk token and issues a new one. If ClaudeMon
   refreshed and then couldn't write the result back to `~/.claude/.credentials.json` (file

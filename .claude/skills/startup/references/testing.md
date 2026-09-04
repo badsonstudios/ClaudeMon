@@ -21,7 +21,7 @@ CI collects coverage on every push and PR, publishes a per-class summary to the 
 summary, uploads the HTML/Cobertura report as the `coverage-report` artifact, and fails the
 build if the **logic layer** drops below the gate in `.github/workflows/ci.yml`
 (`COVERAGE_MIN_LINE` / `COVERAGE_MIN_BRANCH`, currently 90% line / 87% branch against a
-measured 96.0% / 91.4% — re-measure and re-state both numbers together, or the comment in
+measured 95.4% / 90.4% — re-measure and re-state both numbers together, or the comment in
 `ci.yml` and this line drift apart again).
 
 Reproduce it locally — same settings file, same pinned ReportGenerator version as CI:

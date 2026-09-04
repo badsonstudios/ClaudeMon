@@ -144,11 +144,14 @@ internal static class DialogPlacement
     ///
     /// They do <em>not</em> agree for a window that opens somewhere else — the update dialogs
     /// (#108) and the Usage &amp; costs window (#116) center on the foreground window's monitor, so
-    /// anything measured before that move describes the monitor the window is leaving. The Usage
-    /// &amp; costs window therefore resolves its area once in <c>OnLoad</c> and passes it to its own
-    /// size and floor clamps instead of calling this; the update dialogs still measure through here
-    /// while parked on the primary, which only bites if the monitor they open on is shorter than
-    /// it. Pass an explicit area whenever the form is not yet where it is going to stay.
+    /// anything measured before that move describes the monitor the window is leaving. All three
+    /// therefore resolve their area once in <c>OnLoad</c> and pass it to their size and floor
+    /// clamps rather than letting those call this — the update dialogs through
+    /// <see cref="FitToMonitor"/>'s optional area (#195), the Usage &amp; costs window through
+    /// <see cref="ClampClientHeight"/> / <see cref="ClampMinimumSize"/> direct (#116). Only that
+    /// <c>OnLoad</c> pass; once the window is where it is going to stay, a later relayout measures
+    /// through here again, which is then the only answer that can be right. Pass an explicit area
+    /// whenever the form is not yet where it is going to stay.
     /// </summary>
     internal static Rectangle WorkingAreaFor(Form form)
     {
@@ -166,8 +169,9 @@ internal static class DialogPlacement
     }
 
     /// <summary>
-    /// Sizes <paramref name="form"/> to the content it just laid out, fitted to the monitor it is
-    /// on: the height is capped by <see cref="ClampClientHeight"/>, the overflow becomes a
+    /// Sizes <paramref name="form"/> to the content it just laid out, fitted to
+    /// <paramref name="area"/> — or, when none is given, to the monitor the form is currently on:
+    /// the height is capped by <see cref="ClampClientHeight"/>, the overflow becomes a
     /// vertical scrollbar rather than content falling off the bottom, and the window is slid back
     /// under the bottom edge by <see cref="ClampTop"/>. Every one of the app's windows sizes itself
     /// from its content, so all of them shared the same latent overflow on a short display or at a
@@ -185,11 +189,21 @@ internal static class DialogPlacement
     /// The floor described on <see cref="ClampClientHeight"/> — a guard for a degenerate working
     /// area, not a minimum window size.
     /// </param>
-    internal static bool FitToMonitor(Form form, int clientWidth, int contentHeight, int minClientHeight)
+    /// <param name="area">
+    /// The working area to fit to, or null to measure the monitor the form is currently on. A form
+    /// that is about to be moved to another monitor must pass the area it is moving to (#195): see
+    /// <see cref="WorkingAreaFor"/> for why measuring it where it is parked answers for the wrong
+    /// screen. Passing one carries an obligation — the top clamp below is computed for
+    /// <paramref name="area"/> too, not for where the form currently is, so on a realized window it
+    /// can slide the form into a monitor it is not on yet. Only pass an area you are about to place
+    /// the form in (both callers center on it on the very next line).
+    /// </param>
+    internal static bool FitToMonitor(
+        Form form, int clientWidth, int contentHeight, int minClientHeight, Rectangle? area = null)
     {
-        var area = WorkingAreaFor(form);
+        var fitArea = area ?? WorkingAreaFor(form);
         var (clientHeight, scroll) = ClampClientHeight(
-            contentHeight, area.Height, form.Height - form.ClientSize.Height, minClientHeight);
+            contentHeight, fitArea.Height, form.Height - form.ClientSize.Height, minClientHeight);
 
         // Setting a non-empty AutoScrollMinSize turns AutoScroll on by itself; the assignment after
         // it is what turns it back off once the content fits again. A zero width asks for no
@@ -202,7 +216,7 @@ internal static class DialogPlacement
         // Only once the window exists — before that, Top is meaningless and the caller's OnLoad
         // placement does the opening position anyway.
         if (form.IsHandleCreated)
-            form.Top = ClampTop(form.Top, form.Height, area.Top, area.Bottom);
+            form.Top = ClampTop(form.Top, form.Height, fitArea.Top, fitArea.Bottom);
 
         return scroll;
     }

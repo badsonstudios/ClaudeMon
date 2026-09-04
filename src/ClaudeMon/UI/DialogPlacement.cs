@@ -137,10 +137,18 @@ internal static class DialogPlacement
 
     /// <summary>
     /// The working area a form's clamps should measure against: the monitor the form is on once it
-    /// has a window, the primary monitor's before that. Those agree for the first layout — the
-    /// dialogs open centered on a monitor chosen in <c>OnLoad</c> and an as-yet-unplaced form sits
-    /// at the origin, which is on the primary by definition — so the layout pass that runs before
-    /// the window is shown already clamps against the monitor the user will see it on.
+    /// has a window, the primary monitor's before that. An as-yet-unplaced form sits at the origin,
+    /// which is on the primary by definition, so for a window that opens on the primary the two
+    /// answers agree and the layout pass that runs before the window is shown already clamps
+    /// against the monitor the user will see it on.
+    ///
+    /// They do <em>not</em> agree for a window that opens somewhere else — the update dialogs
+    /// (#108) and the Usage &amp; costs window (#116) center on the foreground window's monitor, so
+    /// anything measured before that move describes the monitor the window is leaving. The Usage
+    /// &amp; costs window therefore resolves its area once in <c>OnLoad</c> and passes it to its own
+    /// size and floor clamps instead of calling this; the update dialogs still measure through here
+    /// while parked on the primary, which only bites if the monitor they open on is shorter than
+    /// it. Pass an explicit area whenever the form is not yet where it is going to stay.
     /// </summary>
     internal static Rectangle WorkingAreaFor(Form form)
     {

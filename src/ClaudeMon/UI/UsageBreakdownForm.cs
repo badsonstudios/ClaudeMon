@@ -129,7 +129,7 @@ internal sealed class UsageBreakdownForm : Form
     private bool _wasMinimized;
 
     // Placement (#116, following #108). The monitor is resolved once in OnLoad and reused if a
-    // DPI change arrives before the window is visible; _shown then freezes it, so dragging the
+    // DPI change arrives before the window is shown; _shown then freezes it, so dragging the
     // window to another monitor afterwards never re-centers it.
     private Rectangle? _placementArea;
     private bool _shown;
@@ -1057,7 +1057,13 @@ internal sealed class UsageBreakdownForm : Form
     /// itself capped at the working area, which on any monitor small enough for this floor to bite
     /// is shorter than the window it produced.)
     /// </summary>
-    private Size DefaultClientSize()
+    /// <param name="area">
+    /// The working area to cap against, or null to measure the monitor the window is currently on.
+    /// The constructor has no handle yet, so it can only ever be answered with the primary's area;
+    /// <c>OnLoad</c> re-runs this with the monitor the window is about to open on (#116), because a
+    /// cap describing a different screen than the one the window lands on is no cap at all.
+    /// </param>
+    private Size DefaultClientSize(Rectangle? area = null)
     {
         var width = Sc(DefaultClientWidth);
         LayoutHeader(width - (2 * Sc(Pad)));
@@ -1065,7 +1071,7 @@ internal sealed class UsageBreakdownForm : Form
         var (height, _) = DialogPlacement.ClampClientHeight(
             UsageBreakdownLayout.DefaultHeight(
                 ChromeHeight(_hint.Height), Sc(DefaultTableHeight), TabStripRow),
-            DialogPlacement.WorkingAreaFor(this).Height,
+            (area ?? DialogPlacement.WorkingAreaFor(this)).Height,
             Height - ClientSize.Height,
             MinContentHeight(_hint.Height));
 
@@ -1270,16 +1276,26 @@ internal sealed class UsageBreakdownForm : Form
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
-        // Relayout first: DeviceDpi is only reliable once the handle exists (see
-        // UpdateAvailableDialog.OnLoad), and MinClientSize measures off the laid-out header.
-        Relayout();
 
         // Open where the user is working rather than always on the primary monitor (#116): the
         // same ForegroundMonitor path the update dialogs took in #108, with the same fall back to
-        // the primary when there is no usable foreground window. Resolved once, before the floor
-        // is computed, so both the floor and the move describe the same monitor.
+        // the primary when there is no usable foreground window. Resolved first and used for
+        // everything below, so the size, the resize floor and the move all describe one monitor —
+        // the one the window is about to appear on.
         var area = DialogPlacement.ForegroundWorkingArea();
         _placementArea = area;
+
+        // Re-fit the opening size to that monitor. The constructor could only measure the primary
+        // (no handle yet, so WorkingAreaFor answers with it), which was the right answer while the
+        // window always opened there; now a shorter foreground monitor would get a window sized
+        // for a taller screen, quietly undoing #153's cap for the very setups #116 is about. On any
+        // monitor with room for the default size this returns exactly what the constructor already
+        // computed, so nothing moves on the common path.
+        ClientSize = DefaultClientSize(area);
+
+        // Relayout before measuring: DeviceDpi is only reliable once the handle exists (see
+        // UpdateAvailableDialog.OnLoad), and MinClientSize measures off the laid-out header.
+        Relayout();
         UpdateMinimumSize(area);
 
         // The tables were filled in the constructor, before there was a header control to put the
@@ -1337,6 +1353,10 @@ internal sealed class UsageBreakdownForm : Form
     {
         base.OnDpiChanged(e);
         Relayout();
+        // No explicit area, even during the initial placement: PlaceStable moves the window onto
+        // the target monitor before Windows can send WM_DPICHANGED, so measuring where the window
+        // is now gives the same answer — and once the user has dragged it, that is the only answer
+        // that can be right.
         UpdateMinimumSize();
 
         // Still part of the initial placement: if Windows deferred the DPI transition from the

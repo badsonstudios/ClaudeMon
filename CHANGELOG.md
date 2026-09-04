@@ -10,10 +10,11 @@ GitHub release; the release notes are taken from these entries.
   itself on the primary monitor, so on a multi-monitor setup it could open on a screen you
   weren't looking at — leaving you waiting for a window that was already up. It now follows the
   same rule the update window has used since 0.24.0: centred on the monitor holding whatever
-  you were last working in, never on the mouse cursor's, and back to the primary monitor when
-  the foreground window can't be identified. Its minimum size is now capped against that
-  monitor too, so the window can still be shrunk to fit a small screen it opens on. Nothing
-  changes on a single-monitor setup. (#116)
+  you were last working in, and never on the mouse cursor's. When that window can't be
+  identified — there isn't one, it's hidden or minimised, or it's one of ClaudeMon's own — it
+  opens on the primary monitor as before. The window's opening size and its resize floor are
+  now measured against that same monitor, so a smaller screen gets a window that fits it and
+  can still be shrunk on it. Nothing changes on a single-monitor setup. (#116)
 - **A failed credential write-back can no longer sign every Claude client out.** OAuth refresh
   tokens rotate: every refresh consumes the on-disk token and issues a new one. If ClaudeMon
   refreshed and then couldn't write the result back to `~/.claude/.credentials.json` (file

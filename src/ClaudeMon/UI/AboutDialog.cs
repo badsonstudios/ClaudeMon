@@ -57,7 +57,9 @@ internal sealed class AboutDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        // Manual + CenterOnPrimary in OnLoad — all app dialogs open on the primary monitor (#88).
+        // Manual + CenterOnPrimary in OnLoad — never the cursor's monitor (#88). The dialogs you
+        // dismiss stay on the primary, where the tray lives; the windows you go on to work in (the
+        // update dialogs, #108; Usage & costs, #116) follow the foreground window instead.
         StartPosition = FormStartPosition.Manual;
         // Manual layout, like the other hand-scaled windows: WinForms auto-scaling would fight
         // the Sc()-based Relayout, so we own all scaling (point-sized fonts scale on their own).

@@ -169,7 +169,9 @@ public sealed class SettingsForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        // Manual + CenterOnPrimary in OnLoad — all app dialogs open on the primary monitor (#88).
+        // Manual + CenterOnPrimary in OnLoad — never the cursor's monitor (#88). The dialogs you
+        // dismiss stay on the primary, where the tray lives; the windows you go on to work in (the
+        // update dialogs, #108; Usage & costs, #116) follow the foreground window instead.
         StartPosition = FormStartPosition.Manual;
         // This form is laid out manually (a vertical cursor + collapsing rows), so WinForms' own
         // auto-scaling can't help — it would fight our repeated Relayout(). We take full control and

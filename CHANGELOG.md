@@ -6,6 +6,14 @@ GitHub release; the release notes are taken from these entries.
 ## [0.27.1] - 2026-09-04
 
 ### Fixed
+- **The Usage & costs window now opens on the monitor you're working on.** It always centred
+  itself on the primary monitor, so on a multi-monitor setup it could open on a screen you
+  weren't looking at — leaving you waiting for a window that was already up. It now follows the
+  same rule the update window has used since 0.24.0: centred on the monitor holding whatever
+  you were last working in, never on the mouse cursor's, and back to the primary monitor when
+  the foreground window can't be identified. Its minimum size is now capped against that
+  monitor too, so the window can still be shrunk to fit a small screen it opens on. Nothing
+  changes on a single-monitor setup. (#116)
 - **A failed credential write-back can no longer sign every Claude client out.** OAuth refresh
   tokens rotate: every refresh consumes the on-disk token and issues a new one. If ClaudeMon
   refreshed and then couldn't write the result back to `~/.claude/.credentials.json` (file

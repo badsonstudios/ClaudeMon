@@ -7,9 +7,11 @@ using System.Drawing;
 /// <c>FormStartPosition.CenterScreen</c> centers an ownerless form on whichever monitor holds the
 /// mouse cursor — so a dialog popped by a background timer (the update prompt) lands on whatever
 /// side monitor the cursor was idling on (issue #88). The app's dialogs use <c>Manual</c> and pick
-/// their monitor deliberately instead: most center on the primary monitor, where the tray lives,
-/// while the update dialogs follow the foreground window so they open where the user is actually
-/// working (issue #108). Nothing here ever reads the cursor position.
+/// their monitor deliberately instead: the small, dismissable dialogs (About, Settings) center on
+/// the primary monitor, where the tray lives, while the windows the user goes on to work in — the
+/// update dialogs (issue #108) and the Usage &amp; costs window (issue #116) — follow the
+/// foreground window so they open on the screen the user is actually looking at. Nothing here
+/// ever reads the cursor position.
 ///
 /// The size half of the same question lives here too (<see cref="ClampClientHeight"/> /
 /// <see cref="ClampTop"/>, moved out of a <c>SettingsFormLayout</c> helper in #153, joined by

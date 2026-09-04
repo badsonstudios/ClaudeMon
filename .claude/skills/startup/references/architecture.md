@@ -27,7 +27,9 @@ ClaudeMon/
   owns where windows open — pure `CenterIn` math plus `PlaceStable`, which re-centers until
   the window is observed to actually be centered (a move onto a differently-scaled monitor
   resizes it afterwards under Per-Monitor-V2); `ForegroundMonitor` resolves which monitor the
-  user is working on from the foreground window, never the mouse cursor (#88, #108). The
+  user is working on from the foreground window, never the mouse cursor — used by the update
+  dialogs (#88, #108) and the Usage & costs window (#116), while About/Settings stay on the
+  primary. The
   static app icon is a committed asset (`Resources/ClaudeMon.ico`, wired via
   `<ApplicationIcon>`), distinct from the live tray icon `IconRenderer` draws.
 - **Monitoring** (`Monitoring/`) — `UsageMonitor` polls on an interval and surfaces usage;

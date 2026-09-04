@@ -12,11 +12,14 @@ using ClaudeMon.Services;
 /// cost/token tables over a selectable timeframe (Today / 7 / 30 days),
 /// computed locally from the Claude Code transcripts, with CSV export.
 /// Follows the <see cref="AboutDialog"/> conventions — <c>AutoScaleMode.None</c>
-/// with hand-scaled metrics, <see cref="Theme"/> accents, primary-monitor
-/// placement, re-layout on load and DPI change. Data is pulled through
-/// <see cref="LocalUsageMonitor"/>'s thread-safe queries on open and whenever
-/// the timeframe changes; the window shows a static picture (no live refresh —
-/// reopen for fresh numbers, matching how the flyout snapshots on open).
+/// with hand-scaled metrics, <see cref="Theme"/> accents, deliberate monitor
+/// placement, re-layout on load and DPI change — except that it opens on the
+/// monitor holding the foreground window rather than on the primary (#116),
+/// the same <see cref="ForegroundMonitor"/> path the update dialogs use (#108).
+/// Data is pulled through <see cref="LocalUsageMonitor"/>'s thread-safe queries
+/// on open and whenever the timeframe changes; the window shows a static picture
+/// (no live refresh — reopen for fresh numbers, matching how the flyout
+/// snapshots on open).
 ///
 /// Either table can be re-sorted by clicking a column header (#111); the ordering itself lives in
 /// the pure <see cref="BreakdownSort"/>, which sorts the <see cref="BreakdownRow"/> numbers rather
@@ -124,6 +127,13 @@ internal sealed class UsageBreakdownForm : Form
     private LocalUsageBreakdown? _current;
     private bool _updatingMinimum;
     private bool _wasMinimized;
+
+    // Placement (#116, following #108). The monitor is resolved once in OnLoad and reused if a
+    // DPI change arrives before the window is visible; _shown then freezes it, so dragging the
+    // window to another monitor afterwards never re-centers it.
+    private Rectangle? _placementArea;
+    private bool _shown;
+    private bool _placing;
 
     // The row selected in one table, resolved against the other axis — null when nothing is
     // drilled into and both tables show everything.
@@ -1105,11 +1115,18 @@ internal sealed class UsageBreakdownForm : Form
     /// monitor: the cap is re-evaluated on the triggers that already exist (open, DPI change,
     /// restore from minimized), and a same-DPI move to a smaller screen keeps the old floor until
     /// one of those fires or the window is reopened. That is the app's existing rule for monitor
-    /// moves — <see cref="DialogPlacement.CenterOnPrimary"/> never re-centers a dialog the user
-    /// dragged either — and the alternative, chasing <c>Screen.FromControl</c> on every move,
-    /// would resize a window out from under the hand that is dragging it.
+    /// moves — placement never re-centers a dialog the user dragged either — and the alternative,
+    /// chasing <c>Screen.FromControl</c> on every move, would resize a window out from under the
+    /// hand that is dragging it.
     /// </summary>
-    private void UpdateMinimumSize()
+    /// <param name="area">
+    /// The working area to cap the floor at, or null to measure the monitor the window is
+    /// currently on. <c>OnLoad</c> passes the area the window is about to be centered on (#116):
+    /// until that move happens the window is still parked on the primary, so measuring it there
+    /// would size the floor for the wrong monitor — and a floor bigger than the screen the window
+    /// opens on is exactly what #172 exists to prevent.
+    /// </param>
+    private void UpdateMinimumSize(Rectangle? area = null)
     {
         // Minimizing reports a degenerate frame, so there is nothing sensible to compute from;
         // OnResize restores the floor when the window comes back.
@@ -1124,11 +1141,34 @@ internal sealed class UsageBreakdownForm : Form
                 new Size(
                     min.Width + (Width - ClientSize.Width),
                     min.Height + (Height - ClientSize.Height)),
-                DialogPlacement.WorkingAreaFor(this).Size);
+                (area ?? DialogPlacement.WorkingAreaFor(this)).Size);
         }
         finally
         {
             _updatingMinimum = false;
+        }
+    }
+
+    /// <summary>
+    /// Centers on <paramref name="area"/>, ignoring re-entrant calls — the same wrapper
+    /// <see cref="UpdateAvailableDialog"/> uses (#108). Moving the window can make Windows deliver
+    /// <c>WM_DPICHANGED</c> synchronously, which lands back in <see cref="OnDpiChanged"/> and would
+    /// call straight back in here; <c>PlaceStable</c> already re-measures after its own move, so
+    /// the nested call has nothing to add and would only risk a loop.
+    /// </summary>
+    private void PlaceOn(Rectangle area)
+    {
+        if (_placing)
+            return;
+
+        _placing = true;
+        try
+        {
+            DialogPlacement.CenterOn(this, area);
+        }
+        finally
+        {
+            _placing = false;
         }
     }
 
@@ -1233,14 +1273,24 @@ internal sealed class UsageBreakdownForm : Form
         // Relayout first: DeviceDpi is only reliable once the handle exists (see
         // UpdateAvailableDialog.OnLoad), and MinClientSize measures off the laid-out header.
         Relayout();
-        UpdateMinimumSize();
+
+        // Open where the user is working rather than always on the primary monitor (#116): the
+        // same ForegroundMonitor path the update dialogs took in #108, with the same fall back to
+        // the primary when there is no usable foreground window. Resolved once, before the floor
+        // is computed, so both the floor and the move describe the same monitor.
+        var area = DialogPlacement.ForegroundWorkingArea();
+        _placementArea = area;
+        UpdateMinimumSize(area);
 
         // The tables were filled in the constructor, before there was a header control to put the
         // sort arrow on.
         ListViewSortIndicator.Apply(_modelList, (int)_modelSort.Column, _modelSort.Ascending);
         ListViewSortIndicator.Apply(_projectList, (int)_projectSort.Column, _projectSort.Ascending);
 
-        DialogPlacement.CenterOnPrimary(this);
+        // Last, so PlaceStable centers the final size — assigning MinimumSize above can itself
+        // grow the window. Moving onto a differently-scaled monitor resizes it again, which is
+        // exactly what PlaceStable re-measures for.
+        PlaceOn(area);
     }
 
     protected override void OnResize(EventArgs e)
@@ -1288,11 +1338,20 @@ internal sealed class UsageBreakdownForm : Form
         base.OnDpiChanged(e);
         Relayout();
         UpdateMinimumSize();
+
+        // Still part of the initial placement: if Windows deferred the DPI transition from the
+        // OnLoad move until the window was shown, the relayout above has just resized the window
+        // around a position computed for the old size — re-center rather than leave it off-center
+        // or straddling the monitor edge (#108's placement, #104's failure mode). Once shown,
+        // never re-center: that would yank a window the user is dragging.
+        if (!_shown && _placementArea is { } area)
+            PlaceOn(area);
     }
 
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        _shown = true;
         Activate();
     }
 

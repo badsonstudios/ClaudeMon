@@ -22,6 +22,19 @@ public sealed class UsageMonitor : IDisposable
     private readonly HashSet<string> _loggedUnknownLimitKinds = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _cts;
 
+    // A refreshed credential whose write-back failed (issue #192). Refresh tokens rotate, so
+    // that refresh consumed the on-disk token: until the write lands, the file holds a dead
+    // token and this pair is the only live lineage. _pendingDiskToken is the consumed token
+    // the file still holds — the marker that disk is stale, and the write-back guard's
+    // reference point. Process-lifetime only (tokens are never persisted anywhere but the
+    // credentials file), so a restart inside this window still loses the lineage — the
+    // accepted residual risk. Touched only inside PollAsync, which is serialized by _polling.
+    private OAuthCredential? _pendingWriteBack;
+    private string? _pendingDiskToken;
+    // The stuck-episode breadcrumb has been logged: one line per episode, not per poll (the
+    // app's transition-logging convention) — a lock can persist for days at the poll cadence.
+    private bool _pendingEpisodeLogged;
+
     public UsageResponse? LastUsage { get; private set; }
     public string? LastError { get; private set; }
     public DateTimeOffset? LastUpdated { get; private set; }
@@ -150,13 +163,35 @@ public sealed class UsageMonitor : IDisposable
             statusTask = PollServiceStatusAsync(token);
 
             var credResult = _credentialReader.Read();
-            if (!credResult.IsSuccess)
+            OAuthCredential credential;
+            if (credResult.IsSuccess)
+            {
+                credential = AdoptPendingWriteBack(credResult.Credential!);
+            }
+            else if (_pendingWriteBack is not null)
+            {
+                // The same lock that failed the write-back can fail this read (issue #192):
+                // while a pending lineage exists, the in-memory credential is the live one —
+                // serve the poll from it rather than flapping to auth-error. The retry write
+                // needs the file readable again anyway, so it just waits for a later poll.
+                if (!_pendingEpisodeLogged)
+                {
+                    _logger?.Warn("Credentials file unreadable; continuing on the refreshed sign-in held in memory.");
+                    _pendingEpisodeLogged = true;
+                }
+
+                credential = _pendingWriteBack;
+            }
+            else
             {
                 SetError(credResult.Error!, MonitorStatus.AuthError);
                 return;
             }
-
-            var credential = credResult.Credential!;
+            // The refresh token the file itself holds this poll — what WriteBack must compare
+            // against. Distinct from credential.RefreshToken while a write-back is pending:
+            // refreshes then run off the in-memory lineage, but the file still holds the
+            // older token it will be updated from.
+            var diskRefreshToken = _pendingDiskToken ?? credential.RefreshToken;
             var canRefresh = _tokenRefresher is not null && credential.HasRefreshToken;
             var refreshedThisPoll = false;
 
@@ -166,7 +201,7 @@ public sealed class UsageMonitor : IDisposable
             {
                 if (canRefresh)
                 {
-                    var (refreshed, outcome) = await TryRefreshAsync(credential, token);
+                    var (refreshed, outcome) = await TryRefreshAsync(credential, diskRefreshToken, token);
                     switch (outcome)
                     {
                         case RefreshOutcome.Refreshed:
@@ -199,7 +234,7 @@ public sealed class UsageMonitor : IDisposable
             // server rejected it. Refresh once and retry before giving up.
             if (apiResult.IsAuthError && !refreshedThisPoll && canRefresh)
             {
-                var (refreshed, outcome) = await TryRefreshAsync(credential, token);
+                var (refreshed, outcome) = await TryRefreshAsync(credential, diskRefreshToken, token);
                 switch (outcome)
                 {
                     case RefreshOutcome.Refreshed:
@@ -335,29 +370,40 @@ public sealed class UsageMonitor : IDisposable
     /// refresh token are present), writing a successful result back to the
     /// credentials file so the CLI/extension benefit too. Returns the (possibly
     /// new) credential and a classified outcome.
+    /// <para>
+    /// <paramref name="diskRefreshToken"/> is the refresh token the file held when this
+    /// poll read it — not necessarily the one being refreshed from, since a pending
+    /// failed write-back means refreshing from the in-memory lineage while the file
+    /// still holds its consumed ancestor. WriteBack compares against the file's actual
+    /// content, so this is the token that keeps the no-clobber guard honest.
+    /// </para>
     /// </summary>
     private async Task<(OAuthCredential? Credential, RefreshOutcome Outcome)> TryRefreshAsync(
-        OAuthCredential credential, CancellationToken token)
+        OAuthCredential credential, string? diskRefreshToken, CancellationToken token)
     {
         _logger?.Info("Access token expired or near expiry — attempting refresh.");
         var result = await _tokenRefresher!.RefreshAsync(credential, token);
 
         if (result.IsSuccess)
         {
-            // Pass the token we refreshed from so WriteBack can detect (and not clobber) a token the
-            // CLI/extension rotated in the meantime. The refreshed token still serves this poll from
-            // memory regardless of whether it persisted.
-            var outcome = _credentialReader.WriteBack(result.Credential!, credential.RefreshToken);
+            // The refreshed token still serves this poll from memory regardless of whether it
+            // persisted — but persisting is not optional: the refresh consumed the previous
+            // token, so until the write lands the file holds a dead one (issue #192).
+            var outcome = _credentialReader.WriteBack(result.Credential!, diskRefreshToken);
             switch (outcome)
             {
                 case WriteBackOutcome.Written:
                     _logger?.Info("Access token refreshed.");
+                    ClearPendingWriteBack();
                     break;
                 case WriteBackOutcome.SupersededByAnotherClient:
                     _logger?.Info("Access token refreshed; another client already rotated the on-disk token, so left it in place.");
+                    ClearPendingWriteBack();
                     break;
                 case WriteBackOutcome.Failed:
-                    _logger?.Warn("Access token refreshed but could not be written back to the credentials file.");
+                    _logger?.Warn("Access token refreshed but could not be written back to the credentials file — keeping it in memory and retrying next poll.");
+                    _pendingWriteBack = result.Credential;
+                    _pendingDiskToken = diskRefreshToken;
                     break;
             }
 
@@ -370,6 +416,58 @@ public sealed class UsageMonitor : IDisposable
             _logger?.Warn($"Token refresh failed (transient): {result.Error}");
 
         return (null, result.IsSignInExpired ? RefreshOutcome.SignInExpired : RefreshOutcome.Transient);
+    }
+
+    /// <summary>
+    /// Reconciles the freshly-read on-disk credential with a pending failed write-back
+    /// (issue #192). While the file still holds exactly the token our refresh consumed, the
+    /// on-disk lineage is dead — re-adopting it would sign every client out — so the
+    /// in-memory credential serves the poll and the write is retried until it lands. The
+    /// moment the file holds anything else (the retry landed, or the user signed in afresh),
+    /// the file wins again.
+    /// </summary>
+    private OAuthCredential AdoptPendingWriteBack(OAuthCredential disk)
+    {
+        if (_pendingWriteBack is null)
+            return disk;
+
+        if (disk.RefreshToken != _pendingDiskToken)
+        {
+            ClearPendingWriteBack();
+            return disk;
+        }
+
+        var pending = _pendingWriteBack;
+        switch (_credentialReader.WriteBack(pending, _pendingDiskToken))
+        {
+            case WriteBackOutcome.Written:
+                _logger?.Info("Refreshed sign-in written back to the credentials file after an earlier failure.");
+                ClearPendingWriteBack();
+                break;
+            case WriteBackOutcome.SupersededByAnotherClient:
+                // A new lineage landed between the read and this write: the file wins from
+                // the next poll on; the in-memory token still validly serves this one.
+                _logger?.Info("Pending refreshed sign-in superseded on disk by another client.");
+                ClearPendingWriteBack();
+                break;
+            case WriteBackOutcome.Failed:
+                if (!_pendingEpisodeLogged)
+                {
+                    _logger?.Warn("Credentials file still holds the superseded refresh token and could not be updated; using the refreshed sign-in from memory and retrying every poll.");
+                    _pendingEpisodeLogged = true;
+                }
+
+                break;
+        }
+
+        return pending;
+    }
+
+    private void ClearPendingWriteBack()
+    {
+        _pendingWriteBack = null;
+        _pendingDiskToken = null;
+        _pendingEpisodeLogged = false;
     }
 
     private enum RefreshOutcome

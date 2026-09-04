@@ -1135,6 +1135,225 @@ public class UsageMonitorTests : IDisposable
         Assert.Contains("could not be written back", log);
     }
 
+    // --- Failed write-back recovery: the pending in-memory lineage (issue #192) ---
+
+    private static void SetReadOnly(string path, bool readOnly)
+    {
+        var attrs = File.GetAttributes(path);
+        File.SetAttributes(path, readOnly ? attrs | FileAttributes.ReadOnly : attrs & ~FileAttributes.ReadOnly);
+    }
+
+    [Fact]
+    public async Task RefreshNow_WriteBackFails_NextPollKeepsTheRefreshedLineage()
+    {
+        // Refresh tokens rotate: poll 1's refresh consumed the on-disk token. If the failed
+        // write-back were forgotten, poll 2 would re-read the dead token, present it to the
+        // endpoint, and get invalid_grant — signing every client out (issue #192). The
+        // in-memory lineage must carry across polls instead.
+        var credPath = WriteExpiredCredentialFile();
+        var handler = new RotatingTokenHttpHandler(UsageBody, "valid-refresh");
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher);
+
+        SetReadOnly(credPath, true);
+        try
+        {
+            await monitor.RefreshNowAsync(); // refresh succeeds, write-back fails
+            await monitor.RefreshNowAsync(); // must run on the in-memory token, not re-refresh
+
+            Assert.Equal(MonitorStatus.Connected, monitor.Status);
+            Assert.Equal("access-gen1", handler.LastUsageToken);
+            // The consumed on-disk token was never presented to the endpoint again.
+            Assert.Equal(1, handler.TokenCallCount);
+        }
+        finally
+        {
+            SetReadOnly(credPath, false);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshNow_WriteBackRetrySucceeds_DiskConvergesToTheLiveLineage()
+    {
+        var credPath = WriteExpiredCredentialFile();
+        var logger = new Logger(Path.Combine(_tempDir, "retry-logs"));
+        var handler = new RotatingTokenHttpHandler(UsageBody, "valid-refresh");
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher, logger);
+
+        SetReadOnly(credPath, true);
+        try { await monitor.RefreshNowAsync(); } // refresh lands in memory only
+        finally { SetReadOnly(credPath, false); }
+
+        await monitor.RefreshNowAsync(); // the retry writes the rotated tokens to disk
+
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+        var raw = File.ReadAllText(credPath);
+        Assert.Contains("access-gen1", raw);
+        Assert.Contains("refresh-gen1", raw);
+        Assert.Equal(1, handler.TokenCallCount);
+        Assert.Contains("after an earlier failure", File.ReadAllText(logger.FilePath));
+
+        // And polling resumes off the (now current) file without another refresh.
+        await monitor.RefreshNowAsync();
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+        Assert.Equal(1, handler.TokenCallCount);
+    }
+
+    [Fact]
+    public async Task RefreshNow_FreshSignInWhileWriteBackPending_TheFileWins()
+    {
+        var credPath = WriteExpiredCredentialFile();
+        var handler = new RotatingTokenHttpHandler(UsageBody, "valid-refresh");
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher);
+
+        SetReadOnly(credPath, true);
+        try { await monitor.RefreshNowAsync(); } // pending lineage established
+        finally { SetReadOnly(credPath, false); }
+
+        // The user ran `claude` and signed in afresh: a brand-new lineage on disk.
+        File.WriteAllText(credPath, """
+        {
+            "claudeAiOauth": {
+                "accessToken": "relogin-access",
+                "refreshToken": "relogin-refresh",
+                "expiresAt": 9999999999999
+            }
+        }
+        """);
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+        Assert.Equal("relogin-access", handler.LastUsageToken);
+        // The fresh sign-in is untouched — the stale pending lineage did not clobber it.
+        var raw = File.ReadAllText(credPath);
+        Assert.Contains("relogin-refresh", raw);
+        Assert.DoesNotContain("refresh-gen1", raw);
+    }
+
+    [Fact]
+    public async Task RefreshNow_SecondRefreshWhileWriteBackPending_KeepsTheDiskAnchor()
+    {
+        // While the file is stuck holding the original token, the in-memory lineage rotates
+        // again (short-lived gen1 → gen2). The write-back must still compare against what the
+        // file actually holds — or it would misread its own retry as another client's
+        // rotation, drop the live lineage, and strand the user at the dead on-disk token.
+        var credPath = WriteExpiredCredentialFile();
+        var handler = new RotatingTokenHttpHandler(UsageBody, "valid-refresh") { ExpiresIn = 30 };
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher);
+
+        SetReadOnly(credPath, true);
+        try
+        {
+            await monitor.RefreshNowAsync(); // gen1 issued, write fails
+            await monitor.RefreshNowAsync(); // gen1 near expiry → gen2 issued, write still fails
+            Assert.Equal(MonitorStatus.Connected, monitor.Status);
+            Assert.Equal("access-gen2", handler.LastUsageToken);
+        }
+        finally
+        {
+            SetReadOnly(credPath, false);
+        }
+
+        handler.ExpiresIn = 28800;
+        // The retry lands gen2 on disk; short-lived gen2 then rotates normally off the file.
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+        Assert.Contains("refresh-gen3", File.ReadAllText(credPath));
+        Assert.Equal(3, handler.TokenCallCount);
+    }
+
+    [Fact]
+    public async Task RefreshNow_CredentialsUnreadableWhileWriteBackPending_ServesFromMemory()
+    {
+        // The lock that fails the write-back is likely to fail the read too. While the pending
+        // lineage exists, the in-memory credential is the live one — the poll must run on it
+        // rather than flapping to auth-error over a file we know is stale anyway.
+        var credPath = WriteExpiredCredentialFile();
+        var handler = new RotatingTokenHttpHandler(UsageBody, "valid-refresh");
+        using var apiClient = new ClaudeApiClient(new HttpClient(handler, disposeHandler: false));
+        using var refresher = new TokenRefresher(new HttpClient(handler, disposeHandler: false));
+        using var monitor = new UsageMonitor(
+            new CredentialReader(credPath), apiClient, TimeSpan.FromHours(1), refresher);
+
+        SetReadOnly(credPath, true);
+        try { await monitor.RefreshNowAsync(); } // pending lineage established
+        finally { SetReadOnly(credPath, false); }
+        File.Delete(credPath); // now the file can't even be read
+
+        await monitor.RefreshNowAsync();
+
+        Assert.Equal(MonitorStatus.Connected, monitor.Status);
+        Assert.Equal("access-gen1", handler.LastUsageToken);
+        Assert.Equal(1, handler.TokenCallCount);
+    }
+
+    /// <summary>
+    /// Models the token endpoint's rotation contract (issue #192): each refresh consumes the
+    /// presented refresh token and issues the next generation ("access-genN"/"refresh-genN");
+    /// presenting a consumed or unknown token gets invalid_grant — exactly what strands every
+    /// client when a rotated token is lost. The usage endpoint records its bearer token.
+    /// </summary>
+    private sealed class RotatingTokenHttpHandler : HttpMessageHandler
+    {
+        private readonly string _usageResponse;
+        private string _liveRefreshToken;
+        private int _generation;
+
+        public string? LastUsageToken { get; private set; }
+        public int TokenCallCount { get; private set; }
+        public int ExpiresIn { get; set; } = 28800;
+
+        public RotatingTokenHttpHandler(string usageResponse, string initialRefreshToken)
+        {
+            _usageResponse = usageResponse;
+            _liveRefreshToken = initialRefreshToken;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.Host.Contains("console.anthropic.com"))
+            {
+                TokenCallCount++;
+                var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+                if (!body.Contains($"\"{_liveRefreshToken}\""))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.BadRequest)
+                    {
+                        Content = new StringContent("""{"error":"invalid_grant"}"""),
+                    };
+                }
+
+                _generation++;
+                _liveRefreshToken = $"refresh-gen{_generation}";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        $$"""{"access_token":"access-gen{{_generation}}","refresh_token":"{{_liveRefreshToken}}","expires_in":{{ExpiresIn}}}"""),
+                };
+            }
+
+            LastUsageToken = request.Headers.Authorization?.Parameter;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_usageResponse),
+            };
+        }
+    }
+
     [Fact]
     public async Task RefreshNow_RateLimited_EventCarriesTheLastKnownUsage()
     {

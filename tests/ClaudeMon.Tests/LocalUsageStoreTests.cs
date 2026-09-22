@@ -39,8 +39,18 @@ public class LocalUsageStoreTests : IDisposable
         ["claude-fable-5"] = new(10.0, 50.0, 12.5, 20.0, 1.0),
     });
 
-    private LocalUsageStore Store(PricingTable? pricing = null, string? projectsDir = null) =>
-        new(projectsDir ?? _projectsDir, _cachePath, pricing ?? Pricing(), clock: () => _now);
+    private LocalUsageStore Store(
+        PricingTable? pricing = null,
+        string? projectsDir = null,
+        UsageWarehouse? warehouse = null,
+        DateTimeOffset? now = null,
+        string? cachePath = null) =>
+        new(
+            projectsDir ?? _projectsDir,
+            cachePath ?? _cachePath,
+            pricing ?? Pricing(),
+            clock: () => now ?? _now,
+            warehouse: warehouse);
 
     private static string Line(
         DateTimeOffset timestamp,
@@ -951,5 +961,305 @@ public class LocalUsageStoreTests : IDisposable
         store.ScanOnce();
 
         Assert.Equal(150, store.Snapshot()!.TotalTokens);
+    }
+
+    // ---- Long-term warehouse roll-in and read-through (issue #126) ----
+
+    private UsageWarehouse Warehouse(int retentionDays = 0) =>
+        new(Path.Combine(_tempDir, "warehouse"), () => retentionDays);
+
+    private static DateOnly LocalDay(DateTimeOffset timestamp) =>
+        DateOnly.FromDateTime(timestamp.ToLocalTime().DateTime);
+
+    private static string DayKey(DateTimeOffset timestamp) =>
+        LocalDay(timestamp).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    [Fact]
+    public void ScanOnce_FinalizedDay_IsBankedInTheWarehouse()
+    {
+        var yesterday = _now.AddDays(-1);
+        WriteTranscript("s1.jsonl", Line(yesterday, "msg_1", "req_1", input: 100, output: 0));
+
+        var warehouse = Warehouse();
+        Store(warehouse: warehouse).ScanOnce();
+
+        var day = LocalDay(yesterday);
+        var banked = warehouse.ReadRange(day, day);
+        Assert.Equal(100, banked.Days[DayKey(yesterday)]["proj-a|claude-fable-5"].InputTokens);
+    }
+
+    [Fact]
+    public void ScanOnce_Today_IsNotBankedWhileItIsStillMoving()
+    {
+        WriteTranscript("s1.jsonl", Line(_now.AddMinutes(-30), "msg_1", "req_1", input: 100, output: 0));
+
+        var warehouse = Warehouse();
+        Store(warehouse: warehouse).ScanOnce();
+
+        Assert.True(warehouse.ReadRange(LocalDay(_now), LocalDay(_now)).IsEmpty);
+    }
+
+    [Fact]
+    public void ScanOnce_ReScanOfATruncatedFile_DoesNotDoubleCountInTheWarehouse()
+    {
+        var yesterday = _now.AddDays(-1);
+        // Ids present, so a re-read is caught by the dedupe keys rather than by
+        // the file offset — the same protection the live cells rely on.
+        var entry = Line(yesterday, "msg_1", "req_1", input: 100, output: 0);
+        var path = WriteTranscript("s1.jsonl", entry);
+
+        var warehouse = Warehouse();
+        var store = Store(warehouse: warehouse);
+        store.ScanOnce();
+
+        // Rewrite the file shorter than the recorded offset: the store re-reads
+        // from zero and re-banks the day.
+        File.WriteAllText(path, entry + "\n", Utf8NoBom);
+        store.ScanOnce();
+
+        var day = LocalDay(yesterday);
+        var banked = warehouse.ReadRange(day, day);
+        Assert.Equal(100, banked.Days[DayKey(yesterday)]["proj-a|claude-fable-5"].InputTokens);
+    }
+
+    [Fact]
+    public void ScanOnce_AmendedDay_IsReBankedWithTheNewerTotals()
+    {
+        var yesterday = _now.AddDays(-1);
+        var path = WriteTranscript("s1.jsonl", Line(yesterday, "msg_1", "req_1", input: 100, output: 0));
+
+        var warehouse = Warehouse();
+        var store = Store(warehouse: warehouse);
+        store.ScanOnce();
+
+        File.AppendAllText(path, Line(yesterday.AddHours(1), "msg_2", "req_2", input: 50, output: 0) + "\n");
+        store.ScanOnce();
+
+        var day = LocalDay(yesterday);
+        var banked = warehouse.ReadRange(day, day);
+        Assert.Equal(150, banked.Days[DayKey(yesterday)]["proj-a|claude-fable-5"].InputTokens);
+    }
+
+    // Banks one day ~40 days in the past by running a store whose clock sits back
+    // then — the only honest way to produce a day the live window can no longer
+    // hold, since entries older than the retention are never ingested.
+    private (UsageWarehouse Warehouse, DateOnly Day) BankedHistoricDay(
+        long input = 1000, string project = "proj-a", string? cwd = null)
+    {
+        var back = _now.AddDays(-40);
+        WriteTranscriptTo(project, "old.jsonl", Line(back.AddDays(-1), "msg_old", "req_old", input: input, output: 0, cwd: cwd));
+
+        var warehouse = Warehouse();
+        Store(warehouse: warehouse, now: back, cachePath: Path.Combine(_tempDir, "old-cache.json")).ScanOnce();
+
+        // The transcript must not also be visible to the present-day store, or the
+        // read-through would be indistinguishable from a normal live scan.
+        File.Delete(Path.Combine(_projectsDir, project, "old.jsonl"));
+        return (warehouse, LocalDay(back.AddDays(-1)));
+    }
+
+    [Fact]
+    public void Breakdown_BeyondTheLiveWindow_ReadsThroughToTheWarehouse()
+    {
+        var (warehouse, day) = BankedHistoricDay(input: 1000);
+        WriteTranscript("today.jsonl", Line(_now.AddMinutes(-30), "msg_1", "req_1", input: 100, output: 0));
+
+        var store = Store(warehouse: warehouse);
+        store.ScanOnce();
+
+        // A 30-day timeframe can't see it...
+        Assert.Equal(100, store.Breakdown(BreakdownTimeframe.ThirtyDays)!.Totals.InputTokens);
+
+        // ...but a range that reaches back past the transcript horizon does.
+        var wide = store.Breakdown(day, LocalDay(_now))!;
+        Assert.Equal(1100, wide.Totals.InputTokens);
+        Assert.Equal("claude-fable-5", Assert.Single(wide.ByModel).Key);
+    }
+
+    [Fact]
+    public void CostSeries_BeyondTheLiveWindow_ReadsThroughToTheWarehouse()
+    {
+        var (warehouse, day) = BankedHistoricDay(input: 1000);
+
+        var store = Store(warehouse: warehouse);
+        store.ScanOnce();
+
+        var series = store.CostSeries(day, LocalDay(_now))!;
+        // $10/MTok input × 1000 tokens.
+        Assert.Equal(0.01, series.TotalCostUsd, precision: 10);
+        Assert.Equal(0.01, series.Days.Single(d => d.Date == day).CostUsd, precision: 10);
+        // Still dense: every day from the banked one (41 days back) to today,
+        // inclusive, has a point — days with no usage read $0.
+        Assert.Equal(42, series.Days.Count);
+        Assert.Equal(41, series.Days.Count(d => d.CostUsd == 0.0));
+    }
+
+    [Fact]
+    public void Breakdown_BeyondTheLiveWindow_ResolvesProjectPathsFromTheWarehouse()
+    {
+        var (warehouse, day) = BankedHistoricDay(cwd: @"C:\Projects\Old");
+
+        var store = Store(warehouse: warehouse);
+        store.ScanOnce();
+
+        var wide = store.Breakdown(day, LocalDay(_now))!;
+        // The live map forgot proj-a when its last live day aged out; the
+        // warehouse still knows where it lived.
+        Assert.Equal(@"C:\Projects\Old", Assert.Single(wide.ByProject).DisplayName);
+    }
+
+    [Fact]
+    public void Breakdown_InsideTheLiveWindow_PrefersLiveCellsOverTheWarehouse()
+    {
+        var yesterday = _now.AddDays(-1);
+        var path = WriteTranscript("s1.jsonl", Line(yesterday, "msg_1", "req_1", input: 100, output: 0));
+
+        var warehouse = Warehouse();
+        var store = Store(warehouse: warehouse);
+        store.ScanOnce();
+
+        // More usage lands for the same day, but nothing banks it yet.
+        File.AppendAllText(path, Line(yesterday.AddHours(1), "msg_2", "req_2", input: 50, output: 0) + "\n");
+        var fresh = Store(warehouse: warehouse);
+        fresh.ScanOnce();
+
+        Assert.Equal(150, fresh.Breakdown(LocalDay(yesterday), LocalDay(_now))!.Totals.InputTokens);
+    }
+
+    [Fact]
+    public void ScanOnce_NeverErasesABankedDayTheLiveWindowHasLost()
+    {
+        var (warehouse, day) = BankedHistoricDay(input: 1000);
+
+        // A present-day store that has never seen that day scans repeatedly.
+        var store = Store(warehouse: warehouse);
+        store.ScanOnce();
+        store.ScanOnce();
+
+        Assert.Equal(1000, warehouse.ReadRange(day, day).Days.Single().Value.Single().Value.InputTokens);
+    }
+
+    [Fact]
+    public void TokensByModel_DoesNotReadThroughToTheWarehouse()
+    {
+        var (warehouse, _) = BankedHistoricDay(input: 1000);
+        WriteTranscript("today.jsonl", Line(_now.AddMinutes(-30), "msg_1", "req_1", input: 100, output: 0));
+
+        var store = Store(warehouse: warehouse);
+        store.ScanOnce();
+
+        // The limit log takes deltas of these totals between polls, so the
+        // banked back catalogue must never appear as freshly burned tokens.
+        Assert.Equal(100, store.TokensByModel()!["claude-fable-5"].InputTokens);
+    }
+
+    // A warehouse whose month file is a foreign version: every write is refused,
+    // deterministically, which is exactly the case that used to destroy days.
+    private UsageWarehouse UnwritableWarehouse(DateTimeOffset day)
+    {
+        var dir = Path.Combine(_tempDir, "warehouse");
+        Directory.CreateDirectory(dir);
+        var monthKey = LocalDay(day).ToString("yyyy-MM", CultureInfo.InvariantCulture);
+        File.WriteAllText(Path.Combine(dir, $"usage-{monthKey}.json"), "{\"v\":99,\"days\":{},\"projects\":{}}");
+        return Warehouse();
+    }
+
+    [Fact]
+    public void ScanOnce_FailedRollIn_LeavesTheDayPendingAndRetries()
+    {
+        var yesterday = _now.AddDays(-1);
+        WriteTranscript("s1.jsonl", Line(yesterday, "msg_1", "req_1", input: 100, output: 0));
+
+        var warehouse = UnwritableWarehouse(yesterday);
+        var store = Store(warehouse: warehouse);
+        store.ScanOnce();
+        Assert.True(warehouse.ReadRange(LocalDay(yesterday), LocalDay(yesterday)).IsEmpty);
+
+        // Repair the warehouse. The reopened store loads the cache, so the file
+        // offsets suppress any re-read of the transcript — the day lands purely
+        // because it was still pending, which is the point of the test.
+        File.Delete(Path.Combine(_tempDir, "warehouse",
+            $"usage-{LocalDay(yesterday).ToString("yyyy-MM", CultureInfo.InvariantCulture)}.json"));
+        var repaired = Warehouse();
+        var reopened = Store(warehouse: repaired);
+        reopened.Load();
+        reopened.ScanOnce();
+
+        Assert.Equal(
+            100,
+            repaired.ReadRange(LocalDay(yesterday), LocalDay(yesterday))
+                .Days[DayKey(yesterday)]["proj-a|claude-fable-5"].InputTokens);
+    }
+
+    [Fact]
+    public void ScanOnce_DayAgingOutBeforeItIsBanked_SurvivesInTheCache()
+    {
+        var day = _now.AddDays(-29);
+        WriteTranscript("s1.jsonl", Line(day, "msg_1", "req_1", input: 700, output: 0));
+
+        // Scanned while the day is inside the window, but the warehouse refuses.
+        var store = Store(warehouse: UnwritableWarehouse(day));
+        store.ScanOnce();
+
+        // Two days later that day is past the transcript horizon: the live cells
+        // drop it, and the transcript would no longer be ingested either. The
+        // warehouse is still refusing writes, so nothing has banked it.
+        var later = _now.AddDays(2);
+        var reloaded = Store(warehouse: UnwritableWarehouse(day), now: later);
+        reloaded.Load();
+        reloaded.ScanOnce();
+        Assert.Equal(0, reloaded.Breakdown(BreakdownTimeframe.ThirtyDays)!.Totals.InputTokens);
+
+        // It was carried through the prune (and through the restart, via the
+        // cache), so a working warehouse still gets it.
+        Directory.Delete(Path.Combine(_tempDir, "warehouse"), true);
+        var repaired = Warehouse();
+        var banking = Store(warehouse: repaired, now: later);
+        banking.Load();
+        banking.ScanOnce();
+
+        Assert.Equal(
+            700,
+            repaired.ReadRange(LocalDay(day), LocalDay(day))
+                .Days[DayKey(day)]["proj-a|claude-fable-5"].InputTokens);
+    }
+
+    [Fact]
+    public void ScanOnce_CarriedDay_KeepsItsProjectPathUntilItIsBanked()
+    {
+        var day = _now.AddDays(-29);
+        WriteTranscript("s1.jsonl",
+            Line(day, "msg_1", "req_1", input: 700, output: 0, cwd: @"C:\Projects\Old"));
+        Store(warehouse: UnwritableWarehouse(day)).ScanOnce();
+
+        // The day ages out while the warehouse is still refusing it, so only the
+        // carried copy remains — and the learned path has to survive with it.
+        var later = _now.AddDays(2);
+        var aging = Store(warehouse: UnwritableWarehouse(day), now: later);
+        aging.Load();
+        aging.ScanOnce();
+
+        // A fresh process (cache only) with a working warehouse finally banks it.
+        Directory.Delete(Path.Combine(_tempDir, "warehouse"), true);
+        var repaired = Warehouse();
+        var banking = Store(warehouse: repaired, now: later);
+        banking.Load();
+        banking.ScanOnce();
+
+        Assert.Equal(
+            @"C:\Projects\Old",
+            repaired.ReadRange(LocalDay(day), LocalDay(day)).ProjectPaths["proj-a"]);
+    }
+
+    [Fact]
+    public void ScanOnce_WithoutAWarehouse_BehavesExactlyAsBefore()
+    {
+        WriteTranscript("s1.jsonl", Line(_now.AddDays(-1), "msg_1", "req_1", input: 100, output: 0));
+
+        var store = Store();
+        store.ScanOnce();
+
+        Assert.Equal(100, store.Breakdown(BreakdownTimeframe.ThirtyDays)!.Totals.InputTokens);
+        Assert.False(Directory.Exists(Path.Combine(_tempDir, "warehouse")));
     }
 }

@@ -93,8 +93,14 @@ public sealed class TrayApplication : IDisposable
 
         // Local cost estimates from the Claude Code transcripts (issue #73).
         // Active only when ~/.claude/projects exists; degrades silently otherwise.
+        // Finalized days are banked in the warehouse (issue #126) so cost history
+        // outlives Claude Code's ~30-day transcript purge; retention is read live
+        // from settings (0 = unlimited), so a hand-edited value applies at the
+        // next roll-in without a restart.
+        var warehouse = new UsageWarehouse(
+            retentionDays: () => _configManager.Settings.WarehouseRetentionDays, logger: _logger);
         var localUsageStore = new LocalUsageStore(
-            pricing: PricingTable.LoadEmbedded(_logger), logger: _logger);
+            pricing: PricingTable.LoadEmbedded(_logger), logger: _logger, warehouse: warehouse);
         localUsageStore.Load();
         _localUsage = new LocalUsageMonitor(localUsageStore, _logger);
         // Budget alerts (issue #74) re-evaluate after every transcript scan.

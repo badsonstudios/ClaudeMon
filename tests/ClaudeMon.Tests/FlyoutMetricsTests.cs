@@ -199,9 +199,21 @@ public class FlyoutMetricsTests
         var m = FlyoutMetrics.ForDpi(96);
 
         var without = m.ContentSize(false, usageRows: 2, hasForecast: true, hasHistory: true).Height;
-        var with = m.ContentSize(false, usageRows: 2, hasForecast: true, hasHistory: true, hasLocalCost: true).Height;
+        var with = m.ContentSize(false, usageRows: 2, hasForecast: true, hasHistory: true, localCostLines: 1).Height;
 
         Assert.Equal(m.LocalCostGap + m.LocalCostHeight, with - without);
+    }
+
+    [Fact]
+    public void ContentSize_LocalCostLines_AddOneBandEach()
+    {
+        // The flat-plan framing (issue #202) can draw up to three local usage lines.
+        var m = FlyoutMetrics.ForDpi(96);
+
+        var one = m.ContentSize(false, usageRows: 2, hasForecast: true, localCostLines: 1).Height;
+        var three = m.ContentSize(false, usageRows: 2, hasForecast: true, localCostLines: 3).Height;
+
+        Assert.Equal(2 * (m.LocalCostGap + m.LocalCostHeight), three - one);
     }
 
     [Fact]
@@ -210,7 +222,7 @@ public class FlyoutMetricsTests
         var m = FlyoutMetrics.ForDpi(96);
 
         var without = m.ContentSize(isAuthError: true, 0).Height;
-        var with = m.ContentSize(isAuthError: true, 0, hasLocalCost: true).Height;
+        var with = m.ContentSize(isAuthError: true, 0, localCostLines: 2).Height;
 
         Assert.Equal(without, with);
     }

@@ -303,6 +303,82 @@ public class LocalUsageStoreTests : IDisposable
         var snap = store.Snapshot();
         Assert.NotNull(snap);
         Assert.Null(snap.BurnRateUsdPerHour);
+        Assert.Null(snap.BurnRateTokensPerHour);
+    }
+
+    [Fact]
+    public void Snapshot_TokenBurnRate_FromRecentWindow()
+    {
+        // 1M tokens 10 minutes ago in the 30-minute window → 2M tok/hr, the token twin of
+        // the $/hr figure (issue #202) — same samples, same window.
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddMinutes(-10), "msg_1", "req_1", input: 0, output: 1_000_000));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var snap = store.Snapshot();
+        Assert.NotNull(snap);
+        Assert.NotNull(snap.BurnRateTokensPerHour);
+        Assert.Equal(2_000_000.0, snap.BurnRateTokensPerHour.Value, precision: 6);
+    }
+
+    [Fact]
+    public void Snapshot_CacheReadBurnRate_TracksTheCacheReadShare()
+    {
+        // 100K fresh + 600K cache-read tokens 10 minutes ago: raw rate counts all 700K
+        // (1.4M tok/hr); the cache-read share (1.2M/hr) rides alongside so the flat-plan
+        // projection can discount it (issue #202).
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddMinutes(-10), "msg_1", "req_1", input: 0, output: 100_000, cacheRead: 600_000));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var snap = store.Snapshot();
+        Assert.NotNull(snap);
+        Assert.Equal(1_400_000.0, snap.BurnRateTokensPerHour!.Value, precision: 6);
+        Assert.Equal(1_200_000.0, snap.BurnRateCacheReadTokensPerHour!.Value, precision: 6);
+    }
+
+    [Fact]
+    public void MonthToDate_SumsTheCalendarMonth()
+    {
+        // Two days this month (100 in + 200 out = $11 each with the test pricing), one day
+        // last month — only the current month's days count. _now is noon on day ≥ 1; place
+        // the second entry on the 1st so the test holds on any date.
+        var monthStart = new DateOnly(_now.Year, _now.Month, 1);
+        var firstOfMonth = new DateTimeOffset(monthStart.ToDateTime(new TimeOnly(12, 0)));
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddMinutes(-90), "msg_1", "req_1", input: 100, output: 200),
+            Line(firstOfMonth, "msg_2", "req_2", input: 100, output: 200),
+            Line(firstOfMonth.AddDays(-1), "msg_3", "req_3", input: 100, output: 200));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var month = store.MonthToDate();
+        Assert.NotNull(month);
+        Assert.Equal(monthStart, month.MonthStart);
+        // $11 per in-month entry: 100 × $10/MTok + 200 × $50/MTok = $0.011 → two entries.
+        // On the 1st both in-month entries share the day; the sum is the same either way.
+        Assert.Equal(0.022, month.CostUsd, precision: 6);
+        Assert.False(month.HasUnpricedModels);
+    }
+
+    [Fact]
+    public void MonthToDate_FlagsUnpricedModels()
+    {
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddMinutes(-90), "msg_1", "req_1", input: 100, output: 200),
+            Line(_now.AddMinutes(-80), "msg_2", "req_2", model: "unknown-model"));
+
+        var store = Store();
+        store.ScanOnce();
+
+        var month = store.MonthToDate();
+        Assert.NotNull(month);
+        Assert.True(month.HasUnpricedModels);
     }
 
     [Fact]

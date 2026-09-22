@@ -20,8 +20,9 @@ public sealed class FlyoutPanel : Form
     private IReadOnlyList<double> _history = Array.Empty<double>();
     private TimeToLimitEstimate _timeToLimit;
     private UsageColorMode _colorMode = UsageColorMode.Pace;
-    // Composed once per data update; null = no local cost data, line not drawn.
-    private string? _localCostLine;
+    // Composed once per data update; empty = no local usage data, nothing drawn. One
+    // $-centric line, or up to three flat-plan lines (issue #202) — same band either way.
+    private IReadOnlyList<string> _localUsageLines = Array.Empty<string>();
     private IReadOnlyList<string> _capacityLines = Array.Empty<string>();
     // The Anthropic service-status line: null = healthy or unknown, so nothing is drawn.
     private string? _serviceStatusLine;
@@ -112,7 +113,11 @@ public sealed class FlyoutPanel : Form
         UsageColorMode colorMode = UsageColorMode.Pace,
         LocalUsageSnapshot? localUsage = null,
         ServiceStatus? serviceStatus = null,
-        IReadOnlyList<ImpliedCapacity>? capacities = null)
+        IReadOnlyList<ImpliedCapacity>? capacities = null,
+        LocalMonthTotals? monthToDate = null,
+        UsageLineMode usageLineMode = UsageLineMode.Auto,
+        ClaudePlan? plan = null,
+        double planMonthlyUsd = 0)
     {
         _usage = usage;
         _rows = usage is null ? Array.Empty<LimitRow>() : LimitDisplay.BuildRows(usage);
@@ -121,7 +126,11 @@ public sealed class FlyoutPanel : Form
         _history = history ?? Array.Empty<double>();
         _timeToLimit = timeToLimit;
         _colorMode = colorMode;
-        _localCostLine = LocalCostText.Compose(localUsage);
+        _localUsageLines = PlanUsageText.UseFlatPlanLines(usageLineMode, plan)
+            ? PlanUsageText.Compose(localUsage, monthToDate, capacities, usage, planMonthlyUsd)
+            : LocalCostText.Compose(localUsage) is { } costLine
+                ? [costLine]
+                : Array.Empty<string>();
         _capacityLines = CapacityReadoutText.Compose(capacities, usage);
         _serviceStatusLine = ServiceStatusText.Compose(serviceStatus);
         _serviceStatusLevel = serviceStatus?.Level ?? ServiceStatusLevel.Operational;
@@ -141,7 +150,7 @@ public sealed class FlyoutPanel : Form
             _rows.Count,
             hasForecast: _usage?.FiveHour is not null,
             hasHistory: HasHistory,
-            hasLocalCost: _localCostLine is not null,
+            localCostLines: _localUsageLines.Count,
             hasServiceStatus: _serviceStatusLine is not null,
             capacityLines: _capacityLines.Count);
 
@@ -333,12 +342,13 @@ public sealed class FlyoutPanel : Form
                 y += m.ForecastHeight;
             }
 
-            // Local cost estimate from the Claude Code transcripts — secondary
-            // info, so it draws dim like the status line.
-            if (_localCostLine is not null)
+            // Local usage estimate from the Claude Code transcripts — the $-centric line, or
+            // the flat-plan lines (issue #202). Secondary info, so it draws dim like the
+            // status line.
+            foreach (var line in _localUsageLines)
             {
                 y += m.LocalCostGap;
-                g.DrawString(_localCostLine, labelFont, dimBrush, left, y);
+                g.DrawString(line, labelFont, dimBrush, left, y);
                 y += m.LocalCostHeight;
             }
 

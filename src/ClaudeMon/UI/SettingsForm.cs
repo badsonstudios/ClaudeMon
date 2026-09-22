@@ -3,6 +3,7 @@ namespace ClaudeMon.UI;
 using System.Drawing;
 using ClaudeMon.Configuration;
 using ClaudeMon.Models;
+using ClaudeMon.Monitoring;
 
 /// <summary>
 /// The settings dialog: a <see cref="TabStrip"/> (General / Alerts / Taskbar / Updates) over a
@@ -31,6 +32,8 @@ public sealed class SettingsForm : Form
     private readonly TabStrip _tabStrip;
     private readonly ComboBox _pollIntervalCombo;
     private readonly ComboBox _planCombo;
+    private readonly ComboBox _usageLineCombo;
+    private readonly NumericUpDown _planPriceNumeric;
     private readonly ToggleSwitch _notificationsToggle;
     private readonly ToggleSwitch _paceAlertsToggle;
     private readonly ComboBox _paceSensitivityCombo;
@@ -126,6 +129,15 @@ public sealed class SettingsForm : Form
         ("Max 20x", ClaudePlan.Max20x),
     ];
 
+    // How the flyout's local-usage line is framed (issue #202). Auto follows the plan
+    // combo above: a stated plan (all flat-fee) gets the limits/value framing.
+    private static readonly (string Text, UsageLineMode Value)[] UsageLineOptions =
+    [
+        ("Automatic — follows plan", UsageLineMode.Auto),
+        ("Cost ($ estimate)", UsageLineMode.Cost),
+        ("Plan limits & value", UsageLineMode.FlatPlan),
+    ];
+
     private static readonly (string Text, TaskbarStyle Value)[] StyleOptions =
     [
         // The composition (session/weekly/countdown) is described by the display toggles below.
@@ -198,6 +210,14 @@ public sealed class SettingsForm : Form
         _pollIntervalCombo = AddComboRow("Check usage every", ["2 minutes", "3 minutes", "5 minutes", "10 minutes"]);
         // Context for the limit log's window records (issue #184) — never a budget source.
         _planCombo = AddComboRow("Claude plan", PlanOptions.Select(o => o.Text));
+        // The flyout's usage-line framing (issue #202); the price row only matters when the
+        // flat-plan framing is in effect, so it collapses with it.
+        _usageLineCombo = AddComboRow("Flyout usage line", UsageLineOptions.Select(o => o.Text));
+        bool FlatLineShown() => PlanUsageText.UseFlatPlanLines(
+            SelectedOption(_usageLineCombo, UsageLineOptions),
+            SelectedOption(_planCombo, PlanOptions));
+        _planPriceNumeric = AddNumericRow("Plan price per month (0 = no multiple)", 0, 2000,
+            indent: true, visible: FlatLineShown, suffix: "USD");
 
         // --- Alerts tab ---
         _currentTab = 1;
@@ -526,6 +546,11 @@ public sealed class SettingsForm : Form
         _tabStrip.SelectedIndexChanged += (_, _) => RelayoutLive(preserveScroll: false);
 
         // Collapse/expand on the gating toggles; some also live-preview the taskbar appearance.
+        // The plan-price row's visibility follows both the usage-line mode and (in Auto) the
+        // plan combo, so a change to either re-fits the tab.
+        _usageLineCombo.SelectedIndexChanged += (_, _) => RelayoutLive();
+        _planCombo.SelectedIndexChanged += (_, _) => RelayoutLive();
+
         _notificationsToggle.CheckedChanged += (_, _) => RelayoutLive();
         _checkForUpdatesToggle.CheckedChanged += (_, _) => RelayoutLive();
         _paceAlertsToggle.CheckedChanged += (_, _) => RelayoutLive();
@@ -656,6 +681,8 @@ public sealed class SettingsForm : Form
         };
 
         SelectOption(_planCombo, PlanOptions, settings.Plan);
+        SelectOption(_usageLineCombo, UsageLineOptions, settings.UsageLineMode);
+        _planPriceNumeric.Value = ClampToRange(_planPriceNumeric, settings.PlanMonthlyUsd);
 
         _notificationsToggle.Checked = settings.Notifications.Enabled;
         _paceAlertsToggle.Checked = settings.AlertThresholds.PaceAlertsEnabled;
@@ -734,6 +761,8 @@ public sealed class SettingsForm : Form
         {
             PollIntervalMinutes = pollMinutes,
             Plan = SelectedOption(_planCombo, PlanOptions),
+            UsageLineMode = SelectedOption(_usageLineCombo, UsageLineOptions),
+            PlanMonthlyUsd = (double)_planPriceNumeric.Value,
             // `with` on the existing record, not `new` — for the same reason as TaskbarDisplay
             // and Notifications below: every AlertThresholds field has a control today, so a
             // reconstruction loses nothing yet, but the first field added without one would be

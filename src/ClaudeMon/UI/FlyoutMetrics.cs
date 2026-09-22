@@ -104,7 +104,7 @@ public sealed class FlyoutMetrics
     /// </summary>
     public Size ContentSize(
         bool isAuthError, int usageRows,
-        bool hasForecast = false, bool hasHistory = false, bool hasLocalCost = false,
+        bool hasForecast = false, bool hasHistory = false, int localCostLines = 0,
         bool hasServiceStatus = false, int capacityLines = 0)
     {
         int body;
@@ -126,9 +126,10 @@ public sealed class FlyoutMetrics
         if (hasForecast && !isAuthError)
             body += ForecastGap + ForecastHeight;
 
-        // The local cost line ("Today: ~$…"), fed from the Claude Code transcripts.
-        if (hasLocalCost && !isAuthError)
-            body += LocalCostGap + LocalCostHeight;
+        // The local usage lines fed from the Claude Code transcripts: one $-centric line
+        // ("Today: ~$…"), or up to three flat-plan lines (issue #202).
+        if (localCostLines > 0 && !isAuthError)
+            body += localCostLines * (LocalCostGap + LocalCostHeight);
 
         // The implied-capacity lines ("5-hour: ≈8.1M of ≈61M tokens (est.)", issue #185) —
         // zero to three, present only when the estimate is confident enough to show.

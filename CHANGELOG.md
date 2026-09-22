@@ -3,6 +3,21 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.28.0] - Unreleased
+
+### Added
+- **Usage history now outlives Claude Code's 30-day transcript purge.** Claude Code deletes its
+  transcripts after about 30 days and ClaudeMon's scanner mirrored that, so cost history
+  silently truncated — nothing could ever answer "what did last quarter cost?". Finalized days
+  are now banked into a **usage warehouse** of ClaudeMon's own (`%LocalAppData%\ClaudeMon\usage-warehouse\`,
+  one small JSON file per month, its own format version so cache rebuilds can never cost you
+  days whose transcripts are gone). Re-scans amend a day instead of double-counting it, a day
+  that ages out before the warehouse accepts it is carried — through a restart if need be —
+  rather than lost, and a warehouse file ClaudeMon can't read or recognize is left strictly
+  alone instead of overwritten. Retention defaults to unlimited; `warehouseRetentionDays` in
+  `config.json` caps it. The breakdown queries read through to the warehouse for ranges older
+  than 30 days, so the longer-range views (#68) have their data source waiting for them.
+
 ## [0.27.1] - 2026-09-04
 
 ### Fixed

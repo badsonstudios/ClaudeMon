@@ -1,5 +1,6 @@
 namespace ClaudeMon.Models;
 
+using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 
 /// <summary>
@@ -80,6 +81,64 @@ public record LocalUsageCacheFile
     [JsonPropertyName("projects")] public Dictionary<string, string> ProjectPaths { get; init; } = new();
     [JsonPropertyName("keys")] public Dictionary<string, DateTimeOffset> RecentDedupeKeys { get; init; } = new();
     [JsonPropertyName("recent")] public List<RecentCostSample> RecentCosts { get; init; } = new();
+    // Days that aged out of the window before the warehouse could accept them
+    // (issue #126) — their transcripts are gone, so this is the last copy.
+    // Additive and normally empty: absent in a cache written before it existed
+    // (and ignored by an older build reading a newer cache), so it needs no
+    // version bump — nothing about the fields above changed shape.
+    [JsonPropertyName("unbanked")] public Dictionary<string, Dictionary<string, LocalDayTotals>> UnbankedDays { get; init; } = new();
+}
+
+/// <summary>
+/// One month of the long-term usage warehouse
+/// (%LocalAppData%\ClaudeMon\usage-warehouse\usage-YYYY-MM.json): the same
+/// per-(day, project, model) cells <see cref="LocalUsageCacheFile"/> holds, for
+/// days that have rolled past the scanner's 30-day retention.
+///
+/// <see cref="Version"/> is this file's own schema version, deliberately
+/// independent of <see cref="LocalUsageCacheFile.CurrentVersion"/> — bumping the
+/// scanner's cache format discards a cache that can be rebuilt from the
+/// transcripts, and must never cost warehouse days whose transcripts are gone.
+/// A month written by a future version is skipped on read and left untouched on
+/// disk, never deleted.
+///
+/// <see cref="ProjectPaths"/> is carried per month rather than in one shared
+/// file so each month stands alone: the scanner drops a learned path when its
+/// last live day ages out, so without this a warehoused project would decay to
+/// its raw directory name.
+/// </summary>
+public record UsageWarehouseMonth
+{
+    public const int CurrentVersion = 1;
+
+    // No initializer, for the same reason LocalUsageCacheFile.Version has none:
+    // absent must deserialize as 0 (a foreign file) rather than masquerade as current.
+    [JsonPropertyName("v")] public int Version { get; init; }
+    // day "yyyy-MM-dd" (local) → cell key "project|model" → totals.
+    [JsonPropertyName("days")] public Dictionary<string, Dictionary<string, LocalDayTotals>> Days { get; init; } = new();
+    // project dir name under ~/.claude/projects → real cwd path, for the projects in this month.
+    [JsonPropertyName("projects")] public Dictionary<string, string> ProjectPaths { get; init; } = new();
+}
+
+/// <summary>
+/// Warehouse cells for a requested date range, plus the learned project paths
+/// that go with them. Days with no warehoused usage are simply absent — callers
+/// fall back to the live cells (or to zero), so this is never dense.
+/// </summary>
+public record UsageWarehouseRange(
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, LocalDayTotals>> Days,
+    IReadOnlyDictionary<string, string> ProjectPaths)
+{
+    /// <summary>
+    /// The shared "nothing here" instance. Genuinely immutable, not just typed
+    /// as read-only: every in-window query is handed this one and none of them
+    /// owns it.
+    /// </summary>
+    public static UsageWarehouseRange Empty { get; } = new(
+        ReadOnlyDictionary<string, IReadOnlyDictionary<string, LocalDayTotals>>.Empty,
+        ReadOnlyDictionary<string, string>.Empty);
+
+    public bool IsEmpty => Days.Count == 0 && ProjectPaths.Count == 0;
 }
 
 /// <summary>

@@ -23,6 +23,11 @@ using ClaudeMon.Models;
 /// Thread-safe: scans run on a timer thread while the UI thread takes
 /// snapshots. When the transcript directory doesn't exist the store degrades
 /// silently — <see cref="Snapshot"/> returns null and the UI omits the line.
+///
+/// Retention is bounded here because the transcripts themselves are: Claude Code
+/// purges them after about 30 days. Given a <see cref="UsageWarehouse"/>, each
+/// day's finalized cells are banked there before they age out, and queries over
+/// a range older than the window read back through it (issue #126).
 /// </summary>
 public sealed class LocalUsageStore
 {
@@ -53,6 +58,7 @@ public sealed class LocalUsageStore
     private readonly PricingTable _pricing;
     private readonly Logger? _logger;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly UsageWarehouse? _warehouse;
     private readonly object _lock = new();
     private bool _scanning;
     private bool _available;
@@ -66,19 +72,38 @@ public sealed class LocalUsageStore
     private readonly Dictionary<string, DateTimeOffset> _recentKeys = new(StringComparer.Ordinal);
     private readonly List<RecentCostSample> _recentCosts = new();
     private readonly HashSet<string> _loggedUnknownModels = new(StringComparer.OrdinalIgnoreCase);
+    // Days whose cells have changed since they were last banked in the warehouse
+    // (issue #126). Only cleared by a successful roll-in, so a failed write is
+    // retried rather than silently dropped, and a day stays pending for as long
+    // as it keeps changing — which is the whole point of only banking finalized days.
+    private readonly HashSet<string> _pendingWarehouseDays = new(StringComparer.Ordinal);
+    // Cells for pending days that have since aged out of the live window without
+    // ever being banked (a locked or damaged warehouse file). Their transcripts
+    // are gone, so this is the last copy — it outlives the prune that dropped
+    // them from _cells, and is persisted so a restart doesn't finish the job.
+    private readonly Dictionary<string, Dictionary<string, LocalDayTotals>> _unbankedDays = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// How many aged-out unbanked days are carried at once. Only a warehouse
+    /// that has been failing for months can approach this; the cap keeps a
+    /// permanently broken one from growing the cache without bound.
+    /// </summary>
+    internal const int MaxUnbankedDays = 90;
 
     public LocalUsageStore(
         string? projectsDir = null,
         string? cachePath = null,
         PricingTable? pricing = null,
         Logger? logger = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        UsageWarehouse? warehouse = null)
     {
         _projectsDir = projectsDir ?? GetDefaultProjectsDir();
         _cachePath = cachePath ?? GetDefaultCachePath();
         _pricing = pricing ?? new PricingTable(new Dictionary<string, ModelPricing>());
         _logger = logger;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _warehouse = warehouse;
         _available = Directory.Exists(_projectsDir);
     }
 
@@ -110,14 +135,31 @@ public sealed class LocalUsageStore
                     return;
                 }
 
-                foreach (var (path, state) in cache.Files) _files[path] = state;
-                foreach (var (day, cells) in cache.Cells)
-                    _cells[day] = new Dictionary<string, LocalDayTotals>(cells, StringComparer.Ordinal);
-                foreach (var (project, cwd) in cache.ProjectPaths) _projectPaths[project] = cwd;
-                foreach (var (key, ts) in cache.RecentDedupeKeys) _recentKeys[key] = ts;
-                _recentCosts.AddRange(cache.RecentCosts);
+                // Null-coalesced throughout: System.Text.Json overwrites the
+                // property initializers with nulls from a hand-edited cache, and
+                // this runs inline on the startup path — an NRE here would cost
+                // the tray icon entirely.
+                foreach (var (path, state) in cache.Files ?? []) _files[path] = state;
+                foreach (var (day, cells) in cache.Cells ?? [])
+                {
+                    _cells[day] = new Dictionary<string, LocalDayTotals>(cells ?? [], StringComparer.Ordinal);
+                    // Every cached day is treated as pending: the warehouse may
+                    // never have seen it (first run after the upgrade that added
+                    // it, or a run that ended before a rollover), and re-banking
+                    // a day it already holds is a no-op by construction.
+                    _pendingWarehouseDays.Add(day);
+                }
+                foreach (var (project, cwd) in cache.ProjectPaths ?? []) _projectPaths[project] = cwd;
+                foreach (var (day, cells) in cache.UnbankedDays ?? [])
+                {
+                    _unbankedDays[day] = new Dictionary<string, LocalDayTotals>(cells ?? [], StringComparer.Ordinal);
+                    _pendingWarehouseDays.Add(day);
+                }
+                foreach (var (key, ts) in cache.RecentDedupeKeys ?? []) _recentKeys[key] = ts;
+                _recentCosts.AddRange(cache.RecentCosts ?? []);
             }
-            catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+            catch (Exception ex) when (
+                ex is IOException or JsonException or UnauthorizedAccessException or ArgumentException)
             {
                 // Corrupt or unreadable cache is non-critical — start fresh and
                 // rebuild the retention window from the transcripts themselves.
@@ -126,6 +168,8 @@ public sealed class LocalUsageStore
                 _projectPaths.Clear();
                 _recentKeys.Clear();
                 _recentCosts.Clear();
+                _pendingWarehouseDays.Clear();
+                _unbankedDays.Clear();
             }
         }
     }
@@ -206,13 +250,29 @@ public sealed class LocalUsageStore
     /// </summary>
     public LocalUsageBreakdown? Breakdown(BreakdownTimeframe timeframe)
     {
+        var (from, to) = RangeOf(timeframe);
+        return Breakdown(from, to);
+    }
+
+    /// <summary>
+    /// The same tables over an explicit local date range, reading through to the
+    /// warehouse for days the live cells no longer cover (issue #126) — the entry
+    /// point a longer-than-30-day view uses (issue #68). Ranges inside the live
+    /// window never touch the warehouse, so the timeframes the UI offers today
+    /// behave exactly as before.
+    /// </summary>
+    internal LocalUsageBreakdown? Breakdown(DateOnly from, DateOnly to)
+    {
+        // Read before taking the lock: the warehouse hits the disk, and this runs
+        // on the UI thread while the scan thread holds the lock.
+        var warehouse = ReadWarehouse(from, to);
+
         lock (_lock)
         {
             if (!_available)
                 return null;
 
-            var (from, to) = RangeOf(timeframe);
-
+            var projectPaths = MergedProjectPathsLocked(warehouse);
             var byModel = new Dictionary<string, BreakdownRow>(StringComparer.OrdinalIgnoreCase);
             var byProject = new Dictionary<string, BreakdownRow>(StringComparer.OrdinalIgnoreCase);
             // Keyed by the whole "project|model" cell key, case-insensitively so
@@ -222,13 +282,14 @@ public sealed class LocalUsageStore
 
             for (var date = from; date <= to; date = date.AddDays(1))
             {
-                if (!_cells.TryGetValue(DayKeyOf(date), out var dayCells))
+                var dayCells = CellsForLocked(DayKeyOf(date), warehouse);
+                if (dayCells is null)
                     continue;
 
                 foreach (var (cellKey, cell) in dayCells)
                 {
                     var (project, model) = SplitCellKey(cellKey);
-                    var display = ProjectDisplay.Resolve(project, _projectPaths);
+                    var display = ProjectDisplay.Resolve(project, projectPaths);
 
                     Fold(byModel, model, model, cell);
                     Fold(byProject, project, display, cell);
@@ -266,19 +327,30 @@ public sealed class LocalUsageStore
     /// </summary>
     public LocalCostSeries? CostSeries(BreakdownTimeframe timeframe)
     {
+        // Same range helper as Breakdown, so the chart and the tables can never
+        // disagree about which days a timeframe covers.
+        var (from, to) = RangeOf(timeframe);
+        return CostSeries(from, to);
+    }
+
+    /// <summary>
+    /// The same series over an explicit local date range, reading through to the
+    /// warehouse for days outside the live window — see
+    /// <see cref="Breakdown(DateOnly, DateOnly)"/>.
+    /// </summary>
+    internal LocalCostSeries? CostSeries(DateOnly from, DateOnly to)
+    {
+        var warehouse = ReadWarehouse(from, to);
+
         lock (_lock)
         {
             if (!_available)
                 return null;
 
-            // Same range helper as Breakdown, so the chart and the tables can never
-            // disagree about which days a timeframe covers.
-            var (from, to) = RangeOf(timeframe);
-
             var days = new List<DailyCost>();
             for (var date = from; date <= to; date = date.AddDays(1))
             {
-                var totals = SumDayLocked(DayKeyOf(date));
+                var totals = SumDayLocked(DayKeyOf(date), warehouse);
                 days.Add(new DailyCost(date, totals.CostUsd, totals.HasUnpricedModels));
             }
 
@@ -287,11 +359,79 @@ public sealed class LocalUsageStore
     }
 
     /// <summary>
+    /// The warehoused cells a range needs, or <see cref="UsageWarehouseRange.Empty"/>
+    /// when there's no warehouse or the range lies entirely inside the live
+    /// window — which is every timeframe the UI offers today, so the hot path
+    /// stays free of file IO.
+    /// </summary>
+    private UsageWarehouseRange ReadWarehouse(DateOnly from, DateOnly to)
+    {
+        if (_warehouse is null)
+            return UsageWarehouseRange.Empty;
+
+        lock (_lock)
+        {
+            // Nothing to read through to when the feature is off — and this is
+            // checked before touching the disk, not after.
+            if (!_available)
+                return UsageWarehouseRange.Empty;
+        }
+
+        var oldestLive = DateOnly.FromDateTime((_clock() - AggregateRetention).ToLocalTime().DateTime);
+        if (from >= oldestLive)
+            return UsageWarehouseRange.Empty;
+
+        // Only the part the live cells can't answer. The boundary day itself is
+        // included rather than excluded: live cells win wherever both have a day
+        // (see CellsForLocked), so the overlap costs nothing — and it means this
+        // boundary and the pruner's, computed at different instants, don't have
+        // to agree to the day for the seam to render — including when a scan
+        // crosses local midnight between this read and the caller taking the lock.
+        var overlap = oldestLive.AddDays(1);
+        return _warehouse.ReadRange(from, overlap < to ? overlap : to);
+    }
+
+    // Caller holds _lock. The live cells for a day, falling back to the
+    // warehouse and then to a carried unbanked day; null when none has it. Live
+    // wins wherever both do — a day still in the window may have been amended
+    // since it was banked.
+    private IReadOnlyDictionary<string, LocalDayTotals>? CellsForLocked(
+        string dayKey, UsageWarehouseRange warehouse)
+    {
+        if (_cells.TryGetValue(dayKey, out var live))
+            return live;
+
+        if (warehouse.Days.TryGetValue(dayKey, out var banked))
+            return banked;
+
+        // A day the warehouse hasn't accepted yet still exists and still cost
+        // money; it would be odd to carry the only copy and then render it $0.
+        return _unbankedDays.TryGetValue(dayKey, out var carried) ? carried : null;
+    }
+
+    // Caller holds _lock. Learned project paths for display, with the warehouse's
+    // filling in the projects the live map has already forgotten.
+    private IReadOnlyDictionary<string, string> MergedProjectPathsLocked(UsageWarehouseRange warehouse)
+    {
+        if (warehouse.ProjectPaths.Count == 0)
+            return _projectPaths;
+
+        var merged = new Dictionary<string, string>(_projectPaths, StringComparer.OrdinalIgnoreCase);
+        foreach (var (project, path) in warehouse.ProjectPaths)
+            merged.TryAdd(project, path);
+        return merged;
+    }
+
+    /// <summary>
     /// Cumulative token totals by (normalized) model across every retained day — the local
     /// half of the correlated limit log's samples (issue #184). Cumulative within the 30-day
     /// retention window, so totals can dip when old days age out; the log's delta math clamps
     /// for that. A read-only re-aggregation of the existing cells — no transcript rescan.
     /// Null when the transcript directory is unavailable.
+    ///
+    /// Deliberately does NOT read through to the warehouse (issue #126): the limit log takes
+    /// deltas of these totals between polls, so widening the window would land the whole back
+    /// catalogue on a single poll as if it had just been burned.
     /// </summary>
     public Dictionary<string, ModelTokens>? TokensByModel()
     {
@@ -342,10 +482,16 @@ public sealed class LocalUsageStore
 
     // Caller holds _lock. One day's cells summed into a flat total (the
     // phase-1 per-day shape the flyout snapshot still consumes).
-    private LocalDayTotals SumDayLocked(string dayKey)
+    private LocalDayTotals SumDayLocked(string dayKey) =>
+        SumDayLocked(dayKey, UsageWarehouseRange.Empty);
+
+    // Caller holds _lock. As above, reading through to the warehouse for days
+    // the live cells no longer cover.
+    private LocalDayTotals SumDayLocked(string dayKey, UsageWarehouseRange warehouse)
     {
         var sum = new LocalDayTotals();
-        if (!_cells.TryGetValue(dayKey, out var dayCells))
+        var dayCells = CellsForLocked(dayKey, warehouse);
+        if (dayCells is null)
             return sum;
 
         foreach (var cell in dayCells.Values)
@@ -469,6 +615,7 @@ public sealed class LocalUsageStore
             }
         }
 
+        WarehouseRollIn? rollIn;
         lock (_lock)
         {
             // Forget offsets for files that no longer exist so the map can't
@@ -481,12 +628,90 @@ public sealed class LocalUsageStore
                 changed = true;
             }
 
+            // Collected before pruning: a day that ages out of the live window
+            // on this very pass gets its last chance to be banked.
+            rollIn = CollectRollInLocked(now);
+
             changed |= PruneLocked(now);
 
             if (changed)
                 Save();
         }
+
+        // Deliberately outside the lock — the warehouse touches the disk, and
+        // the UI thread takes snapshots under this lock every few seconds.
+        RollInToWarehouse(rollIn, now);
     }
+
+    /// <summary>
+    /// Hands finalized days to the warehouse and, on success, stops tracking
+    /// them as pending. Best-effort by construction: a write that doesn't land
+    /// leaves the days pending for the next scan.
+    /// </summary>
+    private void RollInToWarehouse(WarehouseRollIn? rollIn, DateTimeOffset now)
+    {
+        if (_warehouse is null || rollIn is null)
+            return;
+
+        var banked = _warehouse.UpsertDays(rollIn.Days, rollIn.ProjectPaths);
+        if (banked.Count == 0)
+            return;
+
+        lock (_lock)
+        {
+            // Only the days that actually landed: whatever didn't stays pending
+            // (and, if it has aged out, stays in _unbankedDays) to be retried.
+            var carriedDrained = false;
+            foreach (var day in banked)
+            {
+                _pendingWarehouseDays.Remove(day);
+                carriedDrained |= _unbankedDays.Remove(day);
+            }
+
+            // The cache was written before the roll-in, so a carried day it
+            // still lists has just become stale. Persist now, or every restart
+            // re-banks a set that is already safely in the warehouse.
+            if (carriedDrained)
+                Save();
+        }
+
+        // Only after a successful write, and only on the rare pass that banked
+        // something — pruning enumerates the warehouse directory.
+        _warehouse.Prune(now);
+    }
+
+    // Caller holds _lock. The finalized (before today, local) pending days and
+    // the project paths that go with them, or null when there's nothing to bank.
+    // Today is excluded on purpose: its cells are still moving, and banking a
+    // partial day would have the warehouse briefly disagree with the live view.
+    private WarehouseRollIn? CollectRollInLocked(DateTimeOffset now)
+    {
+        if (_warehouse is null || _pendingWarehouseDays.Count == 0)
+            return null;
+
+        var todayKey = DayKey(now);
+        var days = new Dictionary<string, Dictionary<string, LocalDayTotals>>(StringComparer.Ordinal);
+        foreach (var day in _pendingWarehouseDays)
+        {
+            if (string.CompareOrdinal(day, todayKey) >= 0)
+                continue;
+
+            // Live cells first; for a day that has already aged out of the
+            // window, the carried copy is all that is left of it.
+            if (_cells.TryGetValue(day, out var cells) || _unbankedDays.TryGetValue(day, out cells))
+                days[day] = new Dictionary<string, LocalDayTotals>(cells, StringComparer.Ordinal);
+        }
+
+        return days.Count == 0
+            ? null
+            : new WarehouseRollIn(days, new Dictionary<string, string>(_projectPaths, StringComparer.OrdinalIgnoreCase));
+    }
+
+    // One roll-in's payload: whole-day cell snapshots (the warehouse replaces
+    // rather than accumulates, so re-banking an amended day converges).
+    private sealed record WarehouseRollIn(
+        Dictionary<string, Dictionary<string, LocalDayTotals>> Days,
+        Dictionary<string, string> ProjectPaths);
 
     // Reads whatever the file gained since the last scan (parsing outside the
     // lock, state mutation under it). Returns true when any state changed.
@@ -647,6 +872,7 @@ public sealed class LocalUsageStore
             CostUsd = cell.CostUsd + cost,
             HasUnpricedModels = cell.HasUnpricedModels || pricing is null,
         };
+        _pendingWarehouseDays.Add(dayKey);
 
         if (entry.Timestamp >= now - RecentCostRetention)
             _recentCosts.Add(new RecentCostSample(entry.Timestamp, cost, entry.TotalTokens));
@@ -664,9 +890,36 @@ public sealed class LocalUsageStore
             .ToList();
         foreach (var key in oldDays)
         {
+            // A pending day that ages out has run out of chances to be re-read:
+            // its transcripts are past the horizon, so Ingest would drop them.
+            // Carry the cells rather than the bare key, or a roll-in that fails
+            // on this very pass would destroy the day it was meant to preserve.
+            // Only worth carrying when there is somewhere to carry it to —
+            // without a warehouse nothing would ever drain the set.
+            if (_warehouse is not null
+                && _pendingWarehouseDays.Contains(key)
+                && _cells.TryGetValue(key, out var cells))
+                _unbankedDays[key] = new Dictionary<string, LocalDayTotals>(cells, StringComparer.Ordinal);
+
             _cells.Remove(key);
             changed = true;
         }
+
+        // A warehouse that has been unwritable for months must not grow the
+        // cache without bound. Oldest first — they are the least likely to ever
+        // be wanted, and dropping any of them is worth a line in the log.
+        while (_unbankedDays.Count > MaxUnbankedDays)
+        {
+            var oldest = _unbankedDays.Keys.Min(StringComparer.Ordinal)!;
+            _unbankedDays.Remove(oldest);
+            _pendingWarehouseDays.Remove(oldest);
+            _logger?.Warn(
+                $"Local usage: dropping unbanked day {oldest} — more than {MaxUnbankedDays} days are waiting on a usage warehouse that won't accept them.");
+            changed = true;
+        }
+
+        // Anything still pending with no cells anywhere can never be banked.
+        _pendingWarehouseDays.RemoveWhere(d => !_cells.ContainsKey(d) && !_unbankedDays.ContainsKey(d));
 
         // Drop learned paths for projects no longer present in any cell, so
         // the map can't grow forever across long-dead projects. Paths only die
@@ -674,8 +927,11 @@ public sealed class LocalUsageStore
         if (oldDays.Count > 0)
         {
             var liveProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var dayCells in _cells.Values)
+            foreach (var dayCells in _cells.Values.Concat(_unbankedDays.Values))
                 foreach (var cellKey in dayCells.Keys)
+                    // Carried days count as live: their path has to outlive the
+                    // prune too, or a day banked on a later retry would land in
+                    // the warehouse under its raw directory name, permanently.
                     liveProjects.Add(SplitCellKey(cellKey).Project);
 
             var deadPaths = _projectPaths.Keys.Where(p => !liveProjects.Contains(p)).ToList();
@@ -724,6 +980,9 @@ public sealed class LocalUsageStore
                 ProjectPaths = new Dictionary<string, string>(_projectPaths),
                 RecentDedupeKeys = new Dictionary<string, DateTimeOffset>(_recentKeys),
                 RecentCosts = new List<RecentCostSample>(_recentCosts),
+                UnbankedDays = _unbankedDays.ToDictionary(
+                    kv => kv.Key,
+                    kv => new Dictionary<string, LocalDayTotals>(kv.Value, StringComparer.Ordinal)),
             };
 
             var tmp = _cachePath + ".tmp";

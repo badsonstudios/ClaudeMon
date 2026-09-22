@@ -193,6 +193,17 @@ public record AppSettings
     [JsonPropertyName("pendingUpdateVersion")]
     public string? PendingUpdateVersion { get; init; }
 
+    /// <summary>
+    /// How many days of daily usage aggregates the long-term warehouse keeps
+    /// (see <see cref="Services.UsageWarehouse"/>). <c>0</c> — the default — means unlimited,
+    /// because the aggregates are tiny (a few hundred KB a year) and the history can't be
+    /// recovered once Claude Code has purged the transcripts behind it. Config-file only: the
+    /// window that displays ranges this long is issue #68, and there is nothing worth putting
+    /// in the Settings dialog until then.
+    /// </summary>
+    [JsonPropertyName("warehouseRetentionDays")]
+    public int WarehouseRetentionDays { get; init; }
+
     [JsonPropertyName("configVersion")]
     public int ConfigVersion { get; init; } = 1;
 

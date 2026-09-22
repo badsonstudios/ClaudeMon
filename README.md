@@ -77,6 +77,12 @@ The flyout's `Today: ~$… · … tokens · ~$…/hr (est.)` line, the **Usage &
 
 ClaudeMon tails these files incrementally (only new bytes are read on each pass, so even a large history costs almost nothing after the first scan) and keeps small per-day, per-model, per-project totals for the last 30 days in `%LocalAppData%\ClaudeMon\local-usage.json`. Budget periods are your local calendar day and calendar week (Monday–Sunday).
 
+#### Usage warehouse (history beyond 30 days)
+
+Claude Code purges its transcripts after about 30 days, so that live cache can only ever reach back that far. To stop your cost history disappearing with them, ClaudeMon banks each day's totals — per project and model — into its own **usage warehouse** at `%LocalAppData%\ClaudeMon\usage-warehouse\`, one small JSON file per calendar month. A day is written once it's over, amended safely if a later scan finds more, and never re-read from the transcripts afterwards: past the 30-day horizon this is the only copy, so a file ClaudeMon can't read or recognize is left strictly alone rather than overwritten.
+
+The warehouse has **its own format version**, independent of `local-usage.json` — upgrades that rebuild the live cache from the transcripts can never cost you warehoused days. Retention defaults to **unlimited** (the aggregates run to a few hundred KB a year, and this history can't be recovered later); set `"warehouseRetentionDays"` in `%LocalAppData%\ClaudeMon\config.json` to a number of days if you'd rather cap it. The Usage & costs window still shows up to 30 days today — the longer-range views are [issue #68](https://github.com/badsonstudios/ClaudeMon/issues/68) — but the history is being kept from now on, which is the part that can't be done retroactively.
+
 **These numbers are estimates, not billing.** Keep in mind:
 
 - Costs are computed from a **bundled table of Anthropic API list prices** per model (input, output, cache-write, and cache-read rates). On a Max subscription you don't actually pay per token — the figure shows what the usage *would* cost at API rates, a useful intensity gauge.

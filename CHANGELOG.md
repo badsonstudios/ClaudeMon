@@ -3,7 +3,7 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
-## [0.28.0] - Unreleased
+## [0.28.0] - 2026-09-22
 
 ### Added
 - **The flyout's usage line now speaks flat-plan.** The `Today: ~$4.20 · 1.8M tokens · ~$1.10/hr`

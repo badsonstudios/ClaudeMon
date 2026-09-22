@@ -76,6 +76,9 @@ public sealed class LocalUsageMonitor : IDisposable
     /// <summary>The sums the budget alerts compare against their caps.</summary>
     public LocalBudgetTotals? BudgetTotals() => _store.BudgetTotals();
 
+    /// <summary>Month-to-date cost for the flat-plan value line (null = unavailable).</summary>
+    public LocalMonthTotals? MonthToDate() => _store.MonthToDate();
+
     /// <summary>Cumulative tokens by model for the correlated limit log (null = unavailable).</summary>
     public Dictionary<string, ModelTokens>? TokensByModel() => _store.TokensByModel();
 

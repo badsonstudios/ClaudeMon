@@ -380,10 +380,16 @@ public sealed class TrayApplication : IDisposable
 
         var timeToLimit = EstimateTimeToLimit(_monitor.LastUsage?.FiveHour);
 
+        var settings = _configManager.Settings;
+        // Month-to-date is only fetched for the framing that draws it — near a month
+        // boundary it can read through to the warehouse on disk.
+        var flatPlanLines = PlanUsageText.UseFlatPlanLines(settings.UsageLineMode, settings.Plan);
         _flyout.UpdateData(
             _monitor.LastUsage, _monitor.Status, _monitor.LastUpdated, fiveHourTrend, timeToLimit,
-            _configManager.Settings.ColorMode, _localUsage.Snapshot(), _monitor.LastServiceStatus,
-            _capacityEstimates.Snapshot());
+            settings.ColorMode, _localUsage.Snapshot(), _monitor.LastServiceStatus,
+            _capacityEstimates.Snapshot(),
+            flatPlanLines ? _localUsage.MonthToDate() : null,
+            settings.UsageLineMode, settings.Plan, settings.PlanMonthlyUsd);
         _flyout.ShowNear(anchor);
     }
 

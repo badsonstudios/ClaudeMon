@@ -218,19 +218,32 @@ public sealed class LocalUsageStore
             // up as the window fills — smoother than extrapolating one burst,
             // and consistent with how the API-side burn rate behaves.
             double? burnRate = null;
+            double? tokenRate = null;
+            double? cacheReadRate = null;
             var cutoff = now - BurnRateWindow;
             var sum = 0.0;
+            var tokenSum = 0L;
+            var cacheReadSum = 0L;
             var any = false;
             foreach (var sample in _recentCosts)
             {
                 if (sample.Timestamp >= cutoff)
                 {
                     sum += sample.CostUsd;
+                    tokenSum += sample.Tokens;
+                    cacheReadSum += sample.CacheReadTokens;
                     any = true;
                 }
             }
             if (any)
+            {
                 burnRate = sum / BurnRateWindow.TotalHours;
+                tokenRate = tokenSum / BurnRateWindow.TotalHours;
+                // The cache-read share of the token rate, so the flat-plan projection
+                // (issue #202) can discount cache reads without a Services→Monitoring
+                // dependency — the weighting itself lives with the capacity estimator.
+                cacheReadRate = cacheReadSum / BurnRateWindow.TotalHours;
+            }
 
             return new LocalUsageSnapshot(
                 DateOnly.FromDateTime(now.ToLocalTime().DateTime),
@@ -239,7 +252,9 @@ public sealed class LocalUsageStore
                 day.TotalTokens,
                 day.CacheWriteTokens,
                 day.CacheReadTokens,
-                burnRate);
+                burnRate,
+                tokenRate,
+                cacheReadRate);
         }
     }
 
@@ -356,6 +371,24 @@ public sealed class LocalUsageStore
 
             return new LocalCostSeries(from, to, days);
         }
+    }
+
+    /// <summary>
+    /// Month-to-date estimated cost for the flat-plan value line (issue #202). Built on
+    /// <see cref="CostSeries(DateOnly, DateOnly)"/>, so near a month boundary — when the
+    /// month's first days have rolled out of the live window — it reads through to the
+    /// warehouse like every other range query. Null when the feature is unavailable.
+    /// </summary>
+    public LocalMonthTotals? MonthToDate()
+    {
+        var today = DateOnly.FromDateTime(_clock().ToLocalTime().DateTime);
+        var monthStart = new DateOnly(today.Year, today.Month, 1);
+        var series = CostSeries(monthStart, today);
+        if (series is null)
+            return null;
+
+        return new LocalMonthTotals(
+            monthStart, today, series.TotalCostUsd, series.HasUnpricedModels);
     }
 
     /// <summary>
@@ -875,7 +908,8 @@ public sealed class LocalUsageStore
         _pendingWarehouseDays.Add(dayKey);
 
         if (entry.Timestamp >= now - RecentCostRetention)
-            _recentCosts.Add(new RecentCostSample(entry.Timestamp, cost, entry.TotalTokens));
+            _recentCosts.Add(new RecentCostSample(
+                entry.Timestamp, cost, entry.TotalTokens, entry.CacheReadTokens));
     }
 
     // Caller holds _lock. Drops everything outside its retention window;

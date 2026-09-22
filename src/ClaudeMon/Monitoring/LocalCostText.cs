@@ -23,11 +23,7 @@ public static class LocalCostText
         if (snapshot is null || snapshot.TotalTokens <= 0)
             return null;
 
-        // A day touched by unpriced models: the known portion is a floor, not
-        // an estimate — "≥" says so. Nothing priced at all reads "—".
-        var cost = snapshot.HasUnpricedModels
-            ? snapshot.CostUsd < 0.005 ? "—" : "≥" + FormatAmount(snapshot.CostUsd)
-            : FormatCost(snapshot.CostUsd);
+        var cost = FormatCostFloorAware(snapshot.CostUsd, snapshot.HasUnpricedModels);
 
         var line = $"Today: {cost} · {FormatTokens(snapshot.TotalTokens)} tokens";
 
@@ -50,6 +46,17 @@ public static class LocalCostText
     /// <summary>"&lt;$0.01", "~$4.20", "~$12.40", "~$123" — cents matter less as the total grows.</summary>
     internal static string FormatCost(double usd) =>
         usd < 0.005 ? "<$0.01" : "~" + FormatAmount(usd);
+
+    /// <summary>
+    /// A total touched by unpriced models: the known portion is a floor, not an
+    /// estimate — "≥" says so. Nothing priced at all reads "—". Shared with the
+    /// flat-plan lines (<see cref="PlanUsageText"/>) so both framings render a
+    /// partially-priced total the same way.
+    /// </summary>
+    internal static string FormatCostFloorAware(double usd, bool hasUnpricedModels) =>
+        hasUnpricedModels
+            ? usd < 0.005 ? "—" : "≥" + FormatAmount(usd)
+            : FormatCost(usd);
 
     private static string FormatAmount(double usd) =>
         usd < 100

@@ -45,11 +45,18 @@ public record FileScanState(
     [property: JsonPropertyName("mtime")] DateTimeOffset LastWriteUtc
 );
 
-/// <summary>A recent per-entry cost sample used for the burn-rate window (persisted).</summary>
+/// <summary>
+/// A recent per-entry cost sample used for the burn-rate window (persisted).
+/// <see cref="CacheReadTokens"/> is carried so the flat-plan projection (issue #202) can
+/// discount cache reads the way the capacity estimator does — additive, so a cache written
+/// before it existed deserializes it as 0 (the burn window is 30 minutes; the seam heals
+/// itself) and needs no version bump.
+/// </summary>
 public record RecentCostSample(
     [property: JsonPropertyName("t")] DateTimeOffset Timestamp,
     [property: JsonPropertyName("usd")] double CostUsd,
-    [property: JsonPropertyName("tok")] long Tokens
+    [property: JsonPropertyName("tok")] long Tokens,
+    [property: JsonPropertyName("cr")] long CacheReadTokens = 0
 );
 
 /// <summary>
@@ -153,8 +160,22 @@ public record LocalUsageSnapshot(
     long TotalTokens,
     long CacheWriteTokens,
     long CacheReadTokens,
-    double? BurnRateUsdPerHour
+    double? BurnRateUsdPerHour,
+    double? BurnRateTokensPerHour = null,
+    double? BurnRateCacheReadTokensPerHour = null
 );
+
+/// <summary>
+/// Month-to-date estimated cost, for the flat-plan value line (issue #202):
+/// "what would this month have cost at API prices?". Same semantics as every
+/// other cost figure — list prices, and <see cref="HasUnpricedModels"/> marks
+/// the total as a floor rather than an estimate.
+/// </summary>
+public record LocalMonthTotals(
+    DateOnly MonthStart,
+    DateOnly Today,
+    double CostUsd,
+    bool HasUnpricedModels);
 
 /// <summary>The selectable ranges of the breakdown window, ending today (local).</summary>
 public enum BreakdownTimeframe

@@ -61,6 +61,23 @@ public enum ClaudePlan
 }
 
 /// <summary>
+/// How the flyout's local-usage line is framed (issue #202). <see cref="Cost"/> is the
+/// $-centric line ("Today: ~$4.20 · 1.8M tokens · ~$1.10/hr") for people who think in API
+/// prices; <see cref="FlatPlan"/> reframes the same data for flat-fee subscribers — limit
+/// burn instead of dollars, plus the month's API-equivalent value. <see cref="Auto"/>
+/// follows <see cref="AppSettings.Plan"/>: every <see cref="ClaudePlan"/> value is a flat
+/// subscription, so a stated plan gets the flat-plan framing and "not set" keeps the
+/// original cost line.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum UsageLineMode
+{
+    Auto,
+    Cost,
+    FlatPlan,
+}
+
+/// <summary>
 /// The selectable visual style of the taskbar usage readout. <see cref="Numbers"/> is the
 /// stacked label + percentage text (the original look); <see cref="Bar"/> draws a compact
 /// horizontal usage bar with hour/day dividers and a time-in-window tick (mirrors the flyout
@@ -152,6 +169,24 @@ public record AppSettings
     /// </summary>
     [JsonPropertyName("claudePlan")]
     public ClaudePlan? Plan { get; init; }
+
+    /// <summary>
+    /// How the flyout's local-usage line is framed — see <see cref="Models.UsageLineMode"/>.
+    /// Defaults to <see cref="UsageLineMode.Auto"/> (follow <see cref="Plan"/>), so an
+    /// upgrade changes nothing for anyone who never told ClaudeMon their plan.
+    /// </summary>
+    [JsonPropertyName("usageLineMode")]
+    public UsageLineMode UsageLineMode { get; init; } = UsageLineMode.Auto;
+
+    /// <summary>
+    /// What the user pays per month for their plan, in USD — used only to caption the
+    /// flat-plan value line with a multiple ("≈3.1× your plan"). <c>0</c> — the default —
+    /// means "not stated" and the multiple is simply omitted; deliberately never inferred
+    /// from <see cref="Plan"/>, because Anthropic's prices change and a wrong dollar figure
+    /// presented as the user's own bill is worse than none.
+    /// </summary>
+    [JsonPropertyName("planMonthlyUsd")]
+    public double PlanMonthlyUsd { get; init; }
 
     [JsonPropertyName("taskbarDisplay")]
     public TaskbarDisplaySettings TaskbarDisplay { get; init; } = new();

@@ -6,6 +6,17 @@ GitHub release; the release notes are taken from these entries.
 ## [0.28.0] - Unreleased
 
 ### Added
+- **The flyout's usage line now speaks flat-plan.** The `Today: ~$4.20 · 1.8M tokens · ~$1.10/hr`
+  line prices usage like an API bill — but on a Max/Pro subscription nobody pays that bill, and
+  the meter that matters is the rate limits. A new **flat-plan framing** reframes the same local
+  data in limit terms: `Today: 8.1M tokens ≈ 13% of a 5-hour window`, the current token burn
+  with a `window full in ~1h 40m` projection at that pace (both shown only when the implied
+  window capacity is confident enough to stand behind — never guessed), and the flat fee's
+  counterweight, `This month: ~$312 of API usage`, optionally captioned `≈3.1× plan` once
+  you enter what you pay per month. The month total reads through the usage warehouse, so it
+  stays correct where transcripts have been purged. A **Flyout usage line** setting picks the
+  framing; **Automatic** (the default) follows the existing **Claude plan** setting — state a
+  plan and the flat-plan lines appear, leave it "Not set" and nothing changes. (#202)
 - **Usage history now outlives Claude Code's 30-day transcript purge.** Claude Code deletes its
   transcripts after about 30 days and ClaudeMon's scanner mirrored that, so cost history
   silently truncated — nothing could ever answer "what did last quarter cost?". Finalized days

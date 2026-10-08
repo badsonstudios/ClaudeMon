@@ -282,6 +282,19 @@ public class LoggerTests : IDisposable
     }
 
     [Fact]
+    public void Write_MalformedDirectory_DoesNotThrow()
+    {
+        // A path-shape error (the \0) throws ArgumentException from CreateDirectory, not
+        // IOException — the catch must cover it or "logging never throws" is only true for
+        // well-formed paths (#206 review).
+        var logger = CreateLogger(directory: Path.Combine(_dir, "sub\0invalid"));
+
+        var ex = Record.Exception(() => logger.Info("dropped"));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
     public void DefaultDirectory_IsUnderLocalAppData()
     {
         // Constructing only resolves the path; nothing is written until the first log line, so

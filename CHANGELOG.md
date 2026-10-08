@@ -3,6 +3,27 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.28.1] - 2026-10-08
+
+### Fixed
+- **Crash when the display setup changed.** Casting to a TV, flipping a KVM switch, or any
+  other monitor-topology change could kill ClaudeMon outright (five crashes in the week before
+  this fix, all `Collection was modified; enumeration operation may not execute`). Two bugs
+  stacked: .NET 10's `Application.SetColorMode` quietly installs a non-UI synchronization
+  context at startup, so every usage update ran on a thread-pool thread instead of the UI
+  thread; and the taskbar readouts were enumerated without a snapshot, so the display-change
+  reconcile could mutate the set mid-iteration. The UI context is now captured explicitly,
+  overlay enumeration snapshots, and usage updates run on the UI thread again — which also
+  closes the same latent race in alerts, drift checks, and settings writes. (#206)
+- **Crashes now land in ClaudeMon's own log.** An unhandled error used to leave no trace in
+  `claudemon-*.log` — the only evidence lived in the Windows Event Log. Last-chance handlers
+  now write the full exception to the app log from any thread (background threads before the
+  process dies; UI-loop errors alongside the existing error dialog, which still appears), so
+  "it just disappeared" reports are diagnosable from **View logs** alone. (#206)
+- **Latent startup crash removed.** `SetUnhandledExceptionMode` ran after `SetColorMode`,
+  which can create a control first — an ordering Windows Forms rejects. The calls are
+  reordered. (#206)
+
 ## [0.28.0] - 2026-09-22
 
 ### Added

@@ -78,15 +78,25 @@ public sealed class TrayApplication : IDisposable
     /// </summary>
     private static string FormatVersion(Version v) => $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}";
 
-    public TrayApplication()
+    public TrayApplication(Logger logger)
     {
-        _syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        // Explicitly the WinForms context (#206): Application.SetColorMode installs a plain
+        // base SynchronizationContext on the main thread before any control exists, so
+        // capturing Current here picked that up — and the base Post is
+        // ThreadPool.QueueUserWorkItem, which ran every usage update on pool threads racing
+        // the UI thread (five "Collection was modified" crashes during display changes).
+        // Re-installed as Current so await continuations marshal back to this thread too.
+        var uiContext = SynchronizationContext.Current as WindowsFormsSynchronizationContext
+            ?? new WindowsFormsSynchronizationContext();
+        SynchronizationContext.SetSynchronizationContext(uiContext);
+        _syncContext = uiContext;
 
         _configManager = new ConfigManager();
         _configManager.Load();
 
-        _logger = new Logger();
+        _logger = logger;
         _logger.Info($"ClaudeMon {CurrentVersion} starting.");
+        _logger.Info($"UI dispatch context: {_syncContext.GetType().Name}.");
 
         _history = new UsageHistoryStore();
         _history.Load();

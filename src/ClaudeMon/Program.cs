@@ -1,5 +1,6 @@
 namespace ClaudeMon;
 
+using ClaudeMon.Services;
 using ClaudeMon.UI;
 
 static class Program
@@ -18,6 +19,17 @@ static class Program
 
         ApplicationConfiguration.Initialize();
 
+        // Before SetColorMode: the exception mode can only be changed while no controls exist
+        // on the thread, and dark-mode initialization can create one (#206) — the previous
+        // order (SetColorMode first) was a latent startup crash.
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+
+        // Last-chance diagnostics (#206): CatchException above only covers the UI message
+        // loop, so a crash on any other thread must be logged here or it leaves no trace in
+        // the app's own log. Registered before any background work can start.
+        var logger = new Logger();
+        CrashLogging.Register(logger);
+
         // Match the app to the Windows "mode" (the dark/light toggle that drives the taskbar). We
         // resolve it once here and pin both the experimental colour mode (which themes the window
         // chrome + standard controls) and our palette to it, so the Settings window is fully and
@@ -30,9 +42,7 @@ static class Program
         Application.SetColorMode(dark ? SystemColorMode.Dark : SystemColorMode.Classic);
 #pragma warning restore WFO5001
 
-        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-
-        using var app = new TrayApplication();
+        using var app = new TrayApplication(logger);
         Application.Run();
     }
 }

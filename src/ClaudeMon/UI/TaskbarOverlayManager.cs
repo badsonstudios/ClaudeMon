@@ -41,6 +41,9 @@ public sealed class TaskbarOverlayManager : IDisposable
     public event EventHandler? CycleRequested;
 
     // Keyed by monitor device name (e.g. \\.\DISPLAY1) — one overlay per taskbar.
+    // Every enumeration snapshots (Values.ToList()): showing a Form pumps messages, so a
+    // Reconcile can mutate this mid-iteration — see RefreshAllOverlays, and the display-change
+    // crash in #206.
     private readonly Dictionary<string, TaskbarOverlayWindow> _overlays = new();
     private readonly Logger _logger;
     private readonly TaskbarCreatedListener _taskbarCreatedListener;
@@ -124,7 +127,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     {
         _labelColor = labelColor;
         _numberColor = numberColor;
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.SetColors(labelColor, numberColor);
     }
 
@@ -132,7 +135,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     public void SetStyle(TaskbarStyle style)
     {
         _style = style;
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.SetStyle(style);
     }
 
@@ -140,7 +143,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     public void SetBarWidth(TaskbarBarWidth barWidth)
     {
         _barWidth = barWidth;
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.SetBarWidth(barWidth);
     }
 
@@ -148,7 +151,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     public void SetSize(int percent)
     {
         _sizePercent = percent;
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.SetSize(percent);
     }
 
@@ -156,7 +159,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     public void SetColorMode(UsageColorMode colorMode)
     {
         _colorMode = colorMode;
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.SetColorMode(colorMode);
     }
 
@@ -168,7 +171,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     {
         _metrics = metrics;
         _showPercentSign = percentSign;
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.SetDisplay(metrics, percentSign);
     }
 
@@ -179,7 +182,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     /// </summary>
     public void ShowMetricHint(string text)
     {
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.ShowMetricHint(text);
     }
 
@@ -203,7 +206,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     {
         _primaryHorizontalOffset = primary;
         _secondaryHorizontalOffset = secondary;
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.SetHorizontalOffsets(primary, secondary);
     }
 
@@ -245,7 +248,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     public void UpdateUsage(TaskbarReading reading)
     {
         _reading = new OverlayReading(TaskbarOverlayMarker.None, reading);
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.UpdateUsage(reading);
     }
 
@@ -253,7 +256,7 @@ public sealed class TaskbarOverlayManager : IDisposable
     public void ShowSignInExpired()
     {
         _reading = new OverlayReading(TaskbarOverlayMarker.SignInExpired, default);
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.ShowSignInExpired();
     }
 
@@ -270,7 +273,7 @@ public sealed class TaskbarOverlayManager : IDisposable
         if (_reading.Marker == TaskbarOverlayMarker.SignInExpired) return;
 
         _reading = new OverlayReading(TaskbarOverlayMarker.Waiting, default);
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             overlay.ShowWaiting();
     }
 
@@ -599,7 +602,7 @@ public sealed class TaskbarOverlayManager : IDisposable
 
     private void DisposeAllOverlays()
     {
-        foreach (var overlay in _overlays.Values)
+        foreach (var overlay in _overlays.Values.ToList())
             DisposeOverlay(overlay);
         _overlays.Clear();
     }

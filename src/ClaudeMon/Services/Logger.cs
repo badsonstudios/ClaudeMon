@@ -100,9 +100,12 @@ public sealed class Logger
                 RotateIfNeeded(path);
                 File.AppendAllText(path, line + Environment.NewLine, Encoding.UTF8);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
-                // Diagnostics must never take down the app — drop the line silently.
+                // Diagnostics must never take down the app — drop the line silently. The two
+                // path-shape exceptions matter for a malformed directory (#206 review): the
+                // class promises "never throws", not "never throws given a valid path".
             }
         }
     }

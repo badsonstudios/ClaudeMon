@@ -45,6 +45,11 @@ public sealed class TaskbarOverlayManager : IDisposable
     // Reconcile can mutate this mid-iteration — see RefreshAllOverlays, and the display-change
     // crash in #206.
     private readonly Dictionary<string, TaskbarOverlayWindow> _overlays = new();
+
+    // Each readout's escalation-effect window (#208), keyed like _overlays and created and
+    // torn down with its readout. A device can have a readout without one (effect-window
+    // creation failed) — the readout matters more than the fireworks.
+    private readonly Dictionary<string, TaskbarEffectWindow> _effects = new();
     private readonly Logger _logger;
     private readonly TaskbarCreatedListener _taskbarCreatedListener;
 
@@ -100,6 +105,22 @@ public sealed class TaskbarOverlayManager : IDisposable
     private int _secondaryHorizontalOffset;
     private bool _enabled;
 
+    // The escalation effects: whether they're on, whether they're stood down while the flyout
+    // is open, and the loop every readout should show.
+    private bool _effectsEnabled = true;
+    private bool _effectsSuppressed;
+    private TaskbarLoopingEffect _effect;
+
+    // A nuke that came due while the flyout was open — played when it closes. People open the
+    // flyout precisely when usage is near 100%, so dropping it there would lose most nukes.
+    private bool _nukePending;
+
+    private bool EffectsLive => _effectsEnabled && !_effectsSuppressed;
+
+    // The effects' sound — one player for every readout — and whether it's switched on.
+    private readonly TaskbarEffectSoundPlayer _sound;
+    private bool _soundEnabled = true;
+
     // Latest reading, retained so an overlay created after a monitor connects shows the
     // current value immediately instead of staying blank. Starts as the waiting marker so
     // the readout is visibly alive from the moment it appears, before the first poll lands.
@@ -120,6 +141,7 @@ public sealed class TaskbarOverlayManager : IDisposable
         _healthTimer.Tick += (_, _) => OnHealthTick();
         _settleTimer = new System.Windows.Forms.Timer();
         _settleTimer.Tick += (_, _) => OnSettleTick();
+        _sound = new TaskbarEffectSoundPlayer(logger);
     }
 
     /// <summary>Set the text colour presets on every overlay (and on ones created later).</summary>
@@ -276,6 +298,111 @@ public sealed class TaskbarOverlayManager : IDisposable
         foreach (var overlay in _overlays.Values.ToList())
             overlay.ShowWaiting();
     }
+
+    /// <summary>
+    /// Turn the escalation effects on or off live. Off is a hard stop — every effect window
+    /// drops its particles, hides, and stops its frame timer.
+    /// </summary>
+    internal void SetEffectsEnabled(bool enabled)
+    {
+        _effectsEnabled = enabled;
+        ApplyEffectsLive();
+    }
+
+    /// <summary>Turn the effects' sound (fire crackle, nuke explosion) on or off live.</summary>
+    internal void SetEffectSoundsEnabled(bool enabled)
+    {
+        _soundEnabled = enabled;
+        if (enabled)
+            UpdateFireSound();
+        else
+            _sound.StopAll();
+    }
+
+    /// <summary>
+    /// Stand the effects down (true) while the flyout is open — smoke and the mushroom cloud rise
+    /// into the space it occupies — and bring the loop back (false) when it closes. A nuke due
+    /// while suppressed is deferred until then.
+    /// </summary>
+    internal void SetEffectsSuppressed(bool suppressed)
+    {
+        if (_effectsSuppressed == suppressed) return;
+        _effectsSuppressed = suppressed;
+        ApplyEffectsLive();
+    }
+
+    private void ApplyEffectsLive()
+    {
+        // Switching the feature off forgets a deferred nuke; the flyout merely closing plays it.
+        if (!_effectsEnabled)
+            _nukePending = false;
+
+        var playNuke = EffectsLive && _nukePending;
+        _nukePending &= !playNuke;
+
+        foreach (var effect in _effects.Values.ToList())
+        {
+            if (EffectsLive)
+            {
+                effect.SetEffect(_effect);
+            }
+            else
+            {
+                effect.Stop();
+            }
+        }
+
+        if (!EffectsLive)
+            _sound.StopAll();
+
+        if (playNuke)
+            NukeAll();
+    }
+
+    /// <summary>Set the looping effect (none, light/heavy smoke, or fire) on every readout, and on ones created later.</summary>
+    internal void SetEffect(TaskbarLoopingEffect effect)
+    {
+        _effect = effect;
+        if (!EffectsLive) return;
+        foreach (var window in _effects.Values.ToList())
+            window.SetEffect(effect);
+    }
+
+    /// <summary>
+    /// Play the one-shot nuke on every readout. Not seeded onto readouts created later — a
+    /// monitor plugged in mid-explosion just misses it.
+    /// </summary>
+    internal void PlayNuke()
+    {
+        if (!_effectsEnabled) return;
+        if (_effectsSuppressed)
+        {
+            _nukePending = true;
+            return;
+        }
+
+        NukeAll();
+    }
+
+    /// <summary>
+    /// Fire the nuke on every readout, with the explosion — but only if a readout is actually
+    /// on screen: a blast of sound over a fullscreen game, with nothing to see, is just a jump scare.
+    /// </summary>
+    private void NukeAll()
+    {
+        var windows = _effects.Values.ToList();
+        foreach (var window in windows)
+            window.PlayNuke();
+
+        if (_soundEnabled && windows.Any(w => w.ReadoutVisible))
+            _sound.PlayExplosion();
+    }
+
+    // The crackle loops while any readout is showing fire, and only then.
+    private void UpdateFireSound() =>
+        _sound.SetFire(_soundEnabled && _effects.Values.Any(w => w.ShowingFire));
+
+    private void OnShowingFireChanged(object? sender, EventArgs e) => UpdateFireSound();
 
     private void OnOverlayClicked(object? sender, System.Drawing.Rectangle bounds) => OverlayClicked?.Invoke(this, bounds);
 
@@ -460,8 +587,7 @@ public sealed class TaskbarOverlayManager : IDisposable
                 if (!_overlays.TryGetValue(device, out var existing) || ShouldKeepOverlay(device, existing, handle))
                     continue;
 
-                DisposeOverlay(existing);
-                _overlays.Remove(device);
+                RemoveOverlay(device);
             }
 
             foreach (var device in wanted.Keys)
@@ -498,15 +624,13 @@ public sealed class TaskbarOverlayManager : IDisposable
 
                 _creationFailureLogged.Remove(device);
                 _overlays[device] = overlay;
+                CreateEffectWindow(device, overlay);
             }
 
             // Tear down overlays whose taskbar is no longer present (monitor unplugged, or its
             // taskbar turned off). ToList so we don't mutate the dictionary while enumerating it.
             foreach (var device in _overlays.Keys.Where(k => !wanted.ContainsKey(k)).ToList())
-            {
-                DisposeOverlay(_overlays[device]);
-                _overlays.Remove(device);
-            }
+                RemoveOverlay(device);
 
             // A device that left re-arms its failure log line and forgets its health history,
             // so a taskbar that goes away and comes back broken is diagnosable again.
@@ -600,11 +724,46 @@ public sealed class TaskbarOverlayManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Pairs a freshly published readout with its effect window, seeded with the current loop.
+    /// Guarded on its own: a readout without effects is still a working readout.
+    /// </summary>
+    private void CreateEffectWindow(string device, TaskbarOverlayWindow overlay)
+    {
+        TaskbarEffectWindow? effect = null;
+        try
+        {
+            effect = new TaskbarEffectWindow(overlay, _logger);
+            effect.ShowingFireChanged += OnShowingFireChanged;
+            if (EffectsLive)
+                effect.SetEffect(_effect);
+            _effects[device] = effect;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Failed to create taskbar effect window for {device}: {ex.Message}");
+            effect?.Dispose();
+        }
+    }
+
+    /// <summary>Tears down one device's readout and its effect window.</summary>
+    private void RemoveOverlay(string device)
+    {
+        if (_effects.Remove(device, out var effect))
+        {
+            effect.ShowingFireChanged -= OnShowingFireChanged;
+            effect.Dispose();
+            // A window torn down mid-fire raises nothing on the way out, so re-judge the crackle.
+            UpdateFireSound();
+        }
+        if (_overlays.Remove(device, out var overlay))
+            DisposeOverlay(overlay);
+    }
+
     private void DisposeAllOverlays()
     {
-        foreach (var overlay in _overlays.Values.ToList())
-            DisposeOverlay(overlay);
-        _overlays.Clear();
+        foreach (var device in _overlays.Keys.Concat(_effects.Keys).Distinct().ToList())
+            RemoveOverlay(device);
     }
 
     private static void DisposeOverlay(TaskbarOverlayWindow overlay)
@@ -624,6 +783,7 @@ public sealed class TaskbarOverlayManager : IDisposable
         _settleTimer.Dispose();
         _taskbarCreatedListener.Dispose();
         DisposeAllOverlays();
+        _sound.Dispose();
     }
 
     /// <summary>

@@ -61,6 +61,8 @@ public sealed class SettingsForm : Form
     private readonly ComboBox _numberColorCombo;
     private readonly NumericUpDown _primaryOffsetNumeric;
     private readonly ToggleSwitch _allMonitorsToggle;
+    private readonly ToggleSwitch _escalationEffectsToggle;
+    private readonly ToggleSwitch _effectSoundsToggle;
     private readonly NumericUpDown _secondaryOffsetNumeric;
     private readonly ToggleSwitch _runAtStartupToggle;
     private readonly ToggleSwitch _checkForUpdatesToggle;
@@ -291,6 +293,11 @@ public sealed class SettingsForm : Form
         _secondaryOffsetNumeric = AddNumericRow("Position (− left / + right)", -300, 300,
             indent: true, visible: () => TaskbarOn() && _allMonitorsToggle.Checked, suffix: null);
         _secondaryOffsetNumeric.Increment = 2;
+        // Smoke/fire/nuke over the readout (#208). Applied on OK rather than live-previewed: what
+        // it shows depends on the current usage, which the dialog doesn't have.
+        _escalationEffectsToggle = AddToggleRow("Effect animations (smoke, fire, nuke)", indent: true, visible: TaskbarOn);
+        _effectSoundsToggle = AddToggleRow("Effect sounds (fire crackle, explosion)", indent: true,
+            visible: () => TaskbarOn() && _escalationEffectsToggle.Checked);
 
         // --- Updates tab ---
         _currentTab = 3;
@@ -567,6 +574,8 @@ public sealed class SettingsForm : Form
             RelayoutLive();
             Preview(() => _overlayPreview!.SetStyle(SelectedOption(_styleCombo, StyleOptions)));
         };
+        // The sound row only makes sense while the effects are on.
+        _escalationEffectsToggle.CheckedChanged += (_, _) => RelayoutLive();
         _allMonitorsToggle.CheckedChanged += (_, _) =>
         {
             RelayoutLive();
@@ -713,6 +722,8 @@ public sealed class SettingsForm : Form
         _primaryOffsetNumeric.Value = ClampToRange(_primaryOffsetNumeric, settings.TaskbarDisplay.PrimaryHorizontalOffset);
         _allMonitorsToggle.Checked = settings.TaskbarDisplay.AllMonitors;
         _secondaryOffsetNumeric.Value = ClampToRange(_secondaryOffsetNumeric, settings.TaskbarDisplay.HorizontalOffset);
+        _escalationEffectsToggle.Checked = settings.TaskbarDisplay.EscalationEffects;
+        _effectSoundsToggle.Checked = settings.TaskbarDisplay.EffectSounds;
 
         _runAtStartupToggle.Checked = ConfigManager.IsRunAtStartupEnabled();
         _checkForUpdatesToggle.Checked = settings.CheckForUpdates;
@@ -826,6 +837,8 @@ public sealed class SettingsForm : Form
                 AllMonitors = _allMonitorsToggle.Checked,
                 HorizontalOffset = (int)_secondaryOffsetNumeric.Value,
                 PrimaryHorizontalOffset = (int)_primaryOffsetNumeric.Value,
+                EscalationEffects = _escalationEffectsToggle.Checked,
+                EffectSounds = _effectSoundsToggle.Checked,
             },
             CheckForUpdates = _checkForUpdatesToggle.Checked,
             AutoInstallUpdates = _autoInstallUpdatesToggle.Checked,

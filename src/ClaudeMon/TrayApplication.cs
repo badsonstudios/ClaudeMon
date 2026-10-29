@@ -32,6 +32,12 @@ public sealed class TrayApplication : IDisposable
     private readonly SynchronizationContext _syncContext;
     private readonly FlyoutPanel _flyout;
     private readonly TaskbarOverlayManager _taskbarOverlay;
+
+    // The escalation effects' brain (#208) and the usage it last judged — kept so a settings
+    // change can re-judge right away instead of waiting for the next poll. Null while there is
+    // no reading to judge (signed out, nothing fetched yet).
+    private readonly TaskbarEffectTracker _effectTracker;
+    private UsageResponse? _effectUsage;
     private readonly AlertManager _alertManager;
     private readonly PushNotifier _pushNotifier;
     private readonly UpdateChecker _updateChecker;
@@ -176,11 +182,21 @@ public sealed class TrayApplication : IDisposable
             _configManager.Settings.TaskbarDisplay.HorizontalOffset);
         _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
         _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
+        _taskbarOverlay.SetEffectsEnabled(EffectsEnabled);
+        _taskbarOverlay.SetEffectSoundsEnabled(_configManager.Settings.TaskbarDisplay.EffectSounds);
+        _effectTracker = new TaskbarEffectTracker(_configManager.Settings.TaskbarEffectState);
+        // Smoke rises over the area the flyout opens into; stand the effects down while it's up
+        // rather than drift across it (#208).
+        _flyout.VisibleChanged += (_, _) => _taskbarOverlay.SetEffectsSuppressed(_flyout.Visible);
         // Clicking a monitor's readout opens the detail flyout on THAT monitor (issue #104),
         // anchored at the readout's top-centre — a pixel guaranteed inside the clicked monitor,
-        // so Screen.FromPoint resolves to it and the flyout stays there.
+        // so Screen.FromPoint resolves to it and the flyout stays there. The same click
+        // dismisses any smoke or fire on the way (#208): one click does both.
         _taskbarOverlay.OverlayClicked += (_, bounds) =>
+        {
+            DismissTaskbarEffects();
             ToggleFlyout(new Point(bounds.Left + bounds.Width / 2, bounds.Top));
+        };
         // Middle-click (or Ctrl+left-click) cycles which metric the readout leads with (#71).
         _taskbarOverlay.CycleRequested += (_, _) => CycleTaskbarMetric();
 
@@ -267,6 +283,7 @@ public sealed class TrayApplication : IDisposable
                 oldIcon?.Dispose();
                 _notifyIcon.Text = $"ClaudeMon\n{MonitorStatusText.SignInExpired}";
                 _taskbarOverlay.ShowSignInExpired();
+                ClearTaskbarEffects();
                 return;
             }
 
@@ -297,6 +314,9 @@ public sealed class TrayApplication : IDisposable
                         // countdown, an estimate can't be run down by a clock between polls.
                         EstimateTimeToLimit(fiveHour)));
                 }
+
+                _effectUsage = e.Usage;
+                EvaluateTaskbarEffects();
 
                 _notifyIcon.Text = TrayTooltip.Compose(e.Usage, e.Status);
 
@@ -330,8 +350,86 @@ public sealed class TrayApplication : IDisposable
                 // visibly alive with the waiting marker instead of leaving it blank. With a
                 // cached reading the overlay keeps showing the last known numbers, as today.
                 _taskbarOverlay.ShowWaiting();
+                ClearTaskbarEffects();
             }
         }, null);
+    }
+
+    /// <summary>Whether the escalation effects apply: their own toggle, and the readout they ride on.</summary>
+    private bool EffectsEnabled =>
+        _configManager.Settings.TaskbarDisplay.Enabled && _configManager.Settings.TaskbarDisplay.EscalationEffects;
+
+    /// <summary>
+    /// Judge the latest usage for smoke/fire/nuke (#208) and push the verdict to the readouts.
+    /// Skipped entirely while the effects are off — the tracker only records what the user could
+    /// actually see, so turning them on at 100% still plays the nuke once. Guarded: this runs in
+    /// the usage callback ahead of the alerts, and decoration must never cost the user an alert.
+    /// </summary>
+    private void EvaluateTaskbarEffects()
+    {
+        try
+        {
+            if (!EffectsEnabled || _effectUsage is null)
+            {
+                // Nothing on screen, so nothing the tracker should believe is showing — a click
+                // now must not dismiss smoke from a reading the user never saw.
+                _effectTracker.Observe(Array.Empty<TaskbarEffectReading>());
+                _taskbarOverlay.SetEffect(TaskbarLoopingEffect.None);
+                return;
+            }
+
+            var decision = _effectTracker.Observe(
+                TaskbarEffectInputs.From(_effectUsage, _configManager.Settings.ColorMode));
+            _taskbarOverlay.SetEffect(decision.Looping);
+            if (decision.PlayNuke)
+            {
+                _logger.Info("Usage limit reached 100% — playing the taskbar nuke.");
+                _taskbarOverlay.PlayNuke();
+            }
+            SaveTaskbarEffectState();
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Taskbar effects update failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>No reading to judge (signed out, or nothing fetched): stop the loop, keep the memory.</summary>
+    private void ClearTaskbarEffects()
+    {
+        _effectUsage = null;
+        EvaluateTaskbarEffects();
+    }
+
+    // Guarded like EvaluateTaskbarEffects: this runs ahead of opening the flyout, which a
+    // failed save must not prevent.
+    private void DismissTaskbarEffects()
+    {
+        try
+        {
+            // While the flyout is open the effects are stood down (hidden), so the click that
+            // closes it must not silence something the user never saw.
+            if (!EffectsEnabled || _flyout.Visible || !_effectTracker.Dismiss())
+                return;
+
+            _taskbarOverlay.SetEffect(_effectTracker.Current);
+            SaveTaskbarEffectState();
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Dismissing taskbar effects failed: {ex.Message}");
+        }
+    }
+
+    // Written only when something persistable changed — a dismissal, a nuke, a window reset —
+    // not on every poll.
+    private void SaveTaskbarEffectState()
+    {
+        if (!_effectTracker.HasUnsavedChanges)
+            return;
+
+        _configManager.Update(_configManager.Settings with { TaskbarEffectState = _effectTracker.GetState() });
+        _effectTracker.MarkSaved();
     }
 
     /// <summary>
@@ -895,6 +993,10 @@ public sealed class TrayApplication : IDisposable
                     _configManager.Settings.TaskbarDisplay.HorizontalOffset);
                 _taskbarOverlay.SetAllMonitors(_configManager.Settings.TaskbarDisplay.AllMonitors);
                 _taskbarOverlay.SetEnabled(_configManager.Settings.TaskbarDisplay.Enabled);
+                _taskbarOverlay.SetEffectsEnabled(EffectsEnabled);
+                _taskbarOverlay.SetEffectSoundsEnabled(_configManager.Settings.TaskbarDisplay.EffectSounds);
+                // Re-judge now: the colour mode may have changed, or the effects just came on.
+                EvaluateTaskbarEffects();
 
                 // Start/stop update checks live to match the toggle; check immediately when
                 // newly enabled so the user doesn't wait up to a day for the first result.

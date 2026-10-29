@@ -19,32 +19,42 @@ public static class IconRenderer
     // Muted grey for the 5-hour/7-day separator dot — softer than white on a dark taskbar.
     private static readonly Color SeparatorDotColor = Color.FromArgb(160, 160, 160);
 
-    public static Color GetColorForPercentage(double percentage) => percentage switch
+    public static Color GetColorForPercentage(double percentage) => ToColor(GetLevelForPercentage(percentage));
+
+    /// <summary>The absolute-level classification behind <see cref="GetColorForPercentage"/>.</summary>
+    public static UsageLevel GetLevelForPercentage(double percentage) => percentage switch
     {
-        < 60 => GreenColor,
-        < 80 => YellowColor,
-        < 90 => OrangeColor,
-        _ => RedColor,
+        < 60 => UsageLevel.Green,
+        < 80 => UsageLevel.Yellow,
+        < 90 => UsageLevel.Orange,
+        _ => UsageLevel.Red,
     };
 
     /// <summary>
-    /// Resolves the colour for a usage percentage. In <see cref="UsageColorMode.Pace"/> (when a
-    /// window-elapsed fraction is known) it colours by pace — usage relative to time elapsed — so
-    /// the same percentage reads differently early vs late in the window. Otherwise it colours by
-    /// the absolute level (<see cref="GetColorForPercentage"/>).
+    /// Resolves the colour for a usage percentage — <see cref="GetUsageLevel"/> mapped to its
+    /// colour, so everything coloured by usage shares one set of thresholds.
     /// </summary>
     public static Color GetUsageColor(double percentage, double? windowFraction, UsageColorMode mode)
+        => ToColor(GetUsageLevel(percentage, windowFraction, mode));
+
+    /// <summary>
+    /// Classifies a usage percentage. In <see cref="UsageColorMode.Pace"/> (when a
+    /// window-elapsed fraction is known) it classifies by pace — usage relative to time elapsed —
+    /// so the same percentage reads differently early vs late in the window. Otherwise it
+    /// classifies by the absolute level (<see cref="GetLevelForPercentage"/>).
+    /// </summary>
+    public static UsageLevel GetUsageLevel(double percentage, double? windowFraction, UsageColorMode mode)
     {
         if (mode != UsageColorMode.Pace || windowFraction is null)
-            return GetColorForPercentage(percentage);
+            return GetLevelForPercentage(percentage);
 
         // ratio r ⇒ you'd hit 100% at 1/r of the window: ≤1 on/behind pace, >2 exhaust before halfway.
         return Pace.Ratio(percentage, windowFraction.Value) switch
         {
-            <= 1.0 => GreenColor,
-            <= 1.33 => YellowColor,
-            <= 2.0 => OrangeColor,
-            _ => RedColor,
+            <= 1.0 => UsageLevel.Green,
+            <= 1.33 => UsageLevel.Yellow,
+            <= 2.0 => UsageLevel.Orange,
+            _ => UsageLevel.Red,
         };
     }
 
@@ -59,6 +69,23 @@ public static class IconRenderer
         LimitSeverity.Critical => RedColor,
         LimitSeverity.Warning when baseColor != OrangeColor && baseColor != RedColor => OrangeColor,
         _ => baseColor,
+    };
+
+    /// <summary>The <see cref="UsageLevel"/> form of <see cref="ApplySeverityFloor(Color, LimitSeverity)"/>.</summary>
+    public static UsageLevel ApplySeverityFloor(UsageLevel level, LimitSeverity severity) => severity switch
+    {
+        LimitSeverity.Critical => UsageLevel.Red,
+        LimitSeverity.Warning when level < UsageLevel.Orange => UsageLevel.Orange,
+        _ => level,
+    };
+
+    /// <summary>The colour each usage level is drawn in.</summary>
+    public static Color ToColor(UsageLevel level) => level switch
+    {
+        UsageLevel.Green => GreenColor,
+        UsageLevel.Yellow => YellowColor,
+        UsageLevel.Orange => OrangeColor,
+        _ => RedColor,
     };
 
     public static Icon RenderUsageIcon(double percentage)

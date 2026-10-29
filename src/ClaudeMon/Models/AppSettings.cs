@@ -147,6 +147,16 @@ public record AppSettings
     public AlertLatchState? AlertLatchState { get; init; }
 
     /// <summary>
+    /// The taskbar escalation effects' per-window memory — dismissed smoke/fire and whether the
+    /// nuke has played (see <see cref="UI.TaskbarEffectTracker"/>) — persisted so restarting
+    /// while sitting at 100% doesn't replay the nuke, and a dismissed fire stays dismissed.
+    /// Internal state, not a user setting — kept top-level like <see cref="AlertLatchState"/>,
+    /// for the same reason: the Settings dialog's <c>with</c>-expression save must not drop it.
+    /// </summary>
+    [JsonPropertyName("taskbarEffectState")]
+    public TaskbarEffectState? TaskbarEffectState { get; init; }
+
+    /// <summary>
     /// The service-incident latch: the severity of the Anthropic incident ClaudeMon has already
     /// accounted for (see <see cref="Monitoring.ServiceStatusAlerts"/>), or null while the status
     /// page is healthy or nothing has been read yet. Persisted so restarting during a long
@@ -336,6 +346,21 @@ public record TaskbarDisplaySettings
     public bool AllMonitors { get; init; }
 
     /// <summary>
+    /// Escalation effects on the readout (issue #208): light smoke while a limit is yellow, heavy
+    /// smoke while it's orange, fire while it's red, and a one-shot nuke when it hits 100%. On by
+    /// default; only applies while the readout itself is enabled.
+    /// </summary>
+    [JsonPropertyName("escalationEffects")]
+    public bool EscalationEffects { get; init; } = true;
+
+    /// <summary>
+    /// Sound for the escalation effects: a crackling loop while the fire burns and an explosion
+    /// with the nuke. On by default; only applies while <see cref="EscalationEffects"/> is on.
+    /// </summary>
+    [JsonPropertyName("effectSounds")]
+    public bool EffectSounds { get; init; } = true;
+
+    /// <summary>
     /// Horizontal nudge in pixels applied to the readout on secondary-monitor taskbars only:
     /// negative moves it left, positive moves it right. Lets you fine-tune the spacing from
     /// the clock, whose width on secondary taskbars can only be estimated. The primary has
@@ -488,6 +513,27 @@ public record AlertLatchState(
 public record WeeklyBucketLatch(
     [property: JsonPropertyName("warningFired")] bool WarningFired,
     [property: JsonPropertyName("criticalFired")] bool CriticalFired);
+
+/// <summary>
+/// See <see cref="AppSettings.TaskbarEffectState"/>. Keyed by limit (<c>session</c>,
+/// <c>weekly</c>) — the same keys <c>UI.TaskbarEffectTracker</c> uses in memory.
+/// </summary>
+public record TaskbarEffectState(
+    [property: JsonPropertyName("limits")] Dictionary<string, TaskbarEffectLimitState> Limits);
+
+/// <summary>
+/// One limit's escalation-effect memory for its current window: the highest usage level whose
+/// effect the user has dismissed (<see cref="UsageLevel.Green"/> = none) and whether the nuke
+/// has played. <see cref="ResetsAt"/> identifies the window — when the limit's <c>resets_at</c>
+/// moves on, all of this clears. The level is stored by name, so reordering the enum can't
+/// silently reinterpret a saved dismissal.
+/// </summary>
+public record TaskbarEffectLimitState(
+    [property: JsonPropertyName("resets")] DateTimeOffset? ResetsAt,
+    [property: JsonPropertyName("dismissedThrough")]
+    [property: JsonConverter(typeof(JsonStringEnumConverter))]
+    UsageLevel DismissedThrough,
+    [property: JsonPropertyName("nukePlayed")] bool NukePlayed);
 
 public record NotificationSettings
 {

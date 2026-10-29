@@ -890,6 +890,17 @@ public sealed class TaskbarOverlayWindow : Form
             HasPainted: _hasPainted));
     }
 
+    /// <summary>
+    /// Where this readout is on screen, for the escalation-effect window that rides on it (see
+    /// <see cref="TaskbarEffectWindow"/>), or null while there is nothing to ride on — hidden
+    /// (disabled, fullscreen app, taskbar missing) or not yet painted. Read-only: the effects
+    /// follow the readout, never the other way round.
+    /// </summary>
+    internal TaskbarEffectAnchor? EffectAnchor =>
+        IsHandleCreated && Visible && _hasPainted
+            ? new TaskbarEffectAnchor(Handle, new Rectangle(_x, _y, _width, _height), _scale)
+            : null;
+
     private static Rectangle ToRectangle(RECT rect) =>
         Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
 

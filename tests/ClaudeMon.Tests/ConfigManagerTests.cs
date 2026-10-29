@@ -465,6 +465,85 @@ public class ConfigManagerTests : IDisposable
     }
 
     [Fact]
+    public void TaskbarEffectState_OlderShape_LoadsWithoutLosingSettings()
+    {
+        // The feature's first cut stored smokeDismissed/fireDismissed; those keys are ignored and
+        // the rest of the config must survive.
+        var path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path, """
+            {
+              "pollIntervalMinutes": 10,
+              "taskbarEffectState": { "limits": { "session": {
+                "resets": "2026-10-29T15:00:00+00:00",
+                "smokeDismissed": true, "fireDismissed": false, "nukePlayed": true } } }
+            }
+            """);
+
+        var manager = new ConfigManager(path, NoLog);
+        manager.Load();
+
+        Assert.Equal(10, manager.Settings.PollIntervalMinutes);
+        var session = manager.Settings.TaskbarEffectState!.Limits["session"];
+        Assert.Equal(UsageLevel.Green, session.DismissedThrough);
+        Assert.True(session.NukePlayed);
+    }
+
+    [Fact]
+    public void TaskbarDisplay_EffectSounds_DefaultOn()
+    {
+        Assert.True(new AppSettings().TaskbarDisplay.EffectSounds);
+    }
+
+    [Fact]
+    public void TaskbarDisplay_EscalationEffects_DefaultOn_AndRoundTrip()
+    {
+        Assert.True(new AppSettings().TaskbarDisplay.EscalationEffects);
+
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        manager.Load();
+        Assert.True(manager.Settings.TaskbarDisplay.EscalationEffects);
+
+        manager.Update(manager.Settings with
+        {
+            TaskbarDisplay = manager.Settings.TaskbarDisplay with { EscalationEffects = false },
+        });
+
+        var reloaded = new ConfigManager(path);
+        reloaded.Load();
+        Assert.False(reloaded.Settings.TaskbarDisplay.EscalationEffects);
+    }
+
+    [Fact]
+    public void TaskbarEffectState_RoundTrips_AndIsAbsentByDefault()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        var manager = new ConfigManager(path);
+        manager.Load();
+        Assert.Null(manager.Settings.TaskbarEffectState);
+
+        var resets = new DateTimeOffset(2026, 10, 29, 15, 0, 0, TimeSpan.Zero);
+        manager.Update(manager.Settings with
+        {
+            TaskbarEffectState = new TaskbarEffectState(new Dictionary<string, TaskbarEffectLimitState>
+            {
+                ["session"] = new(resets, DismissedThrough: UsageLevel.Orange, NukePlayed: true),
+            }),
+        });
+
+        // Stored by name, so reordering the enum can't reinterpret a saved dismissal.
+        Assert.Contains("\"Orange\"", File.ReadAllText(path));
+
+        var reloaded = new ConfigManager(path);
+        reloaded.Load();
+
+        var session = reloaded.Settings.TaskbarEffectState!.Limits["session"];
+        Assert.Equal(resets, session.ResetsAt);
+        Assert.Equal(UsageLevel.Orange, session.DismissedThrough);
+        Assert.True(session.NukePlayed);
+    }
+
+    [Fact]
     public void TaskbarDisplay_AllMonitors_DefaultsToFalse()
     {
         // Load-bearing: defaulting to true would silently opt every existing user into

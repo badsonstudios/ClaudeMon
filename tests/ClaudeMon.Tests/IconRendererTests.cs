@@ -62,6 +62,60 @@ public class IconRendererTests
         Assert.Equal(green, IconRenderer.ApplySeverityFloor(green, severity));
     }
 
+    // The level classification is the single source of the thresholds (#208): the colour
+    // functions and the escalation effects must never disagree about what's orange or red.
+
+    [Theory]
+    [InlineData(0, null, UsageColorMode.Level)]
+    [InlineData(65, null, UsageColorMode.Level)]
+    [InlineData(85, null, UsageColorMode.Level)]
+    [InlineData(95, null, UsageColorMode.Level)]
+    [InlineData(40, 0.5, UsageColorMode.Pace)]   // ratio 0.8
+    [InlineData(60, 0.5, UsageColorMode.Pace)]   // ratio 1.2
+    [InlineData(80, 0.5, UsageColorMode.Pace)]   // ratio 1.6
+    [InlineData(80, 0.2, UsageColorMode.Pace)]   // ratio 4
+    [InlineData(85, 0.5, UsageColorMode.Level)]  // Level mode ignores the fraction
+    public void GetUsageColor_IsTheColourOfGetUsageLevel(double pct, double? fraction, UsageColorMode mode)
+    {
+        Assert.Equal(
+            IconRenderer.ToColor(IconRenderer.GetUsageLevel(pct, fraction, mode)),
+            IconRenderer.GetUsageColor(pct, fraction, mode));
+    }
+
+    [Theory]
+    [InlineData(40, UsageLevel.Green)]
+    [InlineData(60, UsageLevel.Yellow)]
+    [InlineData(80, UsageLevel.Orange)]
+    [InlineData(100, UsageLevel.Orange)] // usage clamps at 100%: ratio 2.0 is the top of orange
+    public void GetUsageLevel_PaceBands(double pct, UsageLevel expected)
+    {
+        // Half-way through the window, so ratio = pct / 50.
+        Assert.Equal(expected, IconRenderer.GetUsageLevel(pct, 0.5, UsageColorMode.Pace));
+    }
+
+    [Fact]
+    public void GetUsageLevel_PaceAboveTwoIsRed()
+    {
+        // 50% a fifth of the way in: ratio 2.5.
+        Assert.Equal(UsageLevel.Red, IconRenderer.GetUsageLevel(50, 0.2, UsageColorMode.Pace));
+    }
+
+    [Theory]
+    [InlineData(UsageLevel.Green, LimitSeverity.Critical, UsageLevel.Red)]
+    [InlineData(UsageLevel.Green, LimitSeverity.Warning, UsageLevel.Orange)]
+    [InlineData(UsageLevel.Yellow, LimitSeverity.Warning, UsageLevel.Orange)]
+    [InlineData(UsageLevel.Orange, LimitSeverity.Warning, UsageLevel.Orange)]
+    [InlineData(UsageLevel.Red, LimitSeverity.Warning, UsageLevel.Red)]
+    [InlineData(UsageLevel.Red, LimitSeverity.Normal, UsageLevel.Red)]
+    [InlineData(UsageLevel.Yellow, LimitSeverity.Unknown, UsageLevel.Yellow)]
+    public void ApplySeverityFloor_Level_MatchesTheColourForm(UsageLevel level, LimitSeverity severity, UsageLevel expected)
+    {
+        Assert.Equal(expected, IconRenderer.ApplySeverityFloor(level, severity));
+        Assert.Equal(
+            IconRenderer.ToColor(expected),
+            IconRenderer.ApplySeverityFloor(IconRenderer.ToColor(level), severity));
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(42)]

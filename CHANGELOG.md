@@ -3,6 +3,14 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.29.2] - 2026-10-31
+
+### Changed
+- **The fire crackle stops after 15 seconds.** It's an alert, not a soundtrack: the crackle now
+  plays for 15 seconds when fire starts and then goes quiet while the flames keep burning. It
+  plays again for the next fire — once the fire has been out for 30 seconds, so opening the
+  flyout or alt-tabbing through a fullscreen app doesn't replay it each time. (#208)
+
 ## [0.29.1] - 2026-10-31
 
 ### Changed

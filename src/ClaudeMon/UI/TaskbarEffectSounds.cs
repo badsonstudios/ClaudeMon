@@ -224,20 +224,32 @@ internal static class EffectSoundSynth
 }
 
 /// <summary>
-/// Plays the escalation effects' sounds: the fire crackle looping while any readout shows fire,
-/// and the explosion with the nuke. One per app, not per readout — two monitors on fire are
-/// still one fire to listen to.
+/// Plays the escalation effects' sounds: the fire crackle when a readout catches fire, and the
+/// explosion with the nuke. One per app, not per readout — two monitors on fire are still one
+/// fire to listen to.
 /// </summary>
 /// <remarks>
+/// The crackle is an alert, not a soundtrack: it plays for <see cref="FireCrackleMs"/> when the
+/// fire starts and then goes quiet while the flames keep burning. It re-arms only after the fire
+/// has been out for <see cref="FireRearmMs"/>, so the brief gaps from opening the flyout or
+/// alt-tabbing through a fullscreen app don't replay it on every glance.
+///
 /// Built on <see cref="SoundPlayer"/>, which plays one sound per process at a time: starting the
-/// explosion cuts the fire loop, so the loop is resumed once the explosion has finished. The
-/// clips are synthesised on first use. A machine with no audio device just stays quiet — the
-/// first failure is logged and sound is given up for the session.
+/// explosion cuts the fire loop, so the loop is resumed once the explosion has finished (if the
+/// crackle's time isn't up). The clips are synthesised on first use. A machine with no audio
+/// device just stays quiet — the first failure is logged and sound is given up for the session.
 /// </remarks>
 internal sealed class TaskbarEffectSoundPlayer : IDisposable
 {
+    /// <summary>How long the crackle plays once fire starts.</summary>
+    internal const int FireCrackleMs = 15_000;
+
+    /// <summary>How long the fire must be out before the next fire crackles again.</summary>
+    internal const int FireRearmMs = 30_000;
+
     private readonly Logger? _logger;
     private readonly System.Windows.Forms.Timer _resumeTimer;
+    private readonly System.Windows.Forms.Timer _crackleTimer;
 
     private SoundPlayer? _fire;
     private SoundPlayer? _explosion;
@@ -245,6 +257,10 @@ internal sealed class TaskbarEffectSoundPlayer : IDisposable
     private bool _fireLooping;
     private bool _explosionPlaying;
     private bool _failed;
+
+    // The crackle's allowance for the current fire is used up (or still running down).
+    private bool _crackleSpent;
+    private long _fireOutSinceTicks;
 
     public TaskbarEffectSoundPlayer(Logger? logger = null)
     {
@@ -256,13 +272,39 @@ internal sealed class TaskbarEffectSoundPlayer : IDisposable
             _explosionPlaying = false;
             Apply();
         };
+
+        _crackleTimer = new System.Windows.Forms.Timer { Interval = FireCrackleMs };
+        _crackleTimer.Tick += (_, _) =>
+        {
+            _crackleTimer.Stop();
+            Apply();
+        };
     }
 
-    /// <summary>Whether the fire crackle should be looping (some readout is showing fire).</summary>
+    // The crackle should be sounding: fire is showing and its allowance isn't used up.
+    private bool CrackleWanted => _fireWanted && _crackleTimer.Enabled;
+
+    /// <summary>Whether some readout is showing fire (the crackle decides for itself whether to sound).</summary>
     public void SetFire(bool on)
     {
         if (_fireWanted == on) return;
         _fireWanted = on;
+
+        if (on)
+        {
+            // A new fire gets a fresh allowance; a flicker back on after a brief gap doesn't.
+            if (!_crackleSpent || Environment.TickCount64 - _fireOutSinceTicks >= FireRearmMs)
+            {
+                _crackleSpent = true;
+                _crackleTimer.Stop();
+                _crackleTimer.Start();
+            }
+        }
+        else
+        {
+            _fireOutSinceTicks = Environment.TickCount64;
+        }
+
         Apply();
     }
 
@@ -287,6 +329,9 @@ internal sealed class TaskbarEffectSoundPlayer : IDisposable
         _fireWanted = false;
         _explosionPlaying = false;
         _resumeTimer.Stop();
+        // Switched off, not merely out: the next fire after switching back on crackles afresh.
+        _crackleTimer.Stop();
+        _crackleSpent = false;
         // SoundPlayer.Stop silences whatever this process is playing, so either player will do.
         if ((_fire ?? _explosion) is { } player)
             Try(player.Stop);
@@ -299,7 +344,7 @@ internal sealed class TaskbarEffectSoundPlayer : IDisposable
 
         // Stopping comes first and isn't gated on _failed: a failure while the crackle was looping
         // must not leave it looping for the rest of the session.
-        if (!_fireWanted && _fireLooping)
+        if (!CrackleWanted && _fireLooping)
         {
             Try(() => _fire?.Stop());
             _fireLooping = false;
@@ -308,7 +353,7 @@ internal sealed class TaskbarEffectSoundPlayer : IDisposable
 
         if (_failed) return;
 
-        if (_fireWanted && !_fireLooping)
+        if (CrackleWanted && !_fireLooping)
         {
             Try(() =>
             {
@@ -343,6 +388,7 @@ internal sealed class TaskbarEffectSoundPlayer : IDisposable
     public void Dispose()
     {
         _resumeTimer.Dispose();
+        _crackleTimer.Dispose();
         try
         {
             _fire?.Stop();

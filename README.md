@@ -147,7 +147,7 @@ Settings are organized into four tabs: **General**, **Alerts**, **Taskbar**, and
 | **Show on secondary monitors** | Also show the readout on secondary monitors' taskbars, not just the primary (off by default; needs Windows set to show the taskbar on all displays) |
 | **Position** (under *Show on secondary monitors*) | Nudge the readout left (−) or right (+) on secondary monitors to fine-tune the gap from the clock; previews live as you change it (0 by default). Independent of the primary **Position** nudge |
 | **Effect animations (smoke, fire, nuke)** | Escalation effects on the readout: light smoke while a limit is yellow, thick black smoke while it's orange, fire while it's red, and a one-shot nuclear explosion when it hits 100% — judged by the usage colour logic (your colour mode plus Anthropic's severity), worse of session and weekly. Click the readout to dismiss what's showing (and anything milder) until that limit resets. Applies when you press OK (on by default) |
-| **Effect sounds (fire crackle, explosion)** (under *Effect animations*) | A quiet crackling loop while the fire burns and an explosion with the nuke. Follows the animations — no sound when nothing is on screen (on by default) |
+| **Effect sounds (fire crackle, explosion)** (under *Effect animations*) | A quiet crackle for the first 15 seconds of a fire and an explosion with the nuke (smoke is silent). Follows the animations — no sound when nothing is on screen (on by default) |
 
 #### Click-to-cycle the readout
 

@@ -3,6 +3,14 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.29.1] - 2026-10-31
+
+### Changed
+- **The taskbar effects wait until a limit is 20% used.** Early in a window the pace colouring
+  reads a few percent of fast usage as far ahead of pace, so smoke kicked in almost as soon as you
+  started working. Below 20% a limit now triggers no smoke, fire, or sound, whatever its colour;
+  from 20% on, the effects follow the colour exactly as before. (#208)
+
 ## [0.29.0] - 2026-10-29
 
 ### Added

@@ -53,11 +53,11 @@ public class TaskbarEffectInputsTests
     {
         var limits = new[]
         {
-            new UsageLimit("session", "session", 10, "warning", SessionReset),
-            new UsageLimit("weekly_all", "weekly", 10, "critical", WeeklyReset),
+            new UsageLimit("session", "session", 25, "warning", SessionReset),
+            new UsageLimit("weekly_all", "weekly", 25, "critical", WeeklyReset),
         };
 
-        var readings = TaskbarEffectInputs.From(Usage(10, 10, limits), UsageColorMode.Level);
+        var readings = TaskbarEffectInputs.From(Usage(25, 25, limits), UsageColorMode.Level);
 
         Assert.Equal(UsageLevel.Orange, Find(readings, TaskbarEffectTracker.SessionKey).Level);
         Assert.Equal(UsageLevel.Red, Find(readings, TaskbarEffectTracker.WeeklyKey).Level);
@@ -109,13 +109,43 @@ public class TaskbarEffectInputsTests
     {
         var limits = new[]
         {
-            new UsageLimit("session", "session", 10, "critical", SessionReset,
+            new UsageLimit("session", "session", 25, "critical", SessionReset,
                 Scope: new LimitScope(new LimitScopeModel("Opus"))),
         };
 
-        var readings = TaskbarEffectInputs.From(Usage(10, 10, limits), UsageColorMode.Level);
+        var readings = TaskbarEffectInputs.From(Usage(25, 25, limits), UsageColorMode.Level);
 
         Assert.Equal(UsageLevel.Green, Find(readings, TaskbarEffectTracker.SessionKey).Level);
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(19.9)]
+    public void BelowTwentyPercentNothingTriggers(double pct)
+    {
+        // Early in a window: 5% used a few minutes in is a wild pace ratio (red), and the API may
+        // even flag it — still no effect until a fifth of the limit is gone.
+        var early = new UsageResponse(
+            new UsageBucket(pct, DateTimeOffset.UtcNow + TimeSpan.FromHours(4.9)),
+            new UsageBucket(pct, WeeklyReset),
+            [new UsageLimit("session", "session", pct, "critical", null)]);
+
+        var readings = TaskbarEffectInputs.From(early, UsageColorMode.Pace);
+
+        Assert.Equal(2, readings.Count); // still tracked, for resets
+        Assert.All(readings, r => Assert.Equal(UsageLevel.Green, r.Level));
+    }
+
+    [Fact]
+    public void FromTwentyPercentTheColourLogicApplies()
+    {
+        // 20% a few minutes into the window is far ahead of pace.
+        var usage = new UsageResponse(
+            new UsageBucket(20, DateTimeOffset.UtcNow + TimeSpan.FromHours(4.9)), null);
+
+        var session = Assert.Single(TaskbarEffectInputs.From(usage, UsageColorMode.Pace));
+
+        Assert.Equal(UsageLevel.Red, session.Level);
     }
 
     [Fact]

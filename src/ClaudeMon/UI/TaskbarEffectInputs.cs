@@ -16,6 +16,13 @@ using ClaudeMon.Models;
 /// </remarks>
 internal static class TaskbarEffectInputs
 {
+    /// <summary>
+    /// Below this utilisation a limit triggers no effect, whatever its colour. Early in a window
+    /// the pace colouring is twitchy — a few percent used in the first minutes reads as far
+    /// ahead of pace — and smoke off the back of 5% usage is noise, not a warning.
+    /// </summary>
+    internal const double MinPercentForEffects = 20;
+
     public static IReadOnlyList<TaskbarEffectReading> From(UsageResponse usage, UsageColorMode mode)
     {
         var readings = new List<TaskbarEffectReading>(2);
@@ -43,9 +50,13 @@ internal static class TaskbarEffectInputs
     private static TaskbarEffectReading Reading(
         string key, UsageBucket bucket, TimeSpan window, LimitSeverity severity, UsageColorMode mode)
     {
-        var level = IconRenderer.ApplySeverityFloor(
-            IconRenderer.GetUsageLevel(bucket.UtilizationPct, bucket.ElapsedFraction(window), mode),
-            severity);
+        // Still reported below the threshold (as green), so the tracker keeps following the
+        // limit's window and its resets.
+        var level = bucket.UtilizationPct < MinPercentForEffects
+            ? UsageLevel.Green
+            : IconRenderer.ApplySeverityFloor(
+                IconRenderer.GetUsageLevel(bucket.UtilizationPct, bucket.ElapsedFraction(window), mode),
+                severity);
         return new TaskbarEffectReading(key, level, bucket.UtilizationPct, bucket.ResetAt);
     }
 

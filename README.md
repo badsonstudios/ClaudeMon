@@ -93,6 +93,8 @@ The warehouse has **its own format version**, independent of `local-usage.json` 
 - Costs are computed from a **bundled table of Anthropic API list prices** per model (input, output, cache-write, and cache-read rates). On a Max subscription you don't actually pay per token — the figure shows what the usage *would* cost at API rates, a useful intensity gauge.
 - The transcripts only record what happens **on this machine in Claude Code**. Usage from claude.ai chats, the mobile apps, or other machines never appears here — so these totals are **not** the same thing as (and won't match) the rate-limit percentages above them, which the API computes server-side.
 - A model the bundled table doesn't know yet shows its tokens with cost as `—` (or the known portion as `≥$…`) rather than guessing at a possibly wrong rate.
+- When an update changes the price table, the last 30 days are **re-priced automatically** on the next start by re-reading the transcripts (a few seconds). Days older than that — already in the warehouse, their transcripts gone — keep the figure they were recorded with, as does any day whose transcripts were deleted in the meantime.
+- Two pricing details aren't modelled: Haiku 5.5's higher rate for prompts over 100K tokens (priced at the base rate), and the fast-mode premium.
 
 **Privacy:** only token counts, model ids, message ids, timestamps, and each session's working-directory path (used as the project name in the breakdown, and cached locally) are ever read into memory — never your prompts or Claude's replies — and nothing leaves your machine. CSV export writes only those same aggregates, to a file you choose. If `~/.claude/projects` doesn't exist, the features simply don't appear.
 

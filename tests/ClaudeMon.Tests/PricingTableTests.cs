@@ -169,16 +169,81 @@ public class PricingTableTests
     }
 
     [Fact]
-    public void LoadEmbedded_Sonnet5_UsesIntroRateThroughAugust2026()
+    public void LoadEmbedded_Sonnet5_StaysAtTwoDollarsAfterTheCancelledIncrease()
     {
         var pricing = PricingTable.LoadEmbedded().Resolve("claude-sonnet-5");
 
         Assert.NotNull(pricing);
-        // Introductory $2/MTok input through 2026-08-31, standard $3 from
-        // 2026-09-01 — the changeover needs no release of its own.
+        // The $3/$15 rise scheduled for 2026-09-01 was cancelled (issue #212):
+        // $2/MTok input on both sides of the old changeover date.
         Assert.Equal(2.0, pricing.CostUsd(InputEntryOn(2026, 8, 31)), precision: 10);
-        Assert.Equal(3.0, pricing.CostUsd(InputEntryOn(2026, 9, 1)), precision: 10);
+        Assert.Equal(2.0, pricing.CostUsd(InputEntryOn(2026, 9, 1)), precision: 10);
+        Assert.Null(pricing.PriorRates);
     }
+
+    [Fact]
+    public void LoadEmbedded_PointFiveVersions_PriceAtTheirOwnRowsNotTheParent()
+    {
+        var table = PricingTable.LoadEmbedded();
+
+        // Issue #212: these fell through to unpriced. Each must land on its own
+        // row — the parent's rates differ (opus-5 $5 vs opus-5-5 $4).
+        Assert.Equal(4.0, table.Resolve("claude-opus-5-5")!.InputPerMTok);
+        Assert.Equal(4.0, table.Resolve("claude-opus-5-5[1m]")!.InputPerMTok);
+        Assert.Equal(4.0, table.Resolve("claude-opus-5-5-fast")!.InputPerMTok);
+        Assert.Equal(2.0, table.Resolve("claude-sonnet-5-5")!.InputPerMTok);
+        Assert.Equal(8.0, table.Resolve("claude-fable-5-2")!.InputPerMTok);
+        Assert.Equal(10.0, table.Resolve("claude-fable-5-1")!.InputPerMTok);
+        Assert.Equal(0.1, table.Resolve("claude-haiku-5-5")!.InputPerMTok);
+        Assert.Equal(5.0, table.Resolve("claude-opus-5")!.InputPerMTok);
+    }
+
+    [Fact]
+    public void Fingerprint_TracksRatesNotIdCaseOrOrder()
+    {
+        var a = new PricingTable(new Dictionary<string, ModelPricing>
+        {
+            ["claude-x"] = new(1.0, 5.0, 1.25, 2.0, 0.1),
+            ["claude-y"] = new(2.0, 10.0, 2.5, 4.0, 0.2),
+        });
+        var sameRatesReordered = new PricingTable(new Dictionary<string, ModelPricing>
+        {
+            ["CLAUDE-Y"] = new(2.0, 10.0, 2.5, 4.0, 0.2),
+            ["claude-x"] = new(1.0, 5.0, 1.25, 2.0, 0.1),
+        });
+        var oneRateChanged = new PricingTable(new Dictionary<string, ModelPricing>
+        {
+            ["claude-x"] = new(1.0, 5.0, 1.25, 2.0, 0.05),
+            ["claude-y"] = new(2.0, 10.0, 2.5, 4.0, 0.2),
+        });
+        var priorWindowAdded = new PricingTable(new Dictionary<string, ModelPricing>
+        {
+            ["claude-x"] = new(1.0, 5.0, 1.25, 2.0, 0.1,
+                new[] { new DatedRate(new DateOnly(2026, 1, 1), 0.5, 2.5, 0.625, 1.0, 0.05) }),
+            ["claude-y"] = new(2.0, 10.0, 2.5, 4.0, 0.2),
+        });
+
+        Assert.Equal(a.Fingerprint, sameRatesReordered.Fingerprint);
+        Assert.NotEqual(a.Fingerprint, oneRateChanged.Fingerprint);
+        Assert.NotEqual(a.Fingerprint, priorWindowAdded.Fingerprint);
+        Assert.Equal(PricingTable.LoadEmbedded().Fingerprint, PricingTable.LoadEmbedded().Fingerprint);
+    }
+
+    [Fact]
+    public void Fingerprint_ComputationIsPinned()
+    {
+        // Every installed cache stores this value; if the way it's computed changes
+        // by accident, every user silently re-prices. Change it on purpose (bump
+        // PricingLogicVersion) and update the pin.
+        var table = new PricingTable(new Dictionary<string, ModelPricing>
+        {
+            ["claude-x"] = new(1.0, 5.0, 1.25, 2.0, 0.1),
+        });
+
+        Assert.Equal(PinnedFingerprint, table.Fingerprint);
+    }
+
+    private const string PinnedFingerprint = "a2898d00c4d1a774";
 
     [Fact]
     public void LoadEmbedded_LongContextTierIds_PriceAtTheFamilyRate()
@@ -209,14 +274,21 @@ public class PricingTableTests
     [Theory]
     // Anthropic standing list prices per MTok: input, output, 5m cache write,
     // 1h cache write, cache read. Source:
-    // platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-08-11).
-    // Sonnet 5's introductory window is a superseded rate and is pinned
-    // separately by LoadEmbedded_Sonnet5_UsesIntroRateThroughAugust2026.
+    // platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-11-13).
+    // Cache reads are no longer uniformly 0.1x: 0.05x on Opus 5.5 / Sonnet 5.5,
+    // 0.025x on Fable / Mythos 5.1 and later.
+    [InlineData("claude-fable-5-2", 8.0, 40.0, 10.0, 16.0, 0.2)]
+    [InlineData("claude-mythos-5-2", 8.0, 40.0, 10.0, 16.0, 0.2)]
+    [InlineData("claude-fable-5-1", 10.0, 50.0, 12.5, 20.0, 0.25)]
+    [InlineData("claude-mythos-5-1", 10.0, 50.0, 12.5, 20.0, 0.25)]
     [InlineData("claude-fable-5", 10.0, 50.0, 12.5, 20.0, 1.0)]
     [InlineData("claude-mythos-5", 10.0, 50.0, 12.5, 20.0, 1.0)]
+    [InlineData("claude-opus-5-5", 4.0, 20.0, 5.0, 8.0, 0.2)]
     [InlineData("claude-opus-5", 5.0, 25.0, 6.25, 10.0, 0.5)]
     [InlineData("claude-opus-4-8", 5.0, 25.0, 6.25, 10.0, 0.5)]
-    [InlineData("claude-sonnet-5", 3.0, 15.0, 3.75, 6.0, 0.3)]
+    [InlineData("claude-sonnet-5-5", 2.0, 10.0, 2.5, 4.0, 0.1)]
+    [InlineData("claude-sonnet-5", 2.0, 10.0, 2.5, 4.0, 0.2)]
+    [InlineData("claude-haiku-5-5", 0.1, 0.5, 0.125, 0.2, 0.01)]
     [InlineData("claude-haiku-4-5", 1.0, 5.0, 1.25, 2.0, 0.1)]
     public void LoadEmbedded_CurrentModels_MatchPublishedRates(
         string id, double input, double output, double write5m, double write1h, double read)

@@ -3,6 +3,23 @@
 All notable changes to ClaudeMon are documented here. Each version below maps to a
 GitHub release; the release notes are taken from these entries.
 
+## [0.29.3] - 2026-11-13
+
+### Fixed
+- **Costs for the newest models.** Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and 5.2, Mythos 5.1
+  and 5.2, and Haiku 5.5 were missing from the bundled price table, so their tokens were counted
+  but priced at nothing — "Today" read as `≥$…` and the chart hatched nearly every day. They're
+  now priced at Anthropic's published rates, including their cheaper cache reads. (#212)
+- **Sonnet 5 was priced 50% too high from September 1.** Anthropic cancelled the planned rise
+  from $2/$10 to $3/$15 per million tokens; $2/$10 is now the standard price. (#212)
+
+### Changed
+- **A price update now re-prices your recent history.** When the price table changes, the next
+  start re-reads the last 30 days of transcripts (a few seconds) so the whole window — today, the
+  chart, the breakdown, budgets, and the warehouse copy of those days — reflects the new rates,
+  not just usage from then on. A day whose transcripts are already gone keeps its old figure
+  rather than disappearing. (#212)
+
 ## [0.29.2] - 2026-10-31
 
 ### Changed

@@ -256,21 +256,20 @@ public class LocalUsageStoreTests : IDisposable
     {
         // The bundled table — not the round-numbers fake — because the point is
         // that a day of today's models is fully priced, so the flyout shows a
-        // real "Today: $…" and the chart doesn't hatch the bar (#161). The two
-        // models here are ones whose published rate doesn't change on a date;
-        // Sonnet 5's introductory window would make the expected total depend on
-        // the day the suite runs, and it is pinned in PricingTableTests instead.
+        // real "Today: $…" and the chart doesn't hatch the bar (#161, #212).
         WriteTranscript("s1.jsonl",
             Line(_now.AddMinutes(-30), "msg_1", "req_1", input: 1_000_000, output: 1_000_000, model: "claude-opus-5"),
-            Line(_now.AddMinutes(-20), "msg_2", "req_2", input: 1_000_000, output: 1_000_000, model: "claude-haiku-4-5"));
+            Line(_now.AddMinutes(-20), "msg_2", "req_2", input: 1_000_000, output: 1_000_000, model: "claude-haiku-4-5"),
+            Line(_now.AddMinutes(-15), "msg_3", "req_3", input: 1_000_000, output: 1_000_000, model: "claude-opus-5-5"),
+            Line(_now.AddMinutes(-10), "msg_4", "req_4", input: 1_000_000, output: 1_000_000, model: "claude-fable-5-2"));
 
         var store = Store(PricingTable.LoadEmbedded());
         store.ScanOnce();
 
         var snap = store.Snapshot();
         Assert.NotNull(snap);
-        // opus-5: $5 + $25. haiku-4-5: $1 + $5.
-        Assert.Equal(36.0, snap.CostUsd, precision: 10);
+        // opus-5: $5 + $25. haiku-4-5: $1 + $5. opus-5-5: $4 + $20. fable-5-2: $8 + $40.
+        Assert.Equal(108.0, snap.CostUsd, precision: 10);
         Assert.False(snap.HasUnpricedModels);
     }
 
@@ -1337,5 +1336,358 @@ public class LocalUsageStoreTests : IDisposable
 
         Assert.Equal(100, store.Breakdown(BreakdownTimeframe.ThirtyDays)!.Totals.InputTokens);
         Assert.False(Directory.Exists(Path.Combine(_tempDir, "warehouse")));
+    }
+
+    // ---- Re-pricing when the pricing table changes (issue #212) ----
+
+    // Same model as Pricing(), input doubled to $20/MTok.
+    private static PricingTable RaisedPricing() => new(new Dictionary<string, ModelPricing>
+    {
+        ["claude-fable-5"] = new(20.0, 50.0, 12.5, 20.0, 1.0),
+    });
+
+    [Fact]
+    public void Load_PricingTableChanged_RepricesTheLiveWindowWithoutDoubleCounting()
+    {
+        // No ids: a rescan that kept the old cells, offsets, or keys would double.
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddMinutes(-30), null, null, input: 1_000_000, output: 0),
+            Line(_now.AddDays(-3), null, null, input: 1_000_000, output: 0));
+        Store().ScanOnce();
+
+        var repriced = Store(RaisedPricing());
+        repriced.Load();
+        repriced.ScanOnce();
+        repriced.ScanOnce();
+
+        var thirty = repriced.Breakdown(BreakdownTimeframe.ThirtyDays)!.Totals;
+        Assert.Equal(2_000_000, thirty.InputTokens);
+        Assert.Equal(40.0, thirty.CostUsd, precision: 10);
+        Assert.Equal(20.0, repriced.Snapshot()!.CostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void Load_PricingTableChanged_FormerlyUnpricedModelBecomesPriced()
+    {
+        // The #212 shape: a model missing from the old table shows as a floor; once
+        // the table learns it, the next start turns the floor into a real figure.
+        WriteTranscript("s1.jsonl",
+            Line(_now.AddMinutes(-30), "msg_1", "req_1", input: 1_000_000, output: 0, model: "claude-opus-5-5"));
+        var before = Store();
+        before.ScanOnce();
+        Assert.True(before.Snapshot()!.HasUnpricedModels);
+
+        var after = Store(PricingTable.LoadEmbedded());
+        after.Load();
+        after.ScanOnce();
+
+        var snap = after.Snapshot()!;
+        Assert.False(snap.HasUnpricedModels);
+        Assert.Equal(4.0, snap.CostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void Load_SamePricingTable_DoesNotRescan()
+    {
+        // Delete the transcript after the first scan: an unchanged table keeps the
+        // cached cells, and nothing is re-read (there's nothing left to re-read).
+        var path = WriteTranscript("s1.jsonl", Line(_now.AddMinutes(-30), null, null, input: 1_000_000, output: 0));
+        Store().ScanOnce();
+        File.Delete(path);
+
+        var reloaded = Store();
+        reloaded.Load();
+        reloaded.ScanOnce();
+
+        Assert.Equal(10.0, reloaded.Snapshot()!.CostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void Load_PricingTableChanged_KeepsCellsWhoseTranscriptsAreGone()
+    {
+        // proj-a's transcript is deleted before the re-price; proj-b's survives.
+        // proj-a's day can't be rebuilt, so it keeps its old figure; proj-b is
+        // re-priced. Neither is lost or doubled.
+        var gone = WriteTranscriptTo("proj-a", "s1.jsonl",
+            Line(_now.AddDays(-2), "msg_1", "req_1", input: 1_000_000, output: 0));
+        WriteTranscriptTo("proj-b", "s2.jsonl",
+            Line(_now.AddDays(-2), "msg_2", "req_2", input: 1_000_000, output: 0));
+        Store().ScanOnce();
+        File.Delete(gone);
+
+        var repriced = Store(RaisedPricing());
+        repriced.Load();
+        repriced.ScanOnce();
+
+        var rows = repriced.Breakdown(BreakdownTimeframe.SevenDays)!.ByProject;
+        Assert.Equal(10.0, Assert.Single(rows, r => r.Key == "proj-a").CostUsd, precision: 10);
+        Assert.Equal(20.0, Assert.Single(rows, r => r.Key == "proj-b").CostUsd, precision: 10);
+
+        // And the merged result is saved under the new fingerprint: a further
+        // restart neither rescans nor drops the restored cell.
+        var again = Store(RaisedPricing());
+        again.Load();
+        again.ScanOnce();
+        Assert.Equal(30.0, again.Breakdown(BreakdownTimeframe.SevenDays)!.Totals.CostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void Load_PricingTableChanged_RebanksRepricedDaysInTheWarehouse()
+    {
+        var yesterday = _now.AddDays(-1);
+        WriteTranscript("s1.jsonl", Line(yesterday, "msg_1", "req_1", input: 1_000_000, output: 0));
+        var warehouse = Warehouse();
+        Store(warehouse: warehouse).ScanOnce();
+        Assert.Equal(10.0, warehouse.ReadRange(LocalDay(yesterday), LocalDay(yesterday))
+            .Days[DayKey(yesterday)]["proj-a|claude-fable-5"].CostUsd, precision: 10);
+
+        var repriced = Store(RaisedPricing(), warehouse: warehouse);
+        repriced.Load();
+        repriced.ScanOnce();
+
+        // The warehouse copy is what the day reads as once it ages out of the
+        // live window — it must not stay at the old price.
+        Assert.Equal(20.0, warehouse.ReadRange(LocalDay(yesterday), LocalDay(yesterday))
+            .Days[DayKey(yesterday)]["proj-a|claude-fable-5"].CostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void Reprice_LockedTranscript_ChangesNothingAndRetriesWithoutDoubleCounting()
+    {
+        // Review finding: a file unreadable during the re-price pass must not
+        // leave its cells to be counted again later.
+        var path = WriteTranscript("s1.jsonl", Line(_now.AddDays(-2), null, null, input: 1_000_000, output: 0));
+        Store().ScanOnce();
+
+        var repriced = Store(RaisedPricing());
+        repriced.Load();
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            repriced.ScanOnce();
+            // Nothing re-priced while the file is locked — still the old figure.
+            Assert.Equal(10.0, repriced.Breakdown(BreakdownTimeframe.SevenDays)!.Totals.CostUsd, precision: 10);
+        }
+
+        repriced.ScanOnce();
+        repriced.ScanOnce();
+        var totals = repriced.Breakdown(BreakdownTimeframe.SevenDays)!.Totals;
+        Assert.Equal(1_000_000, totals.InputTokens);
+        Assert.Equal(20.0, totals.CostUsd, precision: 10);
+
+        // A restart after the lock-time pass still re-prices (the fingerprint
+        // didn't advance) and still doesn't double.
+        var restarted = Store(RaisedPricing());
+        restarted.Load();
+        restarted.ScanOnce();
+        Assert.Equal(1_000_000, restarted.Breakdown(BreakdownTimeframe.SevenDays)!.Totals.InputTokens);
+    }
+
+    [Fact]
+    public void Reprice_PartiallyRebuildableCell_KeepsItsRecordedFigureAndTheWarehouseCopy()
+    {
+        // Review finding: two sessions feed one (day, project, model) cell, and one
+        // transcript is gone. The rebuilt cell would be short, so the recorded one
+        // stands — and the warehouse must not be handed a smaller day.
+        var yesterday = _now.AddDays(-1);
+        var gone = WriteTranscript("s1.jsonl", Line(yesterday, "msg_1", "req_1", input: 1_000_000, output: 0));
+        WriteTranscript("s2.jsonl", Line(yesterday.AddHours(1), "msg_2", "req_2", input: 1_000_000, output: 0));
+        var warehouse = Warehouse();
+        Store(warehouse: warehouse).ScanOnce();
+        File.Delete(gone);
+
+        var repriced = Store(RaisedPricing(), warehouse: warehouse);
+        repriced.Load();
+        repriced.ScanOnce();
+
+        var cell = warehouse.ReadRange(LocalDay(yesterday), LocalDay(yesterday))
+            .Days[DayKey(yesterday)]["proj-a|claude-fable-5"];
+        Assert.Equal(2_000_000, cell.InputTokens);
+        Assert.Equal(20.0, cell.CostUsd, precision: 10);
+        Assert.Equal(20.0, repriced.Breakdown(BreakdownTimeframe.SevenDays)!.Totals.CostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void Reprice_DataAppendedSinceTheLastSave_IsCountedOnceAtTheNewRate()
+    {
+        // The re-price reads only up to the recorded offset; the normal scan then
+        // picks up what was appended after it.
+        var path = WriteTranscript("s1.jsonl", Line(_now.AddHours(-2), null, null, input: 1_000_000, output: 0));
+        Store().ScanOnce();
+        File.AppendAllText(path, Line(_now.AddHours(-1), null, null, input: 1_000_000, output: 0) + "\n");
+
+        var repriced = Store(RaisedPricing());
+        repriced.Load();
+        repriced.ScanOnce();
+
+        var snap = repriced.Snapshot()!;
+        Assert.Equal(2_000_000, snap.TotalTokens);
+        Assert.Equal(40.0, snap.CostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void Reprice_CacheFromBeforeTheFingerprintExisted_IsRepriced()
+    {
+        WriteTranscript("s1.jsonl", Line(_now.AddMinutes(-30), "msg_1", "req_1", input: 1_000_000, output: 0));
+        Store().ScanOnce();
+        // Strip the field, as a pre-#212 build would have written the cache.
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(_cachePath))!.AsObject();
+        Assert.True(json.Remove("pricing"));
+        File.WriteAllText(_cachePath, json.ToJsonString());
+
+        // Same rates as the cache was priced at, so only the missing field drives
+        // the re-price; the figure must come through unchanged and not doubled.
+        var store = Store();
+        store.Load();
+        store.ScanOnce();
+        Assert.Equal(10.0, store.Snapshot()!.CostUsd, precision: 10);
+        Assert.Equal(Pricing().Fingerprint,
+            System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(_cachePath))!["pricing"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Reprice_EmptyFallbackTable_KeepsRecordedCostsAndFingerprint()
+    {
+        // Review finding: a failed resource load must not rewrite history as $0.
+        WriteTranscript("s1.jsonl", Line(_now.AddDays(-2), "msg_1", "req_1", input: 1_000_000, output: 0));
+        Store().ScanOnce();
+
+        var broken = Store(new PricingTable(new Dictionary<string, ModelPricing>()));
+        broken.Load();
+        broken.ScanOnce();
+        Assert.Equal(10.0, broken.Breakdown(BreakdownTimeframe.SevenDays)!.Totals.CostUsd, precision: 10);
+
+        // A later start with a real (changed) table still re-prices.
+        var fixedTable = Store(RaisedPricing());
+        fixedTable.Load();
+        fixedTable.ScanOnce();
+        Assert.Equal(20.0, fixedTable.Breakdown(BreakdownTimeframe.SevenDays)!.Totals.CostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void Reprice_PermanentlyUnreadableTranscript_GivesUpAfterAFewPassesAndKeepsItsCells()
+    {
+        var stuck = WriteTranscriptTo("proj-a", "s1.jsonl", Line(_now.AddDays(-2), "msg_1", "req_1", input: 1_000_000, output: 0));
+        WriteTranscriptTo("proj-b", "s2.jsonl", Line(_now.AddDays(-2), "msg_2", "req_2", input: 1_000_000, output: 0));
+        Store().ScanOnce();
+
+        var repriced = Store(RaisedPricing());
+        repriced.Load();
+        using (new FileStream(stuck, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            for (var i = 0; i < LocalUsageStore.MaxRepriceFailedPasses; i++)
+                repriced.ScanOnce();
+        }
+
+        // Re-priced without the stuck file: proj-a can't be rebuilt so it keeps
+        // $10; proj-b moves to $20; nothing doubles once the file reopens.
+        repriced.ScanOnce();
+        var rows = repriced.Breakdown(BreakdownTimeframe.SevenDays)!.ByProject;
+        Assert.Equal(10.0, Assert.Single(rows, r => r.Key == "proj-a").CostUsd, precision: 10);
+        Assert.Equal(20.0, Assert.Single(rows, r => r.Key == "proj-b").CostUsd, precision: 10);
+        Assert.Equal(2_000_000, repriced.Breakdown(BreakdownTimeframe.SevenDays)!.Totals.InputTokens);
+    }
+
+    [Fact]
+    public void Reprice_MalformedDayKeyInCache_DoesNotStopScanning()
+    {
+        WriteTranscript("s1.jsonl", Line(_now.AddMinutes(-30), "msg_1", "req_1", input: 1_000_000, output: 0));
+        Store().ScanOnce();
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(_cachePath))!.AsObject();
+        json["cells"]!.AsObject()["2026-1-5"] = new System.Text.Json.Nodes.JsonObject();
+        File.WriteAllText(_cachePath, json.ToJsonString());
+
+        var repriced = Store(RaisedPricing());
+        repriced.Load();
+        var ex = Record.Exception(() => repriced.ScanOnce());
+
+        Assert.Null(ex);
+        Assert.Equal(20.0, repriced.Snapshot()!.CostUsd, precision: 10);
+    }
+
+    [Fact]
+    public void Reprice_ShrunkTranscript_KeepsTheRecordedFigure()
+    {
+        var path = WriteTranscript("s1.jsonl",
+            Line(_now.AddHours(-20), "msg_1", "req_1", input: 1_000_000, output: 0),
+            Line(_now.AddHours(-20).AddHours(1), "msg_2", "req_2", input: 1_000_000, output: 0));
+        Store().ScanOnce();
+        File.WriteAllText(path, Line(_now.AddHours(-20), "msg_1", "req_1", input: 1_000_000, output: 0) + "\n", Utf8NoBom);
+
+        var repriced = Store(RaisedPricing());
+        repriced.Load();
+        repriced.ScanOnce();
+
+        var totals = repriced.Breakdown(BreakdownTimeframe.SevenDays)!.Totals;
+        Assert.Equal(2_000_000, totals.InputTokens);
+        Assert.Equal(20.0, totals.CostUsd, precision: 10);
+    }
+
+    [Theory]
+    [InlineData("one\ntwo\nthree\n", 6, new[] { "one" })]          // limit mid-line: the cut line isn't delivered
+    [InlineData("one\r\ntwo\r\n", 5, new[] { "one" })]             // CRLF, limit right after the first \n
+    [InlineData("one\ntwo\n", 1000, new[] { "one", "two" })]       // limit past EOF (shrunk file)
+    [InlineData("one\n", 0, new string[0])]                        // limit == start
+    public void ReadCompleteLines_Limit_EdgeCases(string text, int limit, string[] expected)
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(text));
+        var lines = new List<string>();
+
+        LocalUsageStore.ReadCompleteLines(stream, 0, lines.Add, limit: limit);
+
+        Assert.Equal(expected, lines);
+    }
+
+    [Fact]
+    public void ReadCompleteLines_Limit_OnABufferBoundary()
+    {
+        // 64KB read buffer: put a line ending exactly on it and limit there.
+        var first = new string('a', 64 * 1024 - 1) + "\n";
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(first + "second\n"));
+        var lines = new List<string>();
+
+        var consumed = LocalUsageStore.ReadCompleteLines(stream, 0, lines.Add, limit: 64 * 1024);
+
+        Assert.Single(lines);
+        Assert.Equal(64 * 1024, consumed);
+    }
+
+    [Fact]
+    public void ReadCompleteLines_Limit_StopsAtTheGivenOffset()
+    {
+        var bytes = Encoding.UTF8.GetBytes("one\ntwo\nthree\n");
+        using var stream = new MemoryStream(bytes);
+        var lines = new List<string>();
+
+        var consumed = LocalUsageStore.ReadCompleteLines(stream, 0, lines.Add, limit: Encoding.UTF8.GetByteCount("one\ntwo\n"));
+
+        Assert.Equal(new[] { "one", "two" }, lines);
+        Assert.Equal(Encoding.UTF8.GetByteCount("one\ntwo\n"), consumed);
+    }
+
+    [Fact]
+    public void Load_PricingTableChanged_KeepsUnbankedDays()
+    {
+        var day = _now.AddDays(-29);
+        WriteTranscript("s1.jsonl", Line(day, "msg_1", "req_1", input: 700, output: 0));
+        Store(warehouse: UnwritableWarehouse(day)).ScanOnce();
+
+        // The day ages out unbanked (only the carried copy is left)...
+        var later = _now.AddDays(2);
+        var aging = Store(warehouse: UnwritableWarehouse(day), now: later);
+        aging.Load();
+        aging.ScanOnce();
+
+        // ...then the pricing table changes. The re-price must not take the
+        // carried day with it — a working warehouse still receives it.
+        Directory.Delete(Path.Combine(_tempDir, "warehouse"), true);
+        var repaired = Warehouse();
+        var banking = Store(RaisedPricing(), warehouse: repaired, now: later);
+        banking.Load();
+        banking.ScanOnce();
+
+        Assert.Equal(
+            700,
+            repaired.ReadRange(LocalDay(day), LocalDay(day))
+                .Days[DayKey(day)]["proj-a|claude-fable-5"].InputTokens);
     }
 }

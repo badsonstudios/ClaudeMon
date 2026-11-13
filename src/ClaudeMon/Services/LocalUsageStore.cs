@@ -90,6 +90,18 @@ public sealed class LocalUsageStore
     /// </summary>
     internal const int MaxUnbankedDays = 90;
 
+    // PricingTable.Fingerprint the dollars in _cells were computed under (issue
+    // #212) — persisted, and what Save writes, so it only moves to the current
+    // table once a re-price has actually landed. Differs from _pricing's after
+    // loading a cache priced under another table (or one older than the field).
+    private string? _cellsFingerprint;
+
+    // Re-price passes abandoned on an unreadable transcript; once this reaches
+    // MaxRepriceFailedPasses, unreadable files are treated as missing instead.
+    // In-memory only: a restart gets a fresh set of retries.
+    private int _repriceFailedPasses;
+    internal const int MaxRepriceFailedPasses = 3;
+
     public LocalUsageStore(
         string? projectsDir = null,
         string? cachePath = null,
@@ -105,6 +117,7 @@ public sealed class LocalUsageStore
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _warehouse = warehouse;
         _available = Directory.Exists(_projectsDir);
+        _cellsFingerprint = _pricing.Fingerprint;
     }
 
     /// <summary>Whether the transcript directory existed last time anyone looked.</summary>
@@ -157,6 +170,7 @@ public sealed class LocalUsageStore
                 }
                 foreach (var (key, ts) in cache.RecentDedupeKeys ?? []) _recentKeys[key] = ts;
                 _recentCosts.AddRange(cache.RecentCosts ?? []);
+                _cellsFingerprint = cache.PricingFingerprint;
             }
             catch (Exception ex) when (
                 ex is IOException or JsonException or UnauthorizedAccessException or ArgumentException)
@@ -170,6 +184,7 @@ public sealed class LocalUsageStore
                 _recentCosts.Clear();
                 _pendingWarehouseDays.Clear();
                 _unbankedDays.Clear();
+                _cellsFingerprint = _pricing.Fingerprint;
             }
         }
     }
@@ -635,7 +650,11 @@ public sealed class LocalUsageStore
             return;
         }
 
-        var changed = false;
+        // Before this pass ingests anything new, so the cells still describe
+        // exactly the bytes behind the recorded offsets — what the re-price
+        // re-reads and compares against.
+        var changed = TryRepriceCells();
+
         foreach (var path in files)
         {
             try
@@ -674,6 +693,185 @@ public sealed class LocalUsageStore
         // Deliberately outside the lock — the warehouse touches the disk, and
         // the UI thread takes snapshots under this lock every few seconds.
         RollInToWarehouse(rollIn, now);
+    }
+
+    /// <summary>
+    /// Re-prices the live cells after the pricing table changed (issue #212).
+    /// Cells hold dollars, not rates, so each tracked transcript is re-read up to
+    /// its recorded offset — exactly the bytes already counted — and each
+    /// (day, project|model) cell is rebuilt at today's rates. A rebuilt cell
+    /// replaces the cached one's cost only when its four token counts match
+    /// exactly; anything else (a transcript deleted since, the retention edge
+    /// cutting into a day, a duplicate counted differently) keeps its recorded
+    /// figure. So a re-price can only correct a cost, never move a token — and
+    /// never hand the warehouse a smaller day than it already holds.
+    ///
+    /// All-or-nothing per pass: if any still-present transcript can't be read,
+    /// nothing changes and the next pass retries. The fingerprint only advances
+    /// once the re-price has landed. Returns true when the cache needs saving.
+    ///
+    /// Not re-priced, by design: days already past the live window (warehoused or
+    /// carried as unbanked — their transcripts are gone), and the 30-minute
+    /// burn-rate samples, which age out on their own.
+    /// </summary>
+    private bool TryRepriceCells()
+    {
+        // Snapshot under the lock; read the files outside it (they're large, and
+        // the UI thread takes snapshots under this lock every few seconds).
+        // ScanOnce is single-flight, so nothing ingests between here and the merge.
+        List<(string Path, long Offset)> targets;
+        HashSet<string> days;
+        lock (_lock)
+        {
+            if (string.Equals(_cellsFingerprint, _pricing.Fingerprint, StringComparison.Ordinal))
+                return false;
+
+            // An empty fallback table (the bundled resource failed to load) would
+            // re-price every day to $0. Keep the recorded costs and the recorded
+            // fingerprint, so a later start with a good table still re-prices.
+            if (!_pricing.HasModels)
+                return false;
+
+            if (_cells.Count == 0)
+            {
+                _cellsFingerprint = _pricing.Fingerprint;
+                return true;
+            }
+
+            days = new HashSet<string>(_cells.Keys, StringComparer.Ordinal);
+            // A file last written before the oldest live day began can't hold an
+            // entry for any live day; skipping it keeps the pass to the transcripts
+            // that matter instead of the user's whole history. A day of slack
+            // absorbs any time-zone disagreement over where a day starts.
+            // Only well-formed keys count: a hand-edited cache can carry a bad
+            // one, and it must cost the optimisation, not the scan.
+            DateOnly? oldestDay = null;
+            foreach (var key in days)
+            {
+                if (DateOnly.TryParseExact(key, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
+                    && (oldestDay is null || d < oldestDay))
+                    oldestDay = d;
+            }
+            var horizon = oldestDay is { } oldest
+                ? new DateTimeOffset(oldest.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddDays(-1)
+                : DateTimeOffset.MinValue;
+            targets = _files
+                .Where(kv => kv.Value.Offset > 0 && kv.Value.LastWriteUtc >= horizon)
+                .Select(kv => (kv.Key, kv.Value.Offset))
+                .ToList();
+        }
+
+        var rebuilt = new Dictionary<string, Dictionary<string, LocalDayTotals>>(StringComparer.Ordinal);
+        var seenKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (path, offset) in targets)
+        {
+            var entries = new List<LocalUsageEntry>();
+            try
+            {
+                using var fs = new FileStream(
+                    path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                ReadCompleteLines(fs, 0, line =>
+                {
+                    var entry = JsonlUsageParser.ParseLine(line);
+                    if (entry is not null)
+                        entries.Add(entry);
+                }, limit: offset);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // Deleted since it was counted: its cells can't be rebuilt, so
+                // they won't match and keep their recorded figures.
+                continue;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Present but unreadable right now (locked, say). Rebuilding
+                // without it would make its cells look short — retry next pass.
+                // A file that stays unreadable mustn't make every minute re-read
+                // the whole window forever: after a few tries treat it as gone,
+                // which is safe — its cells fail the token match and keep their
+                // recorded figures.
+                if (++_repriceFailedPasses < MaxRepriceFailedPasses)
+                    return false;
+                if (_repriceFailedPasses == MaxRepriceFailedPasses)
+                    _logger?.Warn($"Local usage: '{Path.GetFileName(path)}' stayed unreadable while re-pricing — re-pricing without it.");
+                continue;
+            }
+
+            var project = ProjectKeyFor(path);
+            foreach (var entry in entries)
+            {
+                var dayKey = DayKey(entry.Timestamp);
+                if (!days.Contains(dayKey))
+                    continue;
+                if (entry.DedupeKey is not null && !seenKeys.Add(entry.DedupeKey))
+                    continue;
+
+                if (!rebuilt.TryGetValue(dayKey, out var dayCells))
+                    rebuilt[dayKey] = dayCells = new Dictionary<string, LocalDayTotals>(StringComparer.Ordinal);
+                var cellKey = $"{project}|{PricingTable.Normalize(entry.Model)}";
+                dayCells.TryGetValue(cellKey, out var cell);
+                dayCells[cellKey] = Accumulate(cell ?? new LocalDayTotals(), entry);
+            }
+        }
+
+        lock (_lock)
+        {
+            int repriced = 0, kept = 0;
+            foreach (var (dayKey, dayCells) in _cells)
+            {
+                rebuilt.TryGetValue(dayKey, out var rebuiltDay);
+                var dayChanged = false;
+                foreach (var (cellKey, cell) in dayCells.ToList())
+                {
+                    if (rebuiltDay is null
+                        || !rebuiltDay.TryGetValue(cellKey, out var fresh)
+                        || fresh.InputTokens != cell.InputTokens
+                        || fresh.OutputTokens != cell.OutputTokens
+                        || fresh.CacheWriteTokens != cell.CacheWriteTokens
+                        || fresh.CacheReadTokens != cell.CacheReadTokens)
+                    {
+                        kept++;
+                        continue;
+                    }
+
+                    repriced++;
+                    // Tolerance, not !=: summing in a different order flips the
+                    // last bit, and that alone shouldn't re-bank a day.
+                    if (Math.Abs(fresh.CostUsd - cell.CostUsd) > 1e-9 || fresh.HasUnpricedModels != cell.HasUnpricedModels)
+                    {
+                        dayCells[cellKey] = cell with { CostUsd = fresh.CostUsd, HasUnpricedModels = fresh.HasUnpricedModels };
+                        dayChanged = true;
+                    }
+                }
+
+                // The warehouse replaces whole days, so a re-priced day re-banks
+                // with the corrected costs and identical token counts.
+                if (dayChanged)
+                    _pendingWarehouseDays.Add(dayKey);
+            }
+
+            _cellsFingerprint = _pricing.Fingerprint;
+            _logger?.Info(
+                $"Local usage: pricing table changed — re-priced {repriced} cost cell(s); {kept} kept their recorded cost (transcripts no longer complete).");
+            return true;
+        }
+    }
+
+    // Folds one entry into a cell — the same arithmetic Ingest applies, priced
+    // at the current table.
+    private LocalDayTotals Accumulate(LocalDayTotals cell, LocalUsageEntry entry)
+    {
+        var pricing = _pricing.Resolve(entry.Model);
+        return cell with
+        {
+            InputTokens = cell.InputTokens + entry.InputTokens,
+            OutputTokens = cell.OutputTokens + entry.OutputTokens,
+            CacheWriteTokens = cell.CacheWriteTokens + entry.CacheWrite5mTokens + entry.CacheWrite1hTokens,
+            CacheReadTokens = cell.CacheReadTokens + entry.CacheReadTokens,
+            CostUsd = cell.CostUsd + (pricing?.CostUsd(entry) ?? 0.0),
+            HasUnpricedModels = cell.HasUnpricedModels || pricing is null,
+        };
     }
 
     /// <summary>
@@ -830,8 +1028,11 @@ public sealed class LocalUsageStore
     /// left unconsumed so the next scan parses it whole instead of half-written.
     /// Offsets are byte positions, so reads chunk over the raw stream rather
     /// than going through a StreamReader (whose counts are chars, not bytes).
+    /// <paramref name="limit"/> stops at a byte offset: only lines ending at or
+    /// before it are delivered (the re-price reads exactly what was counted).
     /// </summary>
-    internal static long ReadCompleteLines(Stream stream, long start, Action<string> onLine)
+    internal static long ReadCompleteLines(
+        Stream stream, long start, Action<string> onLine, long limit = long.MaxValue)
     {
         stream.Seek(start, SeekOrigin.Begin);
 
@@ -841,13 +1042,15 @@ public sealed class LocalUsageStore
         var bufferBase = start;
 
         int read;
-        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        while (bufferBase < limit && (read = stream.Read(buffer, 0, buffer.Length)) > 0)
         {
             var lineStart = 0;
             for (var i = 0; i < read; i++)
             {
                 if (buffer[i] != (byte)'\n')
                     continue;
+                if (bufferBase + i + 1 > limit)
+                    return consumed;
 
                 pending.Write(buffer, lineStart, i - lineStart);
                 var line = Encoding.UTF8
@@ -880,7 +1083,6 @@ public sealed class LocalUsageStore
             return;
 
         var pricing = _pricing.Resolve(entry.Model);
-        var cost = pricing?.CostUsd(entry) ?? 0.0;
         if (pricing is null && _loggedUnknownModels.Add(entry.Model))
             _logger?.Info($"Local usage: no pricing for model '{entry.Model}' — tokens counted, cost shown as unavailable.");
 
@@ -895,21 +1097,12 @@ public sealed class LocalUsageStore
         // one breakdown row. '|' can't appear in a directory name or model id.
         var cellKey = $"{project}|{PricingTable.Normalize(entry.Model)}";
         dayCells.TryGetValue(cellKey, out var cell);
-        cell ??= new LocalDayTotals();
-        dayCells[cellKey] = cell with
-        {
-            InputTokens = cell.InputTokens + entry.InputTokens,
-            OutputTokens = cell.OutputTokens + entry.OutputTokens,
-            CacheWriteTokens = cell.CacheWriteTokens + entry.CacheWrite5mTokens + entry.CacheWrite1hTokens,
-            CacheReadTokens = cell.CacheReadTokens + entry.CacheReadTokens,
-            CostUsd = cell.CostUsd + cost,
-            HasUnpricedModels = cell.HasUnpricedModels || pricing is null,
-        };
+        dayCells[cellKey] = Accumulate(cell ?? new LocalDayTotals(), entry);
         _pendingWarehouseDays.Add(dayKey);
 
         if (entry.Timestamp >= now - RecentCostRetention)
             _recentCosts.Add(new RecentCostSample(
-                entry.Timestamp, cost, entry.TotalTokens, entry.CacheReadTokens));
+                entry.Timestamp, pricing?.CostUsd(entry) ?? 0.0, entry.TotalTokens, entry.CacheReadTokens));
     }
 
     // Caller holds _lock. Drops everything outside its retention window;
@@ -1007,6 +1200,7 @@ public sealed class LocalUsageStore
             var cache = new LocalUsageCacheFile
             {
                 Version = LocalUsageCacheFile.CurrentVersion,
+                PricingFingerprint = _cellsFingerprint,
                 Files = new Dictionary<string, FileScanState>(_files),
                 Cells = _cells.ToDictionary(
                     kv => kv.Key,

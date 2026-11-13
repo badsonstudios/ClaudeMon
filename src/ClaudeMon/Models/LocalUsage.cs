@@ -94,6 +94,11 @@ public record LocalUsageCacheFile
     // (and ignored by an older build reading a newer cache), so it needs no
     // version bump — nothing about the fields above changed shape.
     [JsonPropertyName("unbanked")] public Dictionary<string, Dictionary<string, LocalDayTotals>> UnbankedDays { get; init; } = new();
+    // PricingTable.Fingerprint the cells' dollars were computed under (issue #212).
+    // A mismatch (including absent, from a build before it existed) re-prices the
+    // live cells in place from the transcripts. Additive like "unbanked": no version
+    // bump, because a version bump discards the cache wholesale — unbanked days included.
+    [JsonPropertyName("pricing")] public string? PricingFingerprint { get; init; }
 }
 
 /// <summary>

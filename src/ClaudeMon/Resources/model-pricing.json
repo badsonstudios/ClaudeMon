@@ -1,9 +1,14 @@
 {
-  "_source": "https://platform.claude.com/docs/en/about-claude/pricing (docs.claude.com redirects here) — rates verified 2026-08-11.",
-  "_comment": "USD per 1M tokens, Anthropic list prices. Cache write 5m = 1.25x input, 1h = 2x input, cache read = 0.1x input. Ids are matched after normalization (lowercase; provider prefix, Vertex @-suffix, bracketed request-tier tag such as [1m], and date suffix stripped) by exact then longest-prefix match at a '-' boundary. The 1M context window is included at standard rates on the models that offer it, so no separate long-context row is needed. An optional priorRates list holds superseded, date-bounded rates: usage on or before a 'through' day (UTC) is priced at that entry instead of the standing rates.",
+  "_source": "https://platform.claude.com/docs/en/about-claude/pricing (docs.claude.com redirects here) — rates verified 2026-11-13.",
+  "_comment": "USD per 1M tokens, Anthropic list prices. Cache write 5m = 1.25x input and 1h = 2x input on every model; cache read is 0.1x input except Opus 5.5 / Sonnet 5.5 (0.05x) and Fable / Mythos 5.1 and later (0.025x) — every row states its rates explicitly, so nothing derives them. Ids are matched after normalization (lowercase; provider prefix, Vertex @-suffix, bracketed request-tier tag such as [1m], and date suffix stripped) by exact then longest-prefix match at a '-' boundary. The 1M context window is included at standard rates on the models that offer it, so no separate long-context row is needed — except Haiku 5.5, which charges 5x for prompts over 100K tokens; that per-request tier isn't modelled, so its row is the base tier (issue #212). Fast mode premiums aren't modelled either. An optional priorRates list holds superseded, date-bounded rates: usage on or before a 'through' day (UTC) is priced at that entry instead of the standing rates. Changing this file re-prices the local-usage cache's live window on the next start (pricing fingerprint).",
   "models": {
+    "claude-fable-5-2":  { "input": 8.0,  "output": 40.0, "cacheWrite5m": 10.0,  "cacheWrite1h": 16.0, "cacheRead": 0.2 },
+    "claude-mythos-5-2": { "input": 8.0,  "output": 40.0, "cacheWrite5m": 10.0,  "cacheWrite1h": 16.0, "cacheRead": 0.2 },
+    "claude-fable-5-1":  { "input": 10.0, "output": 50.0, "cacheWrite5m": 12.5,  "cacheWrite1h": 20.0, "cacheRead": 0.25 },
+    "claude-mythos-5-1": { "input": 10.0, "output": 50.0, "cacheWrite5m": 12.5,  "cacheWrite1h": 20.0, "cacheRead": 0.25 },
     "claude-fable-5":    { "input": 10.0, "output": 50.0, "cacheWrite5m": 12.5,  "cacheWrite1h": 20.0, "cacheRead": 1.0 },
     "claude-mythos-5":   { "input": 10.0, "output": 50.0, "cacheWrite5m": 12.5,  "cacheWrite1h": 20.0, "cacheRead": 1.0 },
+    "claude-opus-5-5":   { "input": 4.0,  "output": 20.0, "cacheWrite5m": 5.0,   "cacheWrite1h": 8.0,  "cacheRead": 0.2 },
     "claude-opus-5":     { "input": 5.0,  "output": 25.0, "cacheWrite5m": 6.25,  "cacheWrite1h": 10.0, "cacheRead": 0.5 },
     "claude-opus-4-8":   { "input": 5.0,  "output": 25.0, "cacheWrite5m": 6.25,  "cacheWrite1h": 10.0, "cacheRead": 0.5 },
     "claude-opus-4-7":   { "input": 5.0,  "output": 25.0, "cacheWrite5m": 6.25,  "cacheWrite1h": 10.0, "cacheRead": 0.5 },
@@ -11,15 +16,14 @@
     "claude-opus-4-5":   { "input": 5.0,  "output": 25.0, "cacheWrite5m": 6.25,  "cacheWrite1h": 10.0, "cacheRead": 0.5 },
     "claude-opus-4-1":   { "input": 15.0, "output": 75.0, "cacheWrite5m": 18.75, "cacheWrite1h": 30.0, "cacheRead": 1.5 },
     "claude-opus-4":     { "input": 15.0, "output": 75.0, "cacheWrite5m": 18.75, "cacheWrite1h": 30.0, "cacheRead": 1.5 },
-    "claude-sonnet-5":   { "input": 3.0,  "output": 15.0, "cacheWrite5m": 3.75,  "cacheWrite1h": 6.0,  "cacheRead": 0.3,
-                           "_introComment": "Introductory pricing of $2/$10 per MTok runs through 2026-08-31; standard $3/$15 takes effect 2026-09-01.",
-                           "priorRates": [
-                             { "through": "2026-08-31", "input": 2.0, "output": 10.0, "cacheWrite5m": 2.5, "cacheWrite1h": 4.0, "cacheRead": 0.2 }
-                           ] },
+    "claude-sonnet-5-5": { "input": 2.0,  "output": 10.0, "cacheWrite5m": 2.5,   "cacheWrite1h": 4.0,  "cacheRead": 0.1 },
+    "claude-sonnet-5":   { "input": 2.0,  "output": 10.0, "cacheWrite5m": 2.5,   "cacheWrite1h": 4.0,  "cacheRead": 0.2,
+                           "_introComment": "Launched at an 'introductory' $2/$10 that was due to rise to $3/$15 on 2026-09-01; Anthropic cancelled the rise and $2/$10 is now the standard price." },
     "claude-sonnet-4-6": { "input": 3.0,  "output": 15.0, "cacheWrite5m": 3.75,  "cacheWrite1h": 6.0,  "cacheRead": 0.3 },
     "claude-sonnet-4-5": { "input": 3.0,  "output": 15.0, "cacheWrite5m": 3.75,  "cacheWrite1h": 6.0,  "cacheRead": 0.3 },
     "claude-sonnet-4":   { "input": 3.0,  "output": 15.0, "cacheWrite5m": 3.75,  "cacheWrite1h": 6.0,  "cacheRead": 0.3 },
     "claude-3-7-sonnet": { "input": 3.0,  "output": 15.0, "cacheWrite5m": 3.75,  "cacheWrite1h": 6.0,  "cacheRead": 0.3 },
+    "claude-haiku-5-5":  { "input": 0.1,  "output": 0.5,  "cacheWrite5m": 0.125, "cacheWrite1h": 0.2,  "cacheRead": 0.01 },
     "claude-haiku-4-5":  { "input": 1.0,  "output": 5.0,  "cacheWrite5m": 1.25,  "cacheWrite1h": 2.0,  "cacheRead": 0.1 },
     "claude-3-5-haiku":  { "input": 0.8,  "output": 4.0,  "cacheWrite5m": 1.0,   "cacheWrite1h": 1.6,  "cacheRead": 0.08 }
   }

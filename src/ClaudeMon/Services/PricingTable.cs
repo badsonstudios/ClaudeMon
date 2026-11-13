@@ -1,6 +1,9 @@
 namespace ClaudeMon.Services;
 
+using System.Globalization;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -90,6 +93,56 @@ public sealed class PricingTable
     public PricingTable(Dictionary<string, ModelPricing> models)
     {
         _models = new Dictionary<string, ModelPricing>(models, StringComparer.OrdinalIgnoreCase);
+        Fingerprint = ComputeFingerprint(_models);
+    }
+
+    /// <summary>
+    /// A stable hash of every model id and rate in the table (issue #212). The
+    /// local-usage cache stores computed dollars, not rates, so it records the
+    /// fingerprint it was priced under and re-prices when the table changes —
+    /// a price update then reaches recorded history instead of only new usage.
+    /// Built from the parsed rates, not the resource bytes, so editing a comment
+    /// or reformatting the JSON doesn't trigger a rescan.
+    /// </summary>
+    public string Fingerprint { get; }
+
+    /// <summary>
+    /// False for the empty fallback <see cref="LoadEmbedded"/> returns when the
+    /// resource can't be read. Nothing is re-priced against an empty table — it
+    /// would rewrite every recorded day as $0 (issue #212).
+    /// </summary>
+    public bool HasModels => _models.Count > 0;
+
+    /// <summary>
+    /// Bump when a code change alters what a given table charges — the id
+    /// matching in <see cref="Resolve"/>, or <see cref="ModelPricing.CostUsd"/>
+    /// learning a new pricing dimension — so recorded costs are re-priced even
+    /// though no rate in the JSON moved.
+    /// </summary>
+    private const string PricingLogicVersion = "pricing-logic-1";
+
+    private static string ComputeFingerprint(Dictionary<string, ModelPricing> models)
+    {
+        var text = new StringBuilder(PricingLogicVersion).Append('\n');
+        foreach (var (id, p) in models.OrderBy(kv => kv.Key.ToLowerInvariant(), StringComparer.Ordinal))
+        {
+            text.Append(id.ToLowerInvariant()).Append('=');
+            AppendRates(text, p.InputPerMTok, p.OutputPerMTok, p.CacheWrite5mPerMTok, p.CacheWrite1hPerMTok, p.CacheReadPerMTok);
+            foreach (var r in (p.PriorRates ?? []).OrderBy(r => r.Through))
+            {
+                text.Append("|<=").Append(r.Through.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).Append(':');
+                AppendRates(text, r.InputPerMTok, r.OutputPerMTok, r.CacheWrite5mPerMTok, r.CacheWrite1hPerMTok, r.CacheReadPerMTok);
+            }
+            text.Append('\n');
+        }
+
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())))[..16];
+    }
+
+    private static void AppendRates(StringBuilder text, params double[] rates)
+    {
+        foreach (var rate in rates)
+            text.Append(rate.ToString("R", CultureInfo.InvariantCulture)).Append(',');
     }
 
     /// <summary>
